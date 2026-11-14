@@ -298,6 +298,7 @@ change_surface:
     - vendor/systutor-core/plugins/apps/backend/releases/**
     - vendor/systutor-core/plugins/apps/backend/github.py
     - vendor/systutor-core/plugins/apps/backend/runtime/release_deploy.py
+    - Dockerfile
     - vendor/systutor-core/plugins/apps/backend/runtime/deployment.py
     - vendor/systutor-core/plugins/apps/backend/runtime/probes.py
     - vendor/systutor-core/plugins/apps/backend/schemas.py
@@ -313,6 +314,7 @@ change_surface:
   prohibited:
     - vendor/systutor-core/plugins/apps/backend/models.py
     - vendor/systutor-core/plugins/apps/backend/migrations/**
+    - Dockerfile
     - vendor/systutor-core/plugins/apps/backend/runtime/deployment.py
     - vendor/systutor-core/plugins/apps/frontend/**
     - scripts/dangerous_build/**
