@@ -30,9 +30,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Transactional build hardener (A.SPEC 0080/0083) runs inside the worker.
-RUN curl -fsSL https://github.com/aquasecurity/trivy/releases/download/v0.58.0/trivy_0.58.0_Linux-64bit.tar.gz \
+RUN curl -fsSL https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz \
     | tar xz -C /usr/local/bin trivy \
-    && curl -fsSL https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64 \
+    && curl -fsSL https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-linux-x86_64 \
     -o /usr/local/bin/hadolint \
     && chmod 755 /usr/local/bin/trivy /usr/local/bin/hadolint \
     && trivy --version && hadolint --version
