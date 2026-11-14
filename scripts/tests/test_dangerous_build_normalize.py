@@ -1,0 +1,320 @@
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+import yaml
+
+ROOT = Path(__file__).resolve().parents[2]
+SCRIPT = ROOT / "scripts" / "dangerous_build_normalize.py"
+
+
+def project(tmp_path: Path, *, nested: bool = False) -> Path:
+    root = tmp_path / "checkout"
+    root.mkdir()
+    dockerfile = root / ("image/Dockerfile" if nested else "Dockerfile")
+    dockerfile.parent.mkdir(parents=True, exist_ok=True)
+    dockerfile.write_text(
+        "FROM python:3.12-slim\nWORKDIR /app\nRUN chmod 777 /app\n"
+        "CMD [\"python\", \"-V\"]\n",
+        encoding="utf-8",
+    )
+    context = "./image" if nested else "."
+    (root / "compose.yml").write_text(
+        f"""services:
+  web:
+    build: {context}
+    container_name: unsafe-web
+    env_file: .env
+    privileged: true
+    ports:
+      - "8080:8080"
+    environment:
+      API_TOKEN: literal-secret
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+networks:
+  shared:
+    external: true
+    name: global-network
+""",
+        encoding="utf-8",
+    )
+    (root / ".env").write_text("VALUE=unsafe\n", encoding="utf-8")
+    return root
+
+
+def run(
+    *args: object, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, str(SCRIPT), *(str(value) for value in args)],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+    )
+
+
+def fake_tool(directory: Path, name: str, body: str) -> Path:
+    path = directory / name
+    path.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
+    path.chmod(0o755)
+    return path
+
+
+def test_scan_json_reports_real_findings_without_argument_crash(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    result = run(
+        "scan", root, "--compose-file", "compose.yml", "--non-root", "--format", "json"
+    )
+    assert result.returncode == 2
+    payload = json.loads(result.stdout)
+    codes = {item["code"] for item in payload["findings"]}
+    assert "compose_docker_socket" in codes
+    assert "compose_repo_env_file" in codes
+    assert "dockerfile_final_user_root" in codes
+    assert "AttributeError" not in result.stderr
+
+
+def test_default_fix_preserves_level_c_and_reaudits_preview(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    original = (root / "compose.yml").read_text(encoding="utf-8")
+    result = run("fix", root, "--compose-file", "compose.yml", "--non-root")
+    assert result.returncode == 2
+    assert "compose_docker_socket" in result.stderr
+    assert (root / "compose.yml").read_text(encoding="utf-8") == original
+    fixed = yaml.safe_load((root / "docker-compose.fixed.yml").read_text(encoding="utf-8"))
+    assert fixed["services"]["web"]["volumes"] == [
+        "/var/run/docker.sock:/var/run/docker.sock"
+    ]
+    assert not (root / "compose.yml.bak").exists()
+    assert (root / "docker-compose.patch").is_file()
+    assert (root / "Dockerfile.patch").is_file()
+    assert "source=normalized-preview" in result.stdout
+
+
+def test_deployment_copy_dry_run_is_clean_and_keeps_originals(tmp_path: Path) -> None:
+    root = project(tmp_path, nested=True)
+    compose_before = (root / "compose.yml").read_text(encoding="utf-8")
+    dockerfile_before = (root / "image/Dockerfile").read_text(encoding="utf-8")
+    result = run(
+        "fix",
+        root,
+        "--compose-file",
+        "compose.yml",
+        "--non-root",
+        "--deployment-copy",
+    )
+    assert result.returncode == 0, result.stderr
+    assert "errors=0" in result.stdout
+    assert (root / "compose.yml").read_text(encoding="utf-8") == compose_before
+    assert (root / "image/Dockerfile").read_text(encoding="utf-8") == dockerfile_before
+    fixed_compose = yaml.safe_load(
+        (root / "docker-compose.fixed.yml").read_text(encoding="utf-8")
+    )
+    service = fixed_compose["services"]["web"]
+    assert "volumes" not in service
+    assert "ports" not in service
+    assert "env_file" not in service
+    assert service["x-spanel-external-env"] is True
+    assert "container_name" not in service
+    assert fixed_compose["networks"]["shared"] == {}
+    fixed_dockerfile = (root / "image/Dockerfile.fixed").read_text(encoding="utf-8")
+    assert "USER 10001:10001" in fixed_dockerfile
+    assert "HEALTHCHECK" in fixed_dockerfile
+    assert "chmod 755" in fixed_dockerfile
+    assert "RUN chmod -R a+rX /app" in fixed_dockerfile
+
+
+def test_apply_creates_backups_and_normalizes_referenced_dockerfile(tmp_path: Path) -> None:
+    root = project(tmp_path, nested=True)
+    result = run(
+        "fix",
+        root,
+        "--compose-file",
+        "compose.yml",
+        "--non-root",
+        "--deployment-copy",
+        "--apply",
+    )
+    assert result.returncode == 0, result.stderr
+    assert (root / "compose.yml.bak").is_file()
+    assert (root / "image/Dockerfile.bak").is_file()
+    assert "USER 10001:10001" in (root / "image/Dockerfile").read_text(encoding="utf-8")
+    second = run(
+        "fix",
+        root,
+        "--compose-file",
+        "compose.yml",
+        "--non-root",
+        "--deployment-copy",
+        "--apply",
+    )
+    assert second.returncode == 2
+    assert "backup already exists" in second.stderr
+
+
+def test_fail_on_aliases_and_scan_exceptions(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    result = run(
+        "scan",
+        root,
+        "--compose-file",
+        "compose.yml",
+        "--allow-docker-socket",
+        "--allow-env-file",
+        "--fail-on",
+        "warning",
+        "--format",
+        "json",
+    )
+    payload = json.loads(result.stdout)
+    codes = {item["code"] for item in payload["findings"]}
+    assert "compose_docker_socket" not in codes
+    assert "compose_bind_absolute" not in codes
+    assert "compose_mount_sensitive" not in codes
+    assert "compose_repo_env_file" not in codes
+    assert result.returncode == 2  # other unsafe findings still block
+
+
+def test_deployment_copy_can_preserve_explicit_socket_exception(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    result = run(
+        "fix",
+        root,
+        "--compose-file",
+        "compose.yml",
+        "--non-root",
+        "--deployment-copy",
+        "--allow-docker-socket",
+    )
+    assert result.returncode == 0, result.stderr
+    fixed = yaml.safe_load((root / "docker-compose.fixed.yml").read_text(encoding="utf-8"))
+    assert fixed["services"]["web"]["volumes"] == [
+        "/var/run/docker.sock:/var/run/docker.sock"
+    ]
+
+
+def test_explicit_service_user_is_applied_and_must_be_non_root(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    result = run(
+        "fix",
+        root,
+        "--compose-file",
+        "compose.yml",
+        "--deployment-copy",
+        "--service-user",
+        "web=application",
+    )
+    assert result.returncode == 0, result.stderr
+    fixed = yaml.safe_load((root / "docker-compose.fixed.yml").read_text(encoding="utf-8"))
+    assert fixed["services"]["web"]["user"] == "application"
+    rejected = run(
+        "fix",
+        root,
+        "--compose-file",
+        "compose.yml",
+        "--service-user",
+        "web=root",
+    )
+    assert rejected.returncode == 2
+    assert "explicit non-root user" in rejected.stderr
+
+
+def test_gate_fails_closed_when_external_tools_are_missing(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    env = {**os.environ, "PATH": str(tmp_path / "empty-bin")}
+    result = run(
+        "gate",
+        root,
+        "--compose-file",
+        "compose.yml",
+        "--format",
+        "json",
+        env=env,
+    )
+    assert result.returncode == 2
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "blocked"
+    assert payload["trivy"]["error"] == "required executable is unavailable"
+    assert payload["hadolint"]["error"] == "required executable is unavailable"
+    assert payload["buildkit"]["attempted"] is False
+
+
+def test_gate_combines_tools_and_buildkit_on_clean_project(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    (root / "Dockerfile").write_text(
+        "FROM python:3.12-slim\nUSER 10001:10001\n"
+        "HEALTHCHECK CMD python -V || exit 1\nCMD [\"python\", \"-V\"]\n",
+        encoding="utf-8",
+    )
+    (root / "Dockerfile.extra").write_text("FROM scratch\n", encoding="utf-8")
+    (root / "compose.yml").write_text(
+        "services:\n  web:\n    build: .\n",
+        encoding="utf-8",
+    )
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    calls = tmp_path / "calls"
+    fake_tool(tools, "trivy", f"echo trivy:$@ >> {calls}; echo '{{\"Results\":[]}}'")
+    fake_tool(tools, "hadolint", f"echo hadolint:$@ >> {calls}; echo '[]'")
+    fake_tool(tools, "docker", f"echo docker:$DOCKER_BUILDKIT:$@ >> {calls}; exit 0")
+    env = {**os.environ, "PATH": f"{tools}:{os.environ.get('PATH', '')}"}
+
+    result = run(
+        "gate",
+        root,
+        "--compose-file",
+        "compose.yml",
+        "--non-root",
+        "--format",
+        "json",
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "passed"
+    assert payload["trivy"]["blocking"] == 0
+    assert payload["hadolint"]["blocking"] == 0
+    assert payload["buildkit"]["attempted"] is True
+    assert payload["buildkit"]["passed"] is True
+    recorded = calls.read_text(encoding="utf-8")
+    assert "Dockerfile.extra" in recorded
+    assert "docker:1:build" in recorded
+    assert "docker:1:image rm --force" in recorded
+
+
+def test_gate_skips_build_when_hadolint_blocks(tmp_path: Path) -> None:
+    root = project(tmp_path)
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    calls = tmp_path / "calls"
+    fake_tool(tools, "trivy", "echo '{\"Results\":[]}'")
+    fake_tool(
+        tools,
+        "hadolint",
+        "echo '[{\"code\":\"DL3002\",\"message\":\"Last user should not be root\","
+        "\"level\":\"warning\",\"line\":1,\"column\":1,\"file\":\"Dockerfile\"}]'; exit 1",
+    )
+    fake_tool(tools, "docker", f"echo called >> {calls}; exit 0")
+    env = {**os.environ, "PATH": f"{tools}:{os.environ.get('PATH', '')}"}
+
+    result = run(
+        "gate",
+        root,
+        "--compose-file",
+        "compose.yml",
+        "--format",
+        "json",
+        env=env,
+    )
+    assert result.returncode == 2
+    payload = json.loads(result.stdout)
+    assert payload["hadolint"]["blocking"] == 1
+    assert payload["buildkit"]["attempted"] is False
+    assert not calls.exists()
