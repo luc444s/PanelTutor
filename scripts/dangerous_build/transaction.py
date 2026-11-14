@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import shutil
+import stat
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -20,6 +21,26 @@ def _sha256(path: Path) -> str:
     with path.open("rb") as handle:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
+    return digest.hexdigest()
+
+
+def tree_digest(root: Path) -> str:
+    """Hash every security-relevant file and symlink in a checkout."""
+    digest = hashlib.sha256()
+    ignored_dirs = {".git", ".spanel-build-backups"}
+    for path in sorted(root.rglob("*")):
+        relative = path.relative_to(root)
+        if any(part in ignored_dirs for part in relative.parts):
+            continue
+        if path.is_symlink():
+            digest.update(b"L\0" + relative.as_posix().encode() + b"\0")
+            digest.update(os.readlink(path).encode() + b"\0")
+        elif path.is_file():
+            digest.update(b"F\0" + relative.as_posix().encode() + b"\0")
+            digest.update(f"{stat.S_IMODE(path.stat().st_mode):04o}".encode() + b"\0")
+            with path.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                    digest.update(chunk)
     return digest.hexdigest()
 
 

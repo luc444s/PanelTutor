@@ -14,6 +14,7 @@ SCRIPT = ROOT / "scripts" / "dangerous_build_normalize.py"
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from dangerous_build import transaction
+from dangerous_build.cache import ImageValidationCache
 from dangerous_build.compose import ServicePolicy, harden_compose
 from dangerous_build.dockerfile import WritablePath, harden_dockerfile
 
@@ -62,7 +63,7 @@ def tools(tmp_path: Path, *, trivy_body: str | None = None) -> tuple[dict[str, s
     fake_tool(
         binaries,
         "trivy",
-        trivy_body or f"echo trivy >> {calls}; echo '{{\"Results\":[]}}'",
+        trivy_body or f"echo trivy:$@ >> {calls}; echo '{{\"Results\":[]}}'",
     )
     fake_tool(binaries, "hadolint", f"echo hadolint >> {calls}; echo '[]'")
     fake_tool(
@@ -74,7 +75,11 @@ def tools(tmp_path: Path, *, trivy_body: str | None = None) -> tuple[dict[str, s
         "\"Config\":{\"User\":\"10001:10001\","
         "\"Healthcheck\":{\"Test\":[\"CMD\",\"true\"]}}}'; fi; exit 0",
     )
-    return {**os.environ, "PATH": f"{binaries}:{os.environ.get('PATH', '')}"}, calls
+    return {
+        **os.environ,
+        "PATH": f"{binaries}:{os.environ.get('PATH', '')}",
+        "SPANEL_HARDENER_CACHE_DIR": str(tmp_path / "cache"),
+    }, calls
 
 
 def run_harden(root: Path, env: dict[str, str], *extra: str) -> subprocess.CompletedProcess[str]:
@@ -110,6 +115,21 @@ def test_runtime_user_is_inserted_after_build_without_rewriting_permissions() ->
     assert "RUN chmod 777 /data" in fixed
     assert fixed.index("RUN apk add curl") < fixed.index("USER 10001:10001")
     assert fixed.index("USER 10001:10001") < fixed.index('CMD ["sh"]')
+
+
+def test_image_cache_corruption_and_expiry_fail_to_miss(tmp_path: Path) -> None:
+    digest = "example/app@sha256:abc123"
+    cache = ImageValidationCache(tmp_path / "cache", scan_ttl=60, pull_ttl=60, enabled=True)
+    report = {"available": True, "blocking": 0, "findings": [], "error": None}
+    cache.save_scan(digest, report, severity="HIGH", scanner_fingerprint="scanner")
+    assert cache.scan(digest, severity="HIGH", scanner_fingerprint="scanner") == report
+    scan_file = next((tmp_path / "cache" / "scans").iterdir())
+    scan_file.write_text("not-json", encoding="utf-8")
+    assert cache.scan(digest, severity="HIGH", scanner_fingerprint="scanner") is None
+    cache.save_reference("example/app:18.0", digest)
+    reference_file = next((tmp_path / "cache" / "references").iterdir())
+    os.utime(reference_file, (1, 1))
+    assert cache.reference("example/app:18.0") is None
 
 
 def test_compose_hardening_creates_isolation_envelope() -> None:
@@ -163,7 +183,8 @@ def test_apply_is_gated_backed_up_and_reaudited(tmp_path: Path) -> None:
     payload = json.loads(result.stdout)
     assert payload["status"] == "applied"
     assert payload["gate"]["buildkit"]["runtime"]["passed"] is True
-    assert payload["gate_after_apply"]["buildkit"]["runtime"]["passed"] is True
+    assert payload["gate_after_apply"]["status"] == "reused"
+    assert payload["gate_after_apply"]["evidence_reused"] is True
     dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
     assert dockerfile.index("RUN mkdir -p /app/data") < dockerfile.index("USER 10001:10001")
     assert "RUN install -d -o 10001 -g 10001 -m 750 /app/data" in dockerfile
@@ -178,8 +199,8 @@ def test_apply_is_gated_backed_up_and_reaudited(tmp_path: Path) -> None:
     }
     assert manifest_payload["metadata"]["policy"]["isolation"]["runtime_egress"] is False
     recorded = calls.read_text(encoding="utf-8")
-    assert recorded.count("docker:1:build") == 2
-    assert recorded.count("compose --project-name") == 4  # up/down before and after apply
+    assert recorded.count("docker:1:build") == 1
+    assert recorded.count("compose --project-name") == 2  # one up/down pair
 
 
 def test_failed_post_apply_gate_rolls_everything_back(tmp_path: Path) -> None:
@@ -193,7 +214,7 @@ def test_failed_post_apply_gate_rolls_everything_back(tmp_path: Path) -> None:
         "\"Severity\":\"HIGH\",\"RuleID\":\"test-secret\",\"Category\":\"test\"}]}]}'; fi"
     )
     env, _calls = tools(tmp_path, trivy_body=body)
-    result = run_harden(root, env, "--apply")
+    result = run_harden(root, env, "--apply", "--revalidate-after-apply")
     assert result.returncode == 2, result.stderr
     payload = json.loads(result.stdout)
     assert payload["status"] == "rolled_back"
@@ -278,6 +299,22 @@ def test_external_image_is_pulled_pinned_scanned_and_smoke_tested(tmp_path: Path
     recorded = calls.read_text(encoding="utf-8")
     assert "pull example/app:18.0" in recorded
     assert "build --file" not in recorded
+
+    warm = subprocess.run(
+        [item for item in result.args if item != "--apply"],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert warm.returncode == 0, warm.stderr
+    warm_service = json.loads(warm.stdout)["gate"]["buildkit"]["services"][0]
+    assert warm_service["pull"] == "cache"
+    assert warm_service["image_scan"]["cache"] == "hit"
+    recorded = calls.read_text(encoding="utf-8")
+    assert recorded.count("pull example/app:18.0") == 1
+    assert recorded.count("trivy:image") == 1
 
 
 def test_external_image_without_any_healthcheck_is_not_deployable(tmp_path: Path) -> None:

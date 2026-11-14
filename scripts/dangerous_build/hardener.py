@@ -14,7 +14,7 @@ from apps.backend.runtime import AppDeployError, audit_project  # type: ignore
 
 from .compose import ComposeHardeningError, ServicePolicy, harden_compose
 from .dockerfile import DockerfileHardeningError, WritablePath, harden_dockerfile
-from .transaction import PublicationError, publish
+from .transaction import PublicationError, publish, tree_digest
 
 
 class HardeningError(RuntimeError):
@@ -25,14 +25,7 @@ GateRunner = Callable[[Path, Any], dict[str, Any]]
 
 
 def _copy_checkout(source: Path, target: Path) -> None:
-    ignored = shutil.ignore_patterns(
-        ".git",
-        ".spanel-build-backups",
-        "*.bak",
-        "*.fixed",
-        "*.patch",
-        "__pycache__",
-    )
+    ignored = shutil.ignore_patterns(".git", ".spanel-build-backups")
     shutil.copytree(source, target, symlinks=True, ignore=ignored)
 
 
@@ -185,14 +178,33 @@ def run_hardener(args: Any, gate_runner: GateRunner) -> tuple[int, dict[str, Any
             if not args.apply:
                 return 0, report
 
+            candidate_digest = tree_digest(candidate)
             publication = publish(source, candidate, relatives, metadata={"policy": policy})
-            published_gate = gate_runner(source, args)
-            if published_gate["status"] != "passed":
+            published_digest = tree_digest(source)
+            if published_digest != candidate_digest:
                 publication.rollback()
                 report["status"] = "rolled_back"
-                report["gate_after_apply"] = published_gate
+                report["gate_after_apply"] = {
+                    "status": "digest_mismatch",
+                    "candidate_sha256": candidate_digest,
+                    "published_sha256": published_digest,
+                }
                 report["backup"] = str(publication.backup_root)
                 return 2, report
+            if args.revalidate_after_apply:
+                published_gate = gate_runner(source, args)
+                if published_gate["status"] != "passed":
+                    publication.rollback()
+                    report["status"] = "rolled_back"
+                    report["gate_after_apply"] = published_gate
+                    report["backup"] = str(publication.backup_root)
+                    return 2, report
+            else:
+                published_gate = {
+                    "status": "reused",
+                    "evidence_reused": True,
+                    "tree_sha256": candidate_digest,
+                }
             report["status"] = "applied"
             report["applied"] = True
             report["backup"] = str(publication.backup_root)

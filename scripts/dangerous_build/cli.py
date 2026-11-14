@@ -11,7 +11,9 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 from collections.abc import Sequence
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any
 
@@ -27,6 +29,7 @@ from apps.backend.runtime import (  # type: ignore
     audit_project,
 )
 
+from .cache import ImageValidationCache, scanner_fingerprint
 from .dockerfile import WritablePath
 from .hardener import emit_report, run_hardener
 
@@ -652,6 +655,24 @@ def _trivy_image_gate(tag: str, root: Path, args: argparse.Namespace) -> dict[st
     )
 
 
+def _image_cache(args: argparse.Namespace) -> ImageValidationCache:
+    configured = getattr(args, "cache_dir", None)
+    environment = os.getenv("SPANEL_HARDENER_CACHE_DIR", "").strip()
+    directory = (
+        Path(configured).expanduser()
+        if configured
+        else Path(environment).expanduser()
+        if environment
+        else Path.home() / ".cache" / "spanel-hardener"
+    )
+    return ImageValidationCache(
+        directory,
+        scan_ttl=args.image_cache_ttl,
+        pull_ttl=args.pull_cache_ttl,
+        enabled=not args.no_image_cache,
+    )
+
+
 def _discover_dockerfiles(root: Path) -> list[Path]:
     return sorted(
         path
@@ -870,6 +891,7 @@ def _runtime_smoke(
 def _buildkit_gate(
     result: AuditResult, args: argparse.Namespace, *, static_blocking: bool
 ) -> dict[str, Any]:
+    started = time.perf_counter()
     if args.skip_build:
         return {"attempted": False, "passed": None, "services": [], "error": None}
     if static_blocking:
@@ -892,6 +914,9 @@ def _buildkit_gate(
     ephemeral_tags: dict[str, str] = {}
     passed = True
     environment = {**os.environ, "DOCKER_BUILDKIT": "1"}
+    validation_cache = _image_cache(args)
+    trivy_executable = shutil.which("trivy") or ""
+    trivy_fingerprint = scanner_fingerprint(trivy_executable) if trivy_executable else "unavailable"
     for index, (service, dockerfile) in enumerate(sorted(result.dockerfiles.items())):
         context = _build_context(result, service)
         try:
@@ -974,30 +999,62 @@ def _buildkit_gate(
             passed = False
             continue
         try:
-            pulled = subprocess.run(
-                [executable, "pull", reference],
-                cwd=result.root,
-                capture_output=True,
-                text=True,
-                timeout=args.build_timeout,
-                check=False,
-                env=environment,
+            resolved = validation_cache.reference(reference)
+            metadata = (
+                _inspect_image(executable, resolved, result.root, args, environment)
+                if resolved
+                else None
             )
-            metadata = _inspect_image(executable, reference, result.root, args, environment)
-            digests = (metadata.get("RepoDigests") or []) if metadata else []
-            resolved = str(digests[0]) if isinstance(digests, list) and digests else reference
+            pull_source = "cache" if metadata else "registry"
+            if metadata is None:
+                pulled = subprocess.run(
+                    [executable, "pull", reference],
+                    cwd=result.root,
+                    capture_output=True,
+                    text=True,
+                    timeout=args.build_timeout,
+                    check=False,
+                    env=environment,
+                )
+                metadata = _inspect_image(
+                    executable, reference, result.root, args, environment
+                )
+                digests = (metadata.get("RepoDigests") or []) if metadata else []
+                resolved = (
+                    str(digests[0])
+                    if isinstance(digests, list) and digests
+                    else reference
+                )
+                if pulled.returncode == 0:
+                    validation_cache.save_reference(reference, resolved)
             healthcheck = bool(
                 metadata
                 and _has_healthcheck(result.data["services"][service], metadata)
             )
-            image_scan = (
-                _trivy_image_gate(resolved, result.root, args)
-                if pulled.returncode == 0 and metadata is not None
-                else _tool_error("external image pull or inspection failed")
+            cached_scan = validation_cache.scan(
+                resolved,
+                severity=args.trivy_severity,
+                scanner_fingerprint=trivy_fingerprint,
             )
+            if cached_scan is not None:
+                image_scan = {**cached_scan, "cache": "hit"}
+            elif metadata is not None:
+                image_scan = _trivy_image_gate(resolved, result.root, args)
+                if image_scan.get("available"):
+                    validation_cache.save_scan(
+                        resolved,
+                        image_scan,
+                        severity=args.trivy_severity,
+                        scanner_fingerprint=trivy_fingerprint,
+                    )
+                image_scan = {**image_scan, "cache": "miss"}
+            else:
+                image_scan = _tool_error("external image pull or inspection failed")
+                image_scan["cache"] = "miss"
             service_passed = healthcheck and image_scan["blocking"] == 0
         except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
             resolved = reference
+            pull_source = "error"
             healthcheck = False
             image_scan = _tool_error("external image validation could not execute")
             service_passed = False
@@ -1008,6 +1065,7 @@ def _buildkit_gate(
                 "source": "external",
                 "reference": reference,
                 "resolved": resolved,
+                "pull": pull_source,
                 "healthcheck": healthcheck,
                 "passed": service_passed,
                 "image_scan": image_scan,
@@ -1036,11 +1094,14 @@ def _buildkit_gate(
         "passed": passed,
         "services": services,
         "runtime": runtime,
+        "duration_seconds": round(time.perf_counter() - started, 6),
         "error": None if passed else "build, image, or runtime validation failed",
     }
 
 
 def _gate_payload(root: Path, args: argparse.Namespace) -> dict[str, Any]:
+    started = time.perf_counter()
+    internal_started = time.perf_counter()
     internal = audit_project(
         root,
         args.compose_file,
@@ -1053,8 +1114,14 @@ def _gate_payload(root: Path, args: argparse.Namespace) -> dict[str, Any]:
         SEVERITY_RANK.get(item.severity, 0) >= threshold
         for item in internal_findings
     )
-    trivy = _trivy_gate(root, args)
-    hadolint = _hadolint_gate(root, args)
+    internal_seconds = time.perf_counter() - internal_started
+    external_started = time.perf_counter()
+    with ThreadPoolExecutor(max_workers=2, thread_name_prefix="spanel-static") as pool:
+        trivy_future = pool.submit(_trivy_gate, root, args)
+        hadolint_future = pool.submit(_hadolint_gate, root, args)
+        trivy = trivy_future.result()
+        hadolint = hadolint_future.result()
+    external_seconds = time.perf_counter() - external_started
     static_blocking = bool(
         internal_blocking or trivy["blocking"] or hadolint["blocking"]
     )
@@ -1069,6 +1136,12 @@ def _gate_payload(root: Path, args: argparse.Namespace) -> dict[str, Any]:
         "trivy": trivy,
         "hadolint": hadolint,
         "buildkit": buildkit,
+        "timings": {
+            "internal_seconds": round(internal_seconds, 6),
+            "external_static_seconds": round(external_seconds, 6),
+            "build_image_runtime_seconds": buildkit.get("duration_seconds", 0.0),
+            "total_seconds": round(time.perf_counter() - started, 6),
+        },
     }
     return payload
 
@@ -1183,6 +1256,10 @@ def build_parser() -> argparse.ArgumentParser:
     gate.add_argument("--tool-timeout", type=int, default=300)
     gate.add_argument("--build-timeout", type=int, default=1800)
     gate.add_argument("--runtime-timeout", type=int, default=120)
+    gate.add_argument("--image-cache-ttl", type=int, default=3600)
+    gate.add_argument("--pull-cache-ttl", type=int, default=900)
+    gate.add_argument("--cache-dir", type=Path)
+    gate.add_argument("--no-image-cache", action="store_true")
     gate.add_argument(
         "--runtime-smoke",
         action="store_true",
@@ -1240,6 +1317,15 @@ def build_parser() -> argparse.ArgumentParser:
     harden.add_argument("--tool-timeout", type=int, default=300)
     harden.add_argument("--build-timeout", type=int, default=1800)
     harden.add_argument("--runtime-timeout", type=int, default=120)
+    harden.add_argument("--image-cache-ttl", type=int, default=3600)
+    harden.add_argument("--pull-cache-ttl", type=int, default=900)
+    harden.add_argument("--cache-dir", type=Path)
+    harden.add_argument("--no-image-cache", action="store_true")
+    harden.add_argument(
+        "--revalidate-after-apply",
+        action="store_true",
+        help="force a second full gate instead of reusing identical Merkle evidence",
+    )
     harden.set_defaults(
         func=cmd_harden,
         skip_build=False,
