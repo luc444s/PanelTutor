@@ -117,18 +117,43 @@ def _git_commit(root: Path) -> str:
     )
 
 
-def _override(data: dict[str, Any], project: str, non_root: bool) -> str:
+def _override(
+    data: dict[str, Any],
+    project: str,
+    non_root: bool,
+    external_env: Path | None = None,
+) -> str:
     services: dict[str, Any] = {}
-    for service in data["services"]:
-        image_key = hashlib.sha256(f"{project}\0{service}".encode()).hexdigest()[:20]
-        config: dict[str, Any] = {
-            "image": f"spanel-app-{image_key}:latest",
-            "labels": {OWNER_LABEL: project},
-        }
+    for service, source_config in data["services"].items():
+        config: dict[str, Any] = {"labels": {OWNER_LABEL: project}}
+        if (
+            isinstance(source_config, dict)
+            and source_config.get("x-spanel-external-env") is True
+            and external_env is not None
+        ):
+            config["env_file"] = [str(external_env)]
+        if isinstance(source_config, dict) and source_config.get("build") is not None:
+            image_key = hashlib.sha256(
+                f"{project}\0{service}".encode()
+            ).hexdigest()[:20]
+            config["image"] = f"spanel-app-{image_key}:latest"
         if non_root:
-            config.update(
-                {"cap_drop": ["ALL"], "security_opt": ["no-new-privileges:true"]}
+            source_caps = (
+                source_config.get("cap_drop")
+                if isinstance(source_config, dict) else None
             )
+            source_security = (
+                source_config.get("security_opt")
+                if isinstance(source_config, dict) else None
+            )
+            if not source_caps:
+                config["cap_drop"] = ["ALL"]
+            source_has_nnp = isinstance(source_security, list) and any(
+                "no-new-privileges" in str(item).lower().replace(" ", "")
+                for item in source_security
+            )
+            if not source_has_nnp:
+                config["security_opt"] = ["no-new-privileges:true"]
         services[service] = config
     output: dict[str, Any] = {"services": services}
     if data.get("volumes"):
@@ -351,13 +376,18 @@ def _image_users(
                 f"cannot resolve exactly one image for service {service}"
             )
         image = image.strip()
-        user = runner.run(
-            ["docker", "image", "inspect", "-f", "{{.Config.User}}", image]
-        ).stdout.strip()
-        if not _is_definitely_non_root_user(user):
-            raise AppDeployError(
-                f"image for service {service} lacks a definite non-root Config.User"
-            )
+        configured_user = service_config.get("user")
+        has_non_root_override = configured_user is not None and (
+            _is_definitely_non_root_user(configured_user)
+        )
+        if not has_non_root_override:
+            image_user = runner.run(
+                ["docker", "image", "inspect", "-f", "{{.Config.User}}", image]
+            ).stdout.strip()
+            if not _is_definitely_non_root_user(image_user):
+                raise AppDeployError(
+                    f"image for service {service} lacks a definite non-root Config.User"
+                )
         images[service] = image
     return images
 
@@ -690,16 +720,37 @@ def deploy(
         )
     if runner.transport == "ssh":
         available = runner.run(["test", "!", "-e", str(release)], check=False)
-        if available.returncode:
+        if available.returncode == 1:
             raise AppDeployError(
                 "remote project release already exists; use lifecycle commands or a new project"
             )
+        if available.returncode:
+            raise AppDeployError("cannot verify remote project release availability")
     _ensure_owned(runner, project)
     compose_rel = result.compose.relative_to(result.root).as_posix()
-    override = _override(result.data, project, options.non_root)
+    override = _override(
+        result.data,
+        project,
+        options.non_root,
+        _env_path(release),
+    )
     _stage_release(runner, result.root, release, compose_rel, override, env_file)
     services = sorted(result.data["services"])
     _validate_compose_environment(runner, release, compose_rel, project)
+    pulled = runner.run(
+        _compose_command(
+            release,
+            compose_rel,
+            project,
+            True,
+            "pull",
+            "--ignore-buildable",
+        ),
+        timeout=options.timeout,
+        check=False,
+    )
+    if pulled.returncode:
+        raise AppDeployError(f"Compose image pull failed (exit {pulled.returncode})")
     command = _compose_command(release, compose_rel, project, True, "build")
     built = runner.run(command, timeout=options.timeout, check=False)
     if built.returncode:

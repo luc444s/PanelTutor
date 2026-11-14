@@ -298,6 +298,7 @@ change_surface:
     - vendor/systutor-core/plugins/apps/backend/releases/**
     - vendor/systutor-core/plugins/apps/backend/github.py
     - vendor/systutor-core/plugins/apps/backend/runtime/release_deploy.py
+    - vendor/systutor-core/plugins/apps/backend/runtime/deployment.py
     - vendor/systutor-core/plugins/apps/backend/runtime/probes.py
     - vendor/systutor-core/plugins/apps/backend/schemas.py
     - vendor/systutor-core/plugins/apps/backend/router.py
