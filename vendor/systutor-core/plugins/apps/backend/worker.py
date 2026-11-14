@@ -19,7 +19,7 @@ from sqlalchemy.orm import Session
 from .catalog import audit as record_catalog_audit
 from .catalog import mark_installation_suspended, require_source
 from .crypto import EncryptedValue, TokenCipher
-from .github import GithubClient, UrllibGithubClient, app_jwt_for
+from .github import GithubClient, UrllibGithubClient, app_jwt_for, repository_row
 from .hardening import CommandHardeningEngine, HardeningPolicy, HardeningRejected
 from .managed_environment import MANAGED_DATABASE_NAMES, clear_managed_environment
 from .models import (
@@ -31,23 +31,21 @@ from .models import (
     Operation,
 )
 from .operations import claim_operation
+from .releases import ReleaseRejected, release_result
+from .releases.execution import ReleaseExecution, pending_env_path
 from .runtime import (
     AppDeployError,
-    DeployOptions,
     LifecycleOptions,
     Runner,
     audit_project,
     clone_repo,
     compose_candidates,
-    deploy,
     lifecycle,
     runtime_snapshot,
 )
-from .runtime.deployment import _publish_release_state
 from .service import audit as record_apps_audit
 
 logger = logging.getLogger(__name__)
-_DEPLOY_LOCK = threading.Lock()
 
 
 class AppsWorker:
@@ -71,6 +69,13 @@ class AppsWorker:
         self.route_cleanup = route_cleanup
         self.route_refresh = route_refresh
         self.hardening_engine = hardening_engine or CommandHardeningEngine()
+        self.execution = ReleaseExecution(
+            session_factory,
+            runner_factory,
+            hardening_engine=self.hardening_engine,
+            route_refresh=route_refresh,
+            transport=self._transport,
+        )
 
     def run(self, operation_id: str) -> None:
         with self.session_factory() as db:
@@ -93,6 +98,10 @@ class AppsWorker:
                 if application_id is None:
                     raise RuntimeError("Application not found")
                 result = self._source_operation(operation_id, application_id, kind)
+            elif kind == "rollback":
+                if application_id is None:
+                    raise RuntimeError("Application not found")
+                result = self.execution.rollback_operation(operation_id, application_id)
             else:
                 if application_id is None:
                     raise RuntimeError("Application not found")
@@ -101,7 +110,7 @@ class AppsWorker:
         except Exception as exc:
             safe_error = (
                 str(exc)
-                if isinstance(exc, (AppDeployError, HardeningRejected))
+                if isinstance(exc, (AppDeployError, HardeningRejected, ReleaseRejected))
                 else "internal error"
             )
             logger.exception(
@@ -123,7 +132,7 @@ class AppsWorker:
         finally:
             stopped.set()
             heartbeat.join(timeout=1)
-            self._pending_path(operation_id).unlink(missing_ok=True)
+            pending_env_path(operation_id).unlink(missing_ok=True)
 
     def _heartbeat(self, operation_id: str, stopped: threading.Event) -> None:
         while not stopped.wait(30):
@@ -134,10 +143,6 @@ class AppsWorker:
                 operation.heartbeat_at = datetime.now(UTC)
                 db.commit()
 
-    def _pending_path(self, operation_id: str) -> Path:
-        root = Path(os.environ.get("SPANEL_APPS_STATE_ROOT", "/var/lib/spanel/apps"))
-        return root / "pending" / f"{operation_id}.env"
-
     @staticmethod
     def _transport() -> str:
         value = os.environ.get("SPANEL_DOCKER_TRANSPORT", "local").strip()
@@ -147,9 +152,19 @@ class AppsWorker:
         from systutor.core.errors import AppError
 
         with self.session_factory() as db:
+            operation = db.get(Operation, operation_id)
+            operation_report = dict(operation.report or {}) if operation else {}
+        if kind == "deploy":
+            release_id = operation_report.get("hardened_operation_id")
+            if isinstance(release_id, str) and release_id:
+                return self.execution.deploy_known_release(
+                    operation_id, application_id, release_id, operation_report
+                )
+        with self.session_factory() as db:
             app = db.get(Application, application_id)
             if app is None:
                 raise RuntimeError("Application not found")
+            tenant_id = app.tenant_id
             try:
                 installation, repository, provider = require_source(db, app)
             except AppError:
@@ -212,8 +227,15 @@ class AppsWorker:
                     policy = HardeningPolicy.from_dict(raw_policy)
                 except (TypeError, ValueError):
                     raise HardeningRejected("Hardening policy is missing or invalid") from None
-                candidate = self.hardening_engine.prepare(checkout, source[2], policy)
-                return candidate.as_report()
+                release, candidate = self.execution.harden_checkout(
+                    checkout, source, policy, operation_id, application_id, tenant_id,
+                )
+                result = release_result(release)
+                result.update({
+                    "status": "validated",
+                    "services": list(candidate.services),
+                })
+                return result
             audit = audit_project(checkout, source[2], non_root=True)
             report = {
                 "compose": audit.compose.relative_to(audit.root).as_posix(),
@@ -225,88 +247,27 @@ class AppsWorker:
                 "findings": [finding.__dict__ for finding in audit.findings],
                 "blocking": bool(audit.errors),
             }
-            if kind == "inspect" or audit.errors:
+            if kind == "inspect":
                 return report
-            env_file = self._pending_path(operation_id)
-            runner = self.runner_factory(self._transport())
-            with self.session_factory() as db:
-                current_app = db.get(Application, application_id)
-                previous = (
-                    db.get(Deployment, current_app.active_deployment_id)
-                    if current_app is not None and current_app.active_deployment_id else None
-                )
-                previous_release = Path(previous.release) if previous and previous.release else None
-            if not _DEPLOY_LOCK.acquire(blocking=False):
-                raise RuntimeError("Another build or deployment is active")
+            if audit.errors:
+                raise AppDeployError("static audit has errors; deployment blocked")
+            if kind != "deploy":
+                raise AppDeployError("Unsupported source operation")
             try:
-                try:
-                    manifest = deploy(
-                        DeployOptions(
-                            repo=source[0], branch=source[1], project=source[3], non_root=True,
-                            env_file=env_file if env_file.exists() else None,
-                            release_id=operation_id,
-                            publish_state=False,
-                            tenant_environment_names=tenant_names,
-                        ),
-                        audit,
-                        runner,
-                    )
-                except Exception:
-                    if previous_release is not None:
-                        try:
-                            lifecycle(
-                                LifecycleOptions(
-                                    command="start", project=source[3], release=previous_release
-                                ),
-                                runner,
-                            )
-                        except Exception:
-                            with self.session_factory() as db:
-                                failed_app = db.get(Application, application_id)
-                                if failed_app is not None:
-                                    failed_app.status = "degraded"
-                                    db.commit()
-                    raise
-            finally:
-                _DEPLOY_LOCK.release()
-            if manifest is None:
-                raise RuntimeError("Deployment produced no manifest")
-            _publish_release_state(runner, Path(str(manifest["release"])), manifest)
-            with self.session_factory() as db:
-                deployment = Deployment(
-                    application_id=application_id,
-                    operation_id=operation_id,
-                    repository=source[0],
-                    branch=source[1],
-                    commit=manifest.get("commit"),
-                    tree_hash=manifest.get("tree_hash"),
-                    compose_file=manifest.get("compose"),
-                    ingress_service=source[4],
-                    ingress_port=source[5],
-                    status="running",
-                    release=manifest.get("release"),
-                    manifest=manifest,
-                    finished_at=datetime.now(UTC),
+                policy = HardeningPolicy.from_dict(
+                    operation_report.get("hardening")
                 )
-                db.add(deployment)
-                db.flush()
-                app = db.get(Application, application_id)
-                if app is not None:
-                    app.active_deployment_id = deployment.id
-                    app.status = "running"
-                db.commit()
-            if self.route_refresh is not None:
-                with self.session_factory() as db:
-                    current_app = db.get(Application, application_id)
-                    if current_app is not None:
-                        try:
-                            self.route_refresh(db, current_app.tenant_id, application_id)
-                        except Exception:  # noqa: BLE001 - rutas no bloquean deploy
-                            logger.warning(
-                                "apps_route_refresh_failed",
-                                extra={"application_id": application_id},
-                            )
-            return {"deployment_id": deployment.id, "status": "running"}
+            except (TypeError, ValueError):
+                raise AppDeployError(
+                    "A signed trusted release is required"
+                ) from None
+            release, _candidate = self.execution.harden_checkout(
+                checkout, source, policy, operation_id, application_id, tenant_id,
+            )
+            return self.execution.trusted_deploy(
+                operation_id, application_id, release, source, tenant_names,
+                repository=source[0], branch=source[1],
+            )
 
     def reconcile_routes(self) -> int:
         """Re-publish routes for every active app; safe to run on every boot."""
@@ -390,7 +351,7 @@ class AppsWorker:
                 if not rows:
                     break
                 for row in rows:
-                    repository = _repository_row(row)
+                    repository = repository_row(row)
                     observed[repository["github_repository_id"]] = repository
                 page += 1
         finally:
@@ -584,10 +545,14 @@ class AppsWorker:
                 return
             operation.status = "failed"
             operation.phase = "failed"
-            operation.error_code = "apps_operation_failed"
+            operation.error_code = (
+                getattr(exc, "code", "apps_operation_failed")
+                if isinstance(exc, ReleaseRejected)
+                else "apps_operation_failed"
+            )
             operation.public_error = (
                 str(exc)
-                if isinstance(exc, (AppDeployError, HardeningRejected))
+                if isinstance(exc, (AppDeployError, HardeningRejected, ReleaseRejected))
                 else "Application operation failed"
             )
             operation.finished_at = datetime.now(UTC)
@@ -609,25 +574,3 @@ def build_actor(handler: Callable[[str], None]):
     return dramatiq.actor(
         actor_name="apps_operation", queue_name="apps", max_retries=0
     )(handler)
-
-
-def _repository_row(value: object) -> dict:
-    if not isinstance(value, dict):
-        raise RuntimeError("GitHub repository metadata is invalid")
-    repository_id = value.get("id")
-    full_name = value.get("full_name")
-    if (
-        isinstance(repository_id, bool) or not isinstance(repository_id, int)
-        or repository_id <= 0 or not isinstance(full_name, str)
-        or not full_name or len(full_name) > 510
-    ):
-        raise RuntimeError("GitHub repository metadata is invalid")
-    default_branch = value.get("default_branch")
-    return {
-        "github_repository_id": repository_id,
-        "full_name": full_name,
-        "private": bool(value.get("private")),
-        "default_branch": default_branch if isinstance(default_branch, str) else None,
-        "archived": bool(value.get("archived")),
-        "disabled": bool(value.get("disabled")),
-    }

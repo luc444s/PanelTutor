@@ -247,6 +247,29 @@ def validate_installation(
     }
 
 
+def repository_row(value: object) -> dict[str, Any]:
+    """Validate one installation-repositories payload row."""
+    if not isinstance(value, dict):
+        raise RuntimeError("GitHub repository metadata is invalid")
+    repository_id = value.get("id")
+    full_name = value.get("full_name")
+    if (
+        isinstance(repository_id, bool) or not isinstance(repository_id, int)
+        or repository_id <= 0 or not isinstance(full_name, str)
+        or not full_name or len(full_name) > 510
+    ):
+        raise RuntimeError("GitHub repository metadata is invalid")
+    default_branch = value.get("default_branch")
+    return {
+        "github_repository_id": repository_id,
+        "full_name": full_name,
+        "private": bool(value.get("private")),
+        "default_branch": default_branch if isinstance(default_branch, str) else None,
+        "archived": bool(value.get("archived")),
+        "disabled": bool(value.get("disabled")),
+    }
+
+
 def _slug(value: str) -> bool:
     return all(character.isalnum() or character in {"-", "_"} for character in value)
 

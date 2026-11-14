@@ -407,12 +407,40 @@ def build_parser() -> argparse.ArgumentParser:
 
     deploy = sub.add_parser("deploy")
     deploy.add_argument("application")
+    deploy.add_argument(
+        "--hardened", metavar="OPERATION_ID",
+        help="deploy a previously hardened and signed release",
+    )
+    deploy.add_argument(
+        "--service-user", action="append", default=[], type=parse_service_user,
+        metavar="SERVICE=UID:GID",
+    )
+    deploy.add_argument(
+        "--writable-path", action="append", default=[], type=parse_writable_path,
+        metavar="SERVICE=/PATH:MODE",
+    )
     deploy.add_argument("--env-file", type=Path)
     deploy.add_argument(
         "--env",
         help="flat multiline dotenv block (visible in argv; prefer --env-file for secrets)",
     )
     deploy.add_argument("--wait", action="store_true")
+
+    verify = sub.add_parser("verify")
+    verify.add_argument("application")
+    verify.add_argument("--hardened", metavar="OPERATION_ID", required=True)
+
+    evidence = sub.add_parser("evidence")
+    evidence.add_argument("application")
+    evidence.add_argument("--hardened", metavar="OPERATION_ID", required=True)
+
+    releases = sub.add_parser("releases")
+    releases.add_argument("application")
+
+    rollback = sub.add_parser("rollback")
+    rollback.add_argument("application")
+    rollback.add_argument("--to", dest="deployment_id", required=True)
+    rollback.add_argument("--wait", action="store_true")
 
     status = sub.add_parser("status")
     status.add_argument("operation")
@@ -487,14 +515,52 @@ def run(args: argparse.Namespace, client: Client) -> Any:
         return client.request(
             "POST", "/applications", body, idempotency_key=_idempotency_key()
         )
-    if args.command in {"inspect", "deploy"}:
-        if args.command == "inspect":
-            body = {}
-        else:
-            body = {"environment": deployment_environment(args.env_file, args.env)}
+    if args.command == "inspect":
         operation = client.request(
-            "POST", f"/applications/{args.application}/{args.command if args.command == 'inspect' else 'deployments'}",
-            body, idempotency_key=_idempotency_key(),
+            "POST", f"/applications/{args.application}/inspect", {},
+            idempotency_key=_idempotency_key(),
+        )
+        if args.wait:
+            return client.poll(operation["operation_id"], timeout=args.timeout)
+        return operation
+    if args.command == "deploy":
+        body: dict[str, Any] = {
+            "environment": deployment_environment(args.env_file, args.env)
+        }
+        if args.hardened:
+            if args.service_user or args.writable_path:
+                raise CliError("--hardened cannot be combined with a hardening policy")
+            body["hardened_operation_id"] = args.hardened
+        else:
+            if not args.service_user:
+                raise CliError(
+                    "deploy requires a hardening policy (--service-user) or --hardened"
+                )
+            body["hardening"] = hardening_payload(
+                args.service_user, args.writable_path
+            )
+        operation = client.request(
+            "POST", f"/applications/{args.application}/deployments", body,
+            idempotency_key=_idempotency_key(),
+        )
+        if args.wait:
+            return client.poll(operation["operation_id"], timeout=args.timeout)
+        return operation
+    if args.command in {"verify", "evidence"}:
+        release = urllib.parse.quote(args.hardened, safe="")
+        method = "POST" if args.command == "verify" else "GET"
+        return client.request(
+            method,
+            f"/applications/{args.application}/releases/{release}/{args.command}",
+            {} if method == "POST" else None,
+        )
+    if args.command == "releases":
+        return client.request("GET", f"/applications/{args.application}/releases")
+    if args.command == "rollback":
+        operation = client.request(
+            "POST", f"/applications/{args.application}/rollback",
+            {"to_deployment_id": args.deployment_id},
+            idempotency_key=_idempotency_key(),
         )
         if args.wait:
             return client.poll(operation["operation_id"], timeout=args.timeout)

@@ -16,7 +16,7 @@ import systutor.kernel.models  # noqa: F401
 from plugins.apps.backend import worker as worker_module
 from plugins.apps.backend.crypto import TokenCipher
 from plugins.apps.backend.github import InstallationToken
-from plugins.apps.backend.hardening import HardeningPolicy
+from plugins.apps.backend.hardening import HardenedCandidate, HardeningPolicy
 from plugins.apps.backend.models import (
     Application,
     Deployment,
@@ -25,6 +25,10 @@ from plugins.apps.backend.models import (
     GithubRepository,
     Operation,
 )
+from plugins.apps.backend.releases import execution as execution_module
+from plugins.apps.backend.releases import find_release
+from plugins.apps.backend.releases import pipeline as pipeline_module
+from plugins.apps.backend.releases.verify import tree_digest
 from plugins.apps.backend.runtime import AppDeployError
 from plugins.apps.backend.worker import AppsWorker
 from systutor.core.database import Base
@@ -261,12 +265,15 @@ def test_source_operation_requests_a_single_repository_token(
     _assert_token_absent(db)
 
 
-def test_harden_uses_durable_policy_after_clone_without_auditing(
+def test_harden_signs_and_persists_a_trusted_release(
     tmp_path: Path, monkeypatch
 ) -> None:
     db = database(tmp_path)
     cipher = TokenCipher(b"k" * 32)
     seed(db, cipher)
+    monkeypatch.setenv("SPANEL_APPS_STATE_ROOT", str(tmp_path / "state"))
+    monkeypatch.setenv("SPANEL_APPS_RELEASE_SIGNING_KEY", "k" * 32)
+    monkeypatch.setattr(pipeline_module, "_git_commit", lambda _root: "a" * 40)
     db.add(Operation(
         id="op-hard", application_id="a1", tenant_id="t1", actor_user_id="u1",
         kind="harden", status="running", idempotency_key="hard", request_hash="h",
@@ -284,7 +291,16 @@ def test_harden_uses_durable_policy_after_clone_without_auditing(
 
     def fake_clone(_repo, _branch, destination, runner):
         destination.mkdir(parents=True)
-        destination.joinpath("compose.yml").write_text("services: {web: {}}")
+        destination.joinpath("compose.yml").write_text(
+            "services:\n"
+            "  web:\n"
+            "    build: {context: ., dockerfile: Dockerfile}\n"
+            '    user: "10001:10002"\n',
+            encoding="utf-8",
+        )
+        destination.joinpath("Dockerfile").write_text(
+            "FROM alpine:3.20\nUSER 10001:10002\n", encoding="utf-8"
+        )
         captured["clone_token"] = runner.environ["GH_TOKEN"]
 
     class Engine:
@@ -292,16 +308,17 @@ def test_harden_uses_durable_policy_after_clone_without_auditing(
             captured["checkout"] = checkout
             captured["compose_file"] = compose_file
             captured["policy"] = hardening_policy
-            return SimpleNamespace(as_report=lambda: {
-                "status": "validated", "services": ["web"],
-            })
+            return HardenedCandidate(
+                source_tree_sha256="b" * 64,
+                hardened_tree_sha256=tree_digest(checkout),
+                compose="compose.yml",
+                services=("web",),
+                changes=(),
+                policy=hardening_policy.as_dict(),
+                gate={"primary": {"status": "passed"}},
+            )
 
     monkeypatch.setattr(worker_module, "clone_repo", fake_clone)
-    monkeypatch.setattr(
-        worker_module,
-        "audit_project",
-        lambda *_args, **_kwargs: pytest.fail("harden must not use the inspect auditor"),
-    )
     worker = AppsWorker(
         lambda: Session(db.get_bind()), cipher, github=FakeGithub(), hardening_engine=Engine(),
         runner_factory=lambda transport, environ=None: SimpleNamespace(
@@ -309,12 +326,149 @@ def test_harden_uses_durable_policy_after_clone_without_auditing(
         ),
     )
     result = worker._source_operation("op-hard", "a1", "harden")
-    assert result == {"status": "validated", "services": ["web"]}
+    assert result["status"] == "validated"
+    assert result["services"] == ["web"]
+    assert result["release_id"] == "op-hard"
+    assert len(result["artifact_sha256"]) == 64
     assert captured["clone_token"] == TOKEN
     assert captured["compose_file"] is None
     assert isinstance(captured["policy"], HardeningPolicy)
     assert captured["policy"].service_users[0].uid == 10001
+    release = find_release(
+        tmp_path / "state", "t1", "a1", "op-hard"
+    )
+    assert release.artifact_sha256 == result["artifact_sha256"]
+    assert release.commit == "a" * 40
     _assert_token_absent(db)
+
+
+def test_deploy_existing_release_avoids_clone_and_github(
+    tmp_path: Path, monkeypatch
+) -> None:
+    db = database(tmp_path)
+    cipher = TokenCipher(b"k" * 32)
+    seed(db, cipher)
+    db.add(Operation(
+        id="op-release", application_id="a1", tenant_id="t1", actor_user_id="u1",
+        kind="deploy", status="running", idempotency_key="release", request_hash="h",
+        report={"hardened_operation_id": "op-signed"},
+    ))
+    db.commit()
+    github = FakeGithub()
+    manifest = {
+        "release": str(tmp_path / "state" / "app-demo" / "releases" / "op-release"),
+        "commit": "a" * 40, "tree_hash": "b" * 64, "compose": "compose.yml",
+        "containers": {"web": "cid"}, "status": "running",
+    }
+    monkeypatch.setattr(
+        execution_module, "find_release", lambda *_args: SimpleNamespace()
+    )
+    monkeypatch.setattr(
+        execution_module, "deploy_trusted", lambda *_args, **_kwargs: manifest
+    )
+    monkeypatch.setattr(
+        execution_module, "release_result", lambda _release: {"release_id": "op-signed"}
+    )
+    monkeypatch.setattr(execution_module, "_publish_release_state", lambda *_args: None)
+    worker = AppsWorker(
+        lambda: Session(db.get_bind()), cipher, github=github,
+        runner_factory=lambda transport, environ=None: SimpleNamespace(
+            transport=transport, environ=environ or {}
+        ),
+    )
+    result = worker._source_operation("op-release", "a1", "deploy")
+    assert result["deployment_id"]
+    assert result["release_id"] == "op-signed"
+    assert github.token_calls == []
+
+
+def test_rollback_rejects_a_deployment_without_a_signed_release(
+    tmp_path: Path,
+) -> None:
+    db = database(tmp_path)
+    cipher = TokenCipher(b"k" * 32)
+    seed(db, cipher)
+    db.add(Deployment(
+        id="d-unsigned", application_id="a1", operation_id="old", repository="acme/repo",
+        branch="main", status="running", release=str(tmp_path / "old"),
+        manifest={"project": "app-demo"},
+    ))
+    db.add(Operation(
+        id="op-rb", application_id="a1", tenant_id="t1", actor_user_id="u1",
+        kind="rollback", status="running", idempotency_key="rb", request_hash="h",
+        report={"to_deployment_id": "d-unsigned"},
+    ))
+    db.commit()
+    worker = AppsWorker(lambda: Session(db.get_bind()), cipher, github=FakeGithub())
+    with pytest.raises(worker_module.AppDeployError, match="signed release"):
+        worker.execution.rollback_operation("op-rb", "a1")
+
+
+def test_rollback_downs_new_starts_signed_previous_and_moves_active(
+    tmp_path: Path, monkeypatch
+) -> None:
+    db = database(tmp_path)
+    cipher = TokenCipher(b"k" * 32)
+    seed(db, cipher)
+    target_release = tmp_path / "state" / "app-demo" / "releases" / "d-signed"
+    current_release = tmp_path / "state" / "app-demo" / "releases" / "d-current"
+    db.add(Deployment(
+        id="d-current", application_id="a1", operation_id="current",
+        repository="acme/repo", branch="main", status="running",
+        release=str(current_release), manifest={"project": "app-demo"},
+    ))
+    db.add(Deployment(
+        id="d-signed", application_id="a1", operation_id="signed",
+        repository="acme/repo", branch="main", status="stopped",
+        release=str(target_release),
+        manifest={
+            "project": "app-demo", "release": str(target_release),
+            "hardened_release": {"release_id": "op-old"},
+        },
+    ))
+    app = db.get(Application, "a1")
+    app.active_deployment_id = "d-current"
+    db.add(Operation(
+        id="op-rb", application_id="a1", tenant_id="t1", actor_user_id="u1",
+        kind="rollback", status="running", idempotency_key="rb", request_hash="h",
+        report={"to_deployment_id": "d-signed"},
+    ))
+    db.commit()
+    commands: list[str] = []
+    published: list[dict] = []
+
+    class FakeRelease:
+        @classmethod
+        def from_dict(cls, _value):
+            return SimpleNamespace(body={})
+
+    monkeypatch.setattr(execution_module, "TrustedRelease", FakeRelease)
+    monkeypatch.setattr(execution_module, "verify_release", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        execution_module, "release_result", lambda _release: {"release_id": "op-old"}
+    )
+    monkeypatch.setattr(
+        execution_module, "lifecycle",
+        lambda options, _runner: commands.append(options.command),
+    )
+    monkeypatch.setattr(
+        execution_module, "_publish_release_state",
+        lambda _runner, _path, manifest: published.append(dict(manifest)),
+    )
+    worker = AppsWorker(
+        lambda: Session(db.get_bind()), cipher, github=FakeGithub(),
+        runner_factory=lambda transport, environ=None: SimpleNamespace(
+            transport=transport, environ=environ or {}
+        ),
+    )
+    result = worker.execution.rollback_operation("op-rb", "a1")
+    assert commands == ["down", "start"]
+    assert published and published[-1]["status"] == "running"
+    assert result["rollback"] is True
+    db.expire_all()
+    assert db.get(Application, "a1").active_deployment_id == "d-signed"
+    assert db.get(Deployment, "d-signed").status == "running"
+    assert db.get(Application, "a1").status == "running"
 
 
 def test_successful_inspect_updates_application_summary(tmp_path: Path) -> None:

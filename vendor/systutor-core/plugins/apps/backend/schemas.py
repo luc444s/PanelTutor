@@ -74,10 +74,6 @@ class SourceUpdate(BaseModel):
         return value
 
 
-class DeployRequest(BaseModel):
-    environment: list[tuple[str, str]] = Field(default_factory=list, max_length=100)
-
-
 class HardeningRuntimeUser(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -120,6 +116,46 @@ class HardeningRequest(BaseModel):
                 for item in self.writable_paths
             ),
         )
+
+
+class DeployRequest(BaseModel):
+    """A deployment may only carry a hardening policy or a signed release id."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    environment: list[tuple[str, str]] = Field(default_factory=list, max_length=100)
+    hardening: HardeningRequest | None = None
+    hardened_operation_id: str | None = Field(
+        default=None, min_length=1, max_length=128
+    )
+
+    @field_validator("hardened_operation_id")
+    @classmethod
+    def safe_operation_id(cls, value: str | None) -> str | None:
+        if value is not None and not all(
+            character.isalnum() or character in "_.:-" for character in value
+        ):
+            raise ValueError("hardened_operation_id is invalid")
+        return value
+
+    @model_validator(mode="after")
+    def one_admission_path(self):
+        if self.hardening is not None and self.hardened_operation_id is not None:
+            raise ValueError("hardening and hardened_operation_id are exclusive")
+        return self
+
+
+class RollbackRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    to_deployment_id: str = Field(min_length=1, max_length=36)
+
+    @field_validator("to_deployment_id")
+    @classmethod
+    def safe_deployment_id(cls, value: str) -> str:
+        if not all(character.isalnum() or character in "_-" for character in value):
+            raise ValueError("to_deployment_id is invalid")
+        return value
 
 
 class ActionRequest(BaseModel):

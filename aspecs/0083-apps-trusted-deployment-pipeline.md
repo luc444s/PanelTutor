@@ -2,7 +2,8 @@
 
 ## STATUS
 
-Planned. No implementado. Sucede a A.SPEC 0082 (backend + CLI de hardening).
+Implementado P0–P5. P6 (evidencia live) pendiente de sincronizar el laboratorio.
+Sucede a A.SPEC 0082 (backend + CLI de hardening).
 
 ## WHY
 
@@ -295,6 +296,7 @@ change_surface:
     - aspecs/0083-apps-trusted-deployment-pipeline.md
     - vendor/systutor-core/plugins/apps/backend/hardening/**
     - vendor/systutor-core/plugins/apps/backend/releases/**
+    - vendor/systutor-core/plugins/apps/backend/github.py
     - vendor/systutor-core/plugins/apps/backend/runtime/release_deploy.py
     - vendor/systutor-core/plugins/apps/backend/runtime/probes.py
     - vendor/systutor-core/plugins/apps/backend/schemas.py
@@ -411,12 +413,51 @@ La validación live debe demostrar:
 
 ## DEFINITION OF DONE
 
-- [ ] `TrustedRelease` firmada y verificable implementada.
-- [ ] Deploy rechaza cualquier entrada no firmada.
-- [ ] Artefacto verificado antes y después de extraer.
-- [ ] Política y fingerprints ligados a la release.
-- [ ] Probes independientes obligatorios.
-- [ ] Rollback firmado probado.
-- [ ] CLI final implementada.
-- [ ] Suites de Apps y CLI en verde.
+- [x] `TrustedRelease` firmada y verificable implementada.
+- [x] Deploy rechaza cualquier entrada no firmada.
+- [x] Artefacto verificado antes y después de extraer.
+- [x] Política y fingerprints ligados a la release.
+- [x] Probes independientes obligatorios.
+- [x] Rollback firmado probado.
+- [x] CLI final implementada.
+- [x] Suites de Apps y CLI en verde.
 - [ ] Evidencia live de P6 registrada.
+
+## IMPLEMENTATION NOTES
+
+- `releases/trusted.py` — descriptor canónico, firma HMAC, key ring y TTL.
+- `releases/store.py` — almacén inmutable `0600` con escritura atómica y
+  validación `lstat`/`O_NOFOLLOW`.
+- `releases/verify.py` — verificación fail-closed antes y después de extraer,
+  hashes de Compose/Dockerfiles, política y auditoría estática.
+- `releases/pipeline.py` — construcción y firma de la release desde un
+  `HardenedCandidate`.
+- `releases/execution.py` — orquestación de harden, deploy y rollback; el lock
+  por aplicación cubre build, probes, publicación de estado, commit y rutas.
+- `runtime/release_deploy.py` — único camino de despliegue; registra IDs de
+  imagen y publica estado solo después de los probes.
+- `runtime/probes.py` — aislamiento efectivo, probe funcional con imagen fijada
+  por digest en la red interna y ventana de estabilidad.
+- `github.py` — se añadió a la superficie autorizada para extraer
+  `repository_row` y mantener `worker.py` por debajo de 600 líneas.
+- Las releases sin Dockerfile se aceptan: los stacks de solo imágenes externas
+  siguen siendo desplegables; el árbol firmado y el Compose siguen cubiertos por
+  hash y firma.
+- Evidencia de verificación local:
+
+```text
+158 passed  (Apps backend + CLI)
+ruff: All checks passed
+git diff --check: limpio
+```
+
+## GAPS
+
+- **P6 live**: el laboratorio no ejecuta esta implementación. Requiere
+  sincronizar el working tree, reconstruir backend/worker, configurar
+  `SPANEL_APPS_RELEASE_SIGNING_KEY`, `SPANEL_APPS_PROBE_IMAGE` y
+  `SPANEL_APPS_PROBE_COMMAND`, y autorización para mutar apps del lab.
+- **Digests de imágenes externas**: la release firma el Compose, pero un tag
+  externo puede mutar después de la firma. Falta un mapa firmado
+  `service -> image@sha256` y ejecutar por digest. Debe abordarse en una A.SPEC
+  posterior antes de declarar soporte externo completamente confiable.

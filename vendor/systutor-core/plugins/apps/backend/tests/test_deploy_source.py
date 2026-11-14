@@ -112,9 +112,16 @@ def test_deploy_prepends_stable_managed_database_environment(tmp_path: Path) -> 
     request = SimpleNamespace(
         headers={}, app=SimpleNamespace(state=SimpleNamespace(apps_resources=resources))
     )
+    hardening = HardeningRequest.model_validate({
+        "service_users": {"web": {"uid": 10001, "gid": 10002}},
+        "writable_paths": [],
+    })
     operation = router_module.deploy_application(
         "a1",
-        DeployRequest(environment=[("DATABASE_URL", "scheme://${APP_DB_USER}@database")]),
+        DeployRequest(
+            environment=[("DATABASE_URL", "scheme://${APP_DB_USER}@database")],
+            hardening=hardening,
+        ),
         request,
         "managed-key",
         db,
@@ -141,12 +148,34 @@ def test_deploy_rejects_managed_database_override(tmp_path: Path) -> None:
     request = SimpleNamespace(
         headers={}, app=SimpleNamespace(state=SimpleNamespace(apps_resources=resources))
     )
+    hardening = HardeningRequest.model_validate({
+        "service_users": {"web": {"uid": 10001, "gid": 10002}},
+        "writable_paths": [],
+    })
     with pytest.raises(AppError) as error:
         router_module.deploy_application(
-            "a1", DeployRequest(environment=[("APP_DB_NAME", "manual")]),
+            "a1",
+            DeployRequest(
+                environment=[("APP_DB_NAME", "manual")], hardening=hardening,
+            ),
             request, "managed-override", db, context(), user,
         )
     assert error.value.code == "apps.environment_managed"
+
+
+def test_deploy_without_a_signed_release_is_rejected(tmp_path: Path) -> None:
+    db = database(tmp_path)
+    user = db.get(User, "u1")
+    resources = SimpleNamespace(cipher=lambda: TokenCipher(b"k" * 32))
+    request = SimpleNamespace(
+        headers={}, app=SimpleNamespace(state=SimpleNamespace(apps_resources=resources))
+    )
+    with pytest.raises(AppError) as error:
+        router_module.deploy_application(
+            "a1", DeployRequest(), request, "unsigned", db, context(), user,
+        )
+    assert error.value.code == "apps.trusted_release_required"
+    assert error.value.status_code == 422
 
 
 def test_cross_tenant_application_access_is_not_found(tmp_path: Path) -> None:

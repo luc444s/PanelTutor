@@ -27,6 +27,14 @@ from .managed_environment import (
 from .manifest_flow import ManifestFlow
 from .models import Application, Deployment, Operation
 from .operations import create_operation, dispatch_operation, write_pending_env
+from .releases import (
+    ReleaseRejected,
+    find_release,
+    list_releases,
+    release_result,
+    release_store_root,
+    verify_release,
+)
 from .schemas import (
     ActionRequest,
     ApplicationCreate,
@@ -39,6 +47,7 @@ from .schemas import (
     OperationView,
     ProviderView,
     RepositoryView,
+    RollbackRequest,
     SecretRevealRequest,
     SecretRevealResponse,
     SourceUpdate,
@@ -99,6 +108,13 @@ def _queue(
             report["purge_data"] = bool(payload.get("purge_data"))
         if kind == "harden" and isinstance(payload, dict):
             report["policy"] = payload
+        if kind == "deploy" and isinstance(payload, dict):
+            if isinstance(payload.get("hardening"), dict):
+                report["hardening"] = payload["hardening"]
+            if isinstance(payload.get("hardened_operation_id"), str):
+                report["hardened_operation_id"] = payload["hardened_operation_id"]
+        if kind == "rollback" and isinstance(payload, dict):
+            report["to_deployment_id"] = payload.get("to_deployment_id")
         if service:
             report["service"] = service
         if report:
@@ -109,6 +125,7 @@ def _queue(
                 _resources(request).settings.state_root, operation.id, pending
             )
             operation.report = {
+                **report,
                 "environment_names": names,
                 "environment_fingerprint": fingerprint,
                 "tenant_environment_names": sorted({
@@ -335,6 +352,12 @@ def deploy_application(
     user: User = Depends(require_permission("apps.deployments.create")),
 ) -> OperationView:
     app = catalog.get_application(db, context.current_tenant_id, application_id)
+    if body.hardening is None and body.hardened_operation_id is None:
+        raise AppError(
+            "A signed trusted release is required",
+            status_code=422,
+            code="apps.trusted_release_required",
+        )
     cipher = _resources(request).cipher()
     tenant_environment = (
         body.environment
@@ -343,8 +366,13 @@ def deploy_application(
     environment = merge_managed_environment(db, app, cipher, tenant_environment)
     if body.environment:
         save_tenant_environment(db, app, cipher, body.environment)
+    payload: dict[str, object] = {"environment": tenant_environment}
+    if body.hardening is not None:
+        payload["hardening"] = body.hardening.to_policy().as_dict()
+    if body.hardened_operation_id is not None:
+        payload["hardened_operation_id"] = body.hardened_operation_id
     return _queue(request, db, app, user, "deploy", idempotency_key,
-                  {"environment": tenant_environment}, environment)
+                  payload, environment)
 
 
 @router.get("/applications/{application_id}/deployments")
@@ -358,6 +386,106 @@ def list_deployments(
         Deployment.application_id == app.id,
     ).order_by(Deployment.created_at.desc())).all()
     return [catalog._deployment_view(row) for row in rows]
+
+
+@router.get("/applications/{application_id}/releases")
+def list_application_releases(
+    application_id: str, db: Session = Depends(get_db_session),
+    context: TenantContext = Depends(get_current_tenant_context),
+    _user: User = Depends(require_permission("apps.applications.read")),
+) -> list[dict]:
+    app = catalog.get_application(db, context.current_tenant_id, application_id)
+    return list_releases(release_store_root(os.environ), app.tenant_id, app.id)
+
+
+def _release(app: Application, operation_id: str):
+    try:
+        return find_release(
+            release_store_root(os.environ), app.tenant_id, app.id, operation_id
+        )
+    except ReleaseRejected as exc:
+        raise AppError(
+            "Signed release not found", status_code=404,
+            code="apps.release_not_found",
+        ) from exc
+
+
+@router.post("/applications/{application_id}/releases/{operation_id}/verify")
+def verify_application_release(
+    application_id: str, operation_id: str, db: Session = Depends(get_db_session),
+    context: TenantContext = Depends(get_current_tenant_context),
+    _user: User = Depends(require_permission("apps.applications.read")),
+) -> dict:
+    app = catalog.get_application(db, context.current_tenant_id, application_id)
+    release = _release(app, operation_id)
+    try:
+        verified = verify_release(
+            release_store_root(os.environ), release, environ=os.environ
+        )
+    except ReleaseRejected as exc:
+        raise AppError(
+            "Release verification failed", status_code=422,
+            code="apps.release_invalid",
+        ) from exc
+    return {
+        "status": "valid",
+        "release": release_result(release),
+        "checks": {
+            "signature": True,
+            "artifact": True,
+            "tree": True,
+            "compose": True,
+            "policy": True,
+            "audit": not verified.audit.errors,
+        },
+    }
+
+
+@router.get("/applications/{application_id}/releases/{operation_id}/evidence")
+def application_release_evidence(
+    application_id: str, operation_id: str, db: Session = Depends(get_db_session),
+    context: TenantContext = Depends(get_current_tenant_context),
+    _user: User = Depends(require_permission("apps.applications.read")),
+) -> dict:
+    app = catalog.get_application(db, context.current_tenant_id, application_id)
+    release = _release(app, operation_id)
+    operation = db.get(Operation, release.operation_id)
+    evidence = operation.result if operation is not None else None
+    return {
+        "release": release.to_dict(),
+        "operation_result": evidence,
+    }
+
+
+@router.post("/applications/{application_id}/rollback", response_model=OperationView, status_code=202)
+def rollback_application(
+    application_id: str, body: RollbackRequest, request: Request,
+    idempotency_key: str | None = Header(None), db: Session = Depends(get_db_session),
+    context: TenantContext = Depends(get_current_tenant_context),
+    user: User = Depends(require_permission("apps.deployments.create")),
+) -> OperationView:
+    app = catalog.get_application(db, context.current_tenant_id, application_id)
+    target = db.get(Deployment, body.to_deployment_id)
+    if (
+        target is None
+        or target.application_id != app.id
+        or not isinstance(target.manifest, dict)
+        or not isinstance(target.manifest.get("hardened_release"), dict)
+    ):
+        raise AppError(
+            "Rollback target is not a signed release",
+            status_code=422,
+            code="apps.trusted_release_required",
+        )
+    if target.id == app.active_deployment_id:
+        raise AppError(
+            "Deployment is already active", status_code=422,
+            code="apps.release_already_active",
+        )
+    return _queue(
+        request, db, app, user, "rollback", idempotency_key,
+        {"to_deployment_id": target.id},
+    )
 
 
 @router.post("/applications/{application_id}/actions/{action}", response_model=OperationView, status_code=202)

@@ -150,10 +150,16 @@ def test_deploy_env_file_must_be_private_and_values_never_echo(
     env.chmod(0o600)
     transport = FakeTransport([{"operation_id": "op1"}])
     apps.run(
-        apps.build_parser().parse_args(["deploy", "a1", "--env-file", str(env)]),
+        apps.build_parser().parse_args([
+            "deploy", "a1", "--service-user", "web=1:1",
+            "--env-file", str(env),
+        ]),
         client(transport),
     )
-    assert transport.calls[0]["payload"] == {"environment": [["CANARY", "top-secret"]]}
+    assert transport.calls[0]["payload"] == {
+        "environment": [["CANARY", "top-secret"]],
+        "hardening": {"service_users": {"web": {"uid": 1, "gid": 1}}, "writable_paths": []},
+    }
     assert transport.calls[0]["url"].endswith(
         "/api/v1/plugins/apps/applications/a1/deployments"
     )
@@ -163,14 +169,16 @@ def test_deploy_env_file_must_be_private_and_values_never_echo(
 def test_deploy_accepts_one_plain_multiline_env_block() -> None:
     transport = FakeTransport([{"operation_id": "op-inline"}])
     args = apps.build_parser().parse_args([
-        "deploy", "a1", "--env", "SMTP_HOST=mail\nAPI_URL=https://api.example?a=b",
+        "deploy", "a1", "--service-user", "web=1:1",
+        "--env", "SMTP_HOST=mail\nAPI_URL=https://api.example?a=b",
     ])
     apps.run(args, client(transport))
     assert transport.calls[0]["payload"] == {
         "environment": [
             ["SMTP_HOST", "mail"],
             ["API_URL", "https://api.example?a=b"],
-        ]
+        ],
+        "hardening": {"service_users": {"web": {"uid": 1, "gid": 1}}, "writable_paths": []},
     }
 
 
@@ -179,7 +187,8 @@ def test_deploy_rejects_duplicate_inline_and_file_values(tmp_path: Path) -> None
     env.write_text("API_KEY=file\n", encoding="utf-8")
     env.chmod(0o600)
     args = apps.build_parser().parse_args([
-        "deploy", "a1", "--env-file", str(env), "--env", "API_KEY=inline",
+        "deploy", "a1", "--service-user", "web=1:1",
+        "--env-file", str(env), "--env", "API_KEY=inline",
     ])
     with pytest.raises(apps.CliError, match="duplicate"):
         apps.run(args, client(FakeTransport()))
@@ -445,3 +454,85 @@ def test_domain_assign_rejects_options_outside_domains_allowlist() -> None:
             ]),
             client(entrypoint_transport),
         )
+
+
+def test_deploy_without_policy_or_release_fails_before_http() -> None:
+    transport = FakeTransport()
+    args = apps.build_parser().parse_args(["deploy", "demo"])
+    with pytest.raises(apps.CliError, match="hardening policy"):
+        apps.run(args, client(transport))
+    assert transport.calls == []
+
+
+def test_deploy_sends_a_hardening_policy_not_a_checkout() -> None:
+    transport = FakeTransport([{"operation_id": "op1"}])
+    result = apps.run(
+        apps.build_parser().parse_args([
+            "deploy", "demo", "--service-user", "web=10001:10002",
+            "--writable-path", "web=/app/data:0750",
+        ]),
+        client(transport),
+    )
+    assert result["operation_id"] == "op1"
+    call = transport.calls[0]
+    assert call["method"] == "POST"
+    assert call["url"].endswith("/applications/demo/deployments")
+    assert call["payload"] == {
+        "environment": [],
+        "hardening": {
+            "service_users": {"web": {"uid": 10001, "gid": 10002}},
+            "writable_paths": [
+                {"service": "web", "path": "/app/data", "mode": "0750"}
+            ],
+        },
+    }
+    assert "hardened_operation_id" not in call["payload"]
+
+
+def test_deploy_existing_release_never_sends_a_policy() -> None:
+    transport = FakeTransport([{"operation_id": "op1"}])
+    apps.run(
+        apps.build_parser().parse_args(["deploy", "demo", "--hardened", "op-9"]),
+        client(transport),
+    )
+    assert transport.calls[0]["payload"] == {
+        "environment": [], "hardened_operation_id": "op-9",
+    }
+    with pytest.raises(apps.CliError, match="cannot be combined"):
+        apps.run(
+            apps.build_parser().parse_args([
+                "deploy", "demo", "--hardened", "op-9",
+                "--service-user", "web=1:1",
+            ]),
+            client(transport),
+        )
+    assert len(transport.calls) == 1
+
+
+def test_verify_evidence_releases_and_rollback_paths() -> None:
+    transport = FakeTransport([{}])
+    apps.run(
+        apps.build_parser().parse_args(["verify", "demo", "--hardened", "op-9"]),
+        client(transport),
+    )
+    apps.run(
+        apps.build_parser().parse_args(["evidence", "demo", "--hardened", "op-9"]),
+        client(transport),
+    )
+    apps.run(
+        apps.build_parser().parse_args(["releases", "demo"]),
+        client(transport),
+    )
+    apps.run(
+        apps.build_parser().parse_args([
+            "rollback", "demo", "--to", "deployment-1",
+        ]),
+        client(transport),
+    )
+    assert [(item["method"], item["url"]) for item in transport.calls] == [
+        ("POST", "https://panel.example/api/v1/plugins/apps/applications/demo/releases/op-9/verify"),
+        ("GET", "https://panel.example/api/v1/plugins/apps/applications/demo/releases/op-9/evidence"),
+        ("GET", "https://panel.example/api/v1/plugins/apps/applications/demo/releases"),
+        ("POST", "https://panel.example/api/v1/plugins/apps/applications/demo/rollback"),
+    ]
+    assert transport.calls[-1]["payload"] == {"to_deployment_id": "deployment-1"}
