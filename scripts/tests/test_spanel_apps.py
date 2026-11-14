@@ -87,6 +87,46 @@ def test_inspect_wait_polls_with_bounded_client() -> None:
     assert transport.calls[1]["method"] == "GET"
 
 
+def test_harden_sends_structured_policy_and_waits() -> None:
+    transport = FakeTransport([
+        {"operation_id": "op-hard"},
+        {"operation_id": "op-hard", "status": "succeeded"},
+    ])
+    result = apps.run(
+        apps.build_parser().parse_args([
+            "harden", "a1", "--service-user", "web=10001:10002",
+            "--writable-path", "web=/app/data:0750", "--wait",
+        ]),
+        client(transport),
+    )
+    assert result["status"] == "succeeded"
+    assert transport.calls[0]["url"].endswith("/applications/a1/hardening")
+    assert transport.calls[0]["payload"] == {
+        "service_users": {"web": {"uid": 10001, "gid": 10002}},
+        "writable_paths": [{"service": "web", "path": "/app/data", "mode": "0750"}],
+    }
+
+
+@pytest.mark.parametrize(
+    "arguments",
+    [
+        ["--service-user", "web=0:1"],
+        ["--service-user", "web=1:1", "--service-user", "web=2:2"],
+        ["--service-user", "web=1:1", "--writable-path", "web=relative:0750"],
+        ["--service-user", "web=1:1", "--writable-path", "web=/app/../root:0750"],
+        ["--service-user", "web=1:1", "--writable-path", "web=/app/data:0777"],
+    ],
+)
+def test_harden_rejects_invalid_policy_before_http(arguments) -> None:
+    transport = FakeTransport()
+    with pytest.raises((apps.CliError, SystemExit)):
+        apps.run(
+            apps.build_parser().parse_args(["harden", "a1", *arguments]),
+            client(transport),
+        )
+    assert transport.calls == []
+
+
 def test_status_timeout_is_bounded() -> None:
     transport = FakeTransport([{"operation_id": "op1", "status": "running"}])
     with pytest.raises(apps.CliError, match="timeout"):

@@ -20,7 +20,7 @@ from plugins.apps.backend.models import (
 )
 from plugins.apps.backend.operations import create_operation, reconcile
 from plugins.apps.backend.runtime.deployment import _state_root
-from plugins.apps.backend.schemas import DeleteRequest, DeployRequest
+from plugins.apps.backend.schemas import DeleteRequest, DeployRequest, HardeningRequest
 from plugins.apps.backend.worker import AppsWorker
 from systutor.core.database import Base
 from systutor.core.errors import AppError
@@ -153,6 +153,47 @@ def test_cross_tenant_application_access_is_not_found(tmp_path: Path) -> None:
     db = database(tmp_path)
     with pytest.raises(AppError) as error:
         router_module.get_application("a1", db, context("t2"))
+    assert error.value.status_code == 404
+
+
+def test_hardening_is_tenant_scoped_idempotent_and_persists_only_policy(
+    tmp_path: Path,
+) -> None:
+    db = database(tmp_path)
+    user = db.get(User, "u1")
+
+    class Dispatcher:
+        def __init__(self):
+            self.calls = []
+
+        def enqueue(self, operation_id):
+            self.calls.append(operation_id)
+            return "message"
+
+    dispatcher = Dispatcher()
+    resources = SimpleNamespace(dispatcher=dispatcher)
+    request = SimpleNamespace(
+        headers={}, app=SimpleNamespace(state=SimpleNamespace(apps_resources=resources))
+    )
+    body = HardeningRequest.model_validate({
+        "service_users": {"web": {"uid": 10001, "gid": 10002}},
+        "writable_paths": [{"service": "web", "path": "/app/data", "mode": "0750"}],
+    })
+    first = router_module.harden_application(
+        "a1", body, request, "hard-key", db, context(), user,
+    )
+    second = router_module.harden_application(
+        "a1", body, request, "hard-key", db, context(), user,
+    )
+    assert second.operation_id == first.operation_id
+    assert dispatcher.calls == [first.operation_id]
+    stored = db.get(Operation, first.operation_id)
+    assert stored.kind == "harden"
+    assert stored.report == {"policy": body.model_dump()}
+    with pytest.raises(AppError) as error:
+        router_module.harden_application(
+            "a1", body, request, "other-key", db, context("t2"), db.get(User, "u2"),
+        )
     assert error.value.status_code == 404
 
 

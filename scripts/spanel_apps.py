@@ -19,7 +19,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from collections.abc import Callable, Sequence
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from uuid import uuid4
 
@@ -201,6 +201,73 @@ def deployment_environment(path: Path | None, inline: str | None) -> list[list[s
     return entries
 
 
+def parse_service_user(value: str) -> tuple[str, int, int]:
+    service, separator, raw_user = value.partition("=")
+    uid_text, user_separator, gid_text = raw_user.partition(":")
+    if (
+        not separator
+        or not user_separator
+        or not service
+        or len(service) > 128
+        or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-" for character in service)
+        or not uid_text.isdigit()
+        or not gid_text.isdigit()
+    ):
+        raise argparse.ArgumentTypeError("service user must be SERVICE=UID:GID")
+    uid, gid = int(uid_text), int(gid_text)
+    if not 0 < uid <= 2**31 - 1 or not 0 < gid <= 2**31 - 1:
+        raise argparse.ArgumentTypeError("UID and GID must be positive non-root integers")
+    return service, uid, gid
+
+
+def parse_writable_path(value: str) -> tuple[str, str, str]:
+    service, separator, raw_path = value.partition("=")
+    path, mode_separator, mode = raw_path.rpartition(":")
+    candidate = PurePosixPath(path)
+    if (
+        not separator
+        or not mode_separator
+        or not service
+        or len(service) > 128
+        or any(character not in "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-" for character in service)
+        or not path.startswith("/")
+        or path == "/"
+        or len(path) > 1024
+        or ".." in candidate.parts
+        or candidate.as_posix() != path
+        or len(mode) != 4
+        or not mode.startswith("0")
+        or any(character not in "01234567" for character in mode)
+        or int(mode, 8) == 0
+        or int(mode, 8) & 0o002
+    ):
+        raise argparse.ArgumentTypeError(
+            "writable path must be SERVICE=/NORMALIZED/ABSOLUTE/PATH:MODE and not world-writable"
+        )
+    return service, path, mode
+
+
+def hardening_payload(
+    service_users: Sequence[tuple[str, int, int]],
+    writable_paths: Sequence[tuple[str, str, str]],
+) -> dict[str, object]:
+    if not service_users:
+        raise CliError("at least one --service-user is required")
+    if len(service_users) > 64 or len(writable_paths) > 256:
+        raise CliError("hardening policy exceeds its size limit")
+    users: dict[str, dict[str, int]] = {}
+    for service, uid, gid in service_users:
+        if service in users:
+            raise CliError("hardening policy contains a duplicate service")
+        users[service] = {"uid": uid, "gid": gid}
+    paths = []
+    for service, path, mode in writable_paths:
+        if service not in users:
+            raise CliError("writable path references an undeclared service")
+        paths.append({"service": service, "path": path, "mode": mode})
+    return {"service_users": users, "writable_paths": paths}
+
+
 def _idempotency_key() -> str:
     return str(uuid4())
 
@@ -326,6 +393,18 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("application")
     inspect.add_argument("--wait", action="store_true")
 
+    harden = sub.add_parser("harden")
+    harden.add_argument("application")
+    harden.add_argument(
+        "--service-user", action="append", required=True, type=parse_service_user,
+        metavar="SERVICE=UID:GID",
+    )
+    harden.add_argument(
+        "--writable-path", action="append", default=[], type=parse_writable_path,
+        metavar="SERVICE=/PATH:MODE",
+    )
+    harden.add_argument("--wait", action="store_true")
+
     deploy = sub.add_parser("deploy")
     deploy.add_argument("application")
     deploy.add_argument("--env-file", type=Path)
@@ -416,6 +495,15 @@ def run(args: argparse.Namespace, client: Client) -> Any:
         operation = client.request(
             "POST", f"/applications/{args.application}/{args.command if args.command == 'inspect' else 'deployments'}",
             body, idempotency_key=_idempotency_key(),
+        )
+        if args.wait:
+            return client.poll(operation["operation_id"], timeout=args.timeout)
+        return operation
+    if args.command == "harden":
+        body = hardening_payload(args.service_user, args.writable_path)
+        operation = client.request(
+            "POST", f"/applications/{args.application}/hardening", body,
+            idempotency_key=_idempotency_key(),
         )
         if args.wait:
             return client.poll(operation["operation_id"], timeout=args.timeout)

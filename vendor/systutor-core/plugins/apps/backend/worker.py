@@ -20,6 +20,7 @@ from .catalog import audit as record_catalog_audit
 from .catalog import mark_installation_suspended, require_source
 from .crypto import EncryptedValue, TokenCipher
 from .github import GithubClient, UrllibGithubClient, app_jwt_for
+from .hardening import CommandHardeningEngine, HardeningPolicy, HardeningRejected
 from .managed_environment import MANAGED_DATABASE_NAMES, clear_managed_environment
 from .models import (
     Application,
@@ -60,6 +61,7 @@ class AppsWorker:
         github: GithubClient | None = None,
         route_cleanup: Callable[[Session, str, str], None] | None = None,
         route_refresh: Callable[[Session, str, str], None] | None = None,
+        hardening_engine: Any = None,
     ) -> None:
         self.session_factory = session_factory
         self.cipher = cipher
@@ -68,6 +70,7 @@ class AppsWorker:
         self.github = github or UrllibGithubClient()
         self.route_cleanup = route_cleanup
         self.route_refresh = route_refresh
+        self.hardening_engine = hardening_engine or CommandHardeningEngine()
 
     def run(self, operation_id: str) -> None:
         with self.session_factory() as db:
@@ -86,7 +89,7 @@ class AppsWorker:
         try:
             if kind == "github_sync":
                 result = self._sync_operation(operation_id, subject_type, subject_id)
-            elif kind in {"inspect", "deploy"}:
+            elif kind in {"inspect", "deploy", "harden"}:
                 if application_id is None:
                     raise RuntimeError("Application not found")
                 result = self._source_operation(operation_id, application_id, kind)
@@ -96,7 +99,11 @@ class AppsWorker:
                 result = self._lifecycle_operation(operation_id, application_id, kind)
             self._finish(operation_id, result)
         except Exception as exc:
-            safe_error = str(exc) if isinstance(exc, AppDeployError) else "internal error"
+            safe_error = (
+                str(exc)
+                if isinstance(exc, (AppDeployError, HardeningRejected))
+                else "internal error"
+            )
             logger.exception(
                 "apps_operation_failed operation_id=%s application_id=%s "
                 "operation_kind=%s error_type=%s error=%s",
@@ -169,6 +176,9 @@ class AppsWorker:
             db.commit()
             token = token_value.token
             operation = db.get(Operation, operation_id)
+            hardening_report = (
+                operation.report if operation is not None and kind == "harden" else None
+            )
             reported_names = (
                 (operation.report or {}).get("tenant_environment_names")
                 if operation is not None else []
@@ -190,6 +200,20 @@ class AppsWorker:
             clone_env = dict(os.environ, GH_TOKEN=token, GH_PROMPT_DISABLED="1")
             clone_repo(source[0], source[1], checkout, self.runner_factory("local", clone_env))
             token = ""
+            clone_env["GH_TOKEN"] = ""
+            del clone_env
+            if kind == "harden":
+                try:
+                    raw_policy = (
+                        hardening_report.get("policy")
+                        if isinstance(hardening_report, dict)
+                        else None
+                    )
+                    policy = HardeningPolicy.from_dict(raw_policy)
+                except (TypeError, ValueError):
+                    raise HardeningRejected("Hardening policy is missing or invalid") from None
+                candidate = self.hardening_engine.prepare(checkout, source[2], policy)
+                return candidate.as_report()
             audit = audit_project(checkout, source[2], non_root=True)
             report = {
                 "compose": audit.compose.relative_to(audit.root).as_posix(),
@@ -563,7 +587,7 @@ class AppsWorker:
             operation.error_code = "apps_operation_failed"
             operation.public_error = (
                 str(exc)
-                if isinstance(exc, AppDeployError)
+                if isinstance(exc, (AppDeployError, HardeningRejected))
                 else "Application operation failed"
             )
             operation.finished_at = datetime.now(UTC)

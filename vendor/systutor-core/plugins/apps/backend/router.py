@@ -33,6 +33,7 @@ from .schemas import (
     ApplicationView,
     DeleteRequest,
     DeployRequest,
+    HardeningRequest,
     ManifestStartRequest,
     OperationDetail,
     OperationView,
@@ -96,6 +97,8 @@ def _queue(
         report: dict[str, object] = {}
         if kind == "delete" and isinstance(payload, dict):
             report["purge_data"] = bool(payload.get("purge_data"))
+        if kind == "harden" and isinstance(payload, dict):
+            report["policy"] = payload
         if service:
             report["service"] = service
         if report:
@@ -310,6 +313,18 @@ def inspect_application(
 ) -> OperationView:
     app = catalog.get_application(db, context.current_tenant_id, application_id)
     return _queue(request, db, app, user, "inspect", idempotency_key, {})
+
+
+@router.post("/applications/{application_id}/hardening", response_model=OperationView, status_code=202)
+def harden_application(
+    application_id: str, body: HardeningRequest, request: Request,
+    idempotency_key: str | None = Header(None), db: Session = Depends(get_db_session),
+    context: TenantContext = Depends(get_current_tenant_context),
+    user: User = Depends(require_permission("apps.deployments.create")),
+) -> OperationView:
+    app = catalog.get_application(db, context.current_tenant_id, application_id)
+    policy = body.to_policy().as_dict()
+    return _queue(request, db, app, user, "harden", idempotency_key, policy)
 
 
 @router.post("/applications/{application_id}/deployments", response_model=OperationView, status_code=202)

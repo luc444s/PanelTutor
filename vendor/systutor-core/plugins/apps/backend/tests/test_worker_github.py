@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from sqlalchemy import create_engine, select
@@ -15,6 +16,7 @@ import systutor.kernel.models  # noqa: F401
 from plugins.apps.backend import worker as worker_module
 from plugins.apps.backend.crypto import TokenCipher
 from plugins.apps.backend.github import InstallationToken
+from plugins.apps.backend.hardening import HardeningPolicy
 from plugins.apps.backend.models import (
     Application,
     Deployment,
@@ -256,6 +258,62 @@ def test_source_operation_requests_a_single_repository_token(
         "installation_id": 77, "repository_id": 101,
         "permissions": {"contents": "read"},
     }]
+    _assert_token_absent(db)
+
+
+def test_harden_uses_durable_policy_after_clone_without_auditing(
+    tmp_path: Path, monkeypatch
+) -> None:
+    db = database(tmp_path)
+    cipher = TokenCipher(b"k" * 32)
+    seed(db, cipher)
+    db.add(Operation(
+        id="op-hard", application_id="a1", tenant_id="t1", actor_user_id="u1",
+        kind="harden", status="running", idempotency_key="hard", request_hash="h",
+        report={
+            "policy": {
+                "service_users": {"web": {"uid": 10001, "gid": 10002}},
+                "writable_paths": [
+                    {"service": "web", "path": "/app/data", "mode": "0750"}
+                ],
+            }
+        },
+    ))
+    db.commit()
+    captured = {}
+
+    def fake_clone(_repo, _branch, destination, runner):
+        destination.mkdir(parents=True)
+        destination.joinpath("compose.yml").write_text("services: {web: {}}")
+        captured["clone_token"] = runner.environ["GH_TOKEN"]
+
+    class Engine:
+        def prepare(self, checkout, compose_file, hardening_policy):
+            captured["checkout"] = checkout
+            captured["compose_file"] = compose_file
+            captured["policy"] = hardening_policy
+            return SimpleNamespace(as_report=lambda: {
+                "status": "validated", "services": ["web"],
+            })
+
+    monkeypatch.setattr(worker_module, "clone_repo", fake_clone)
+    monkeypatch.setattr(
+        worker_module,
+        "audit_project",
+        lambda *_args, **_kwargs: pytest.fail("harden must not use the inspect auditor"),
+    )
+    worker = AppsWorker(
+        lambda: Session(db.get_bind()), cipher, github=FakeGithub(), hardening_engine=Engine(),
+        runner_factory=lambda transport, environ=None: SimpleNamespace(
+            transport=transport, environ=environ or {}
+        ),
+    )
+    result = worker._source_operation("op-hard", "a1", "harden")
+    assert result == {"status": "validated", "services": ["web"]}
+    assert captured["clone_token"] == TOKEN
+    assert captured["compose_file"] is None
+    assert isinstance(captured["policy"], HardeningPolicy)
+    assert captured["policy"].service_users[0].uid == 10001
     _assert_token_absent(db)
 
 

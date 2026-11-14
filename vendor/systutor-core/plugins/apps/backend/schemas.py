@@ -7,6 +7,12 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
+from .hardening import (
+    HardeningPolicy,
+    RuntimeUserPolicy,
+    WritablePathPolicy,
+)
+
 
 class ManifestStartRequest(BaseModel):
     owner_type: Literal["personal", "organization"] = "personal"
@@ -70,6 +76,50 @@ class SourceUpdate(BaseModel):
 
 class DeployRequest(BaseModel):
     environment: list[tuple[str, str]] = Field(default_factory=list, max_length=100)
+
+
+class HardeningRuntimeUser(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    uid: int = Field(gt=0, le=2**31 - 1, strict=True)
+    gid: int = Field(gt=0, le=2**31 - 1, strict=True)
+
+
+class HardeningWritablePath(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    service: str = Field(min_length=1, max_length=128)
+    path: str = Field(min_length=2, max_length=1024)
+    mode: str = Field(default="0750", min_length=4, max_length=4)
+
+    @model_validator(mode="after")
+    def valid_contract(self):
+        WritablePathPolicy(self.service, self.path, self.mode)
+        return self
+
+
+class HardeningRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    service_users: dict[str, HardeningRuntimeUser] = Field(min_length=1, max_length=64)
+    writable_paths: list[HardeningWritablePath] = Field(default_factory=list, max_length=256)
+
+    @model_validator(mode="after")
+    def valid_policy(self):
+        self.to_policy()
+        return self
+
+    def to_policy(self) -> HardeningPolicy:
+        return HardeningPolicy(
+            tuple(
+                RuntimeUserPolicy(service, user.uid, user.gid)
+                for service, user in self.service_users.items()
+            ),
+            tuple(
+                WritablePathPolicy(item.service, item.path, item.mode)
+                for item in self.writable_paths
+            ),
+        )
 
 
 class ActionRequest(BaseModel):
