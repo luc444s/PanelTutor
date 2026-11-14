@@ -218,7 +218,8 @@ Cobertura relevante:
 
 ## FOLLOW-UP (fuera de esta A.SPEC)
 
-El deploy todavía no consume `HardenedCandidate`; la siguiente fase debe
-introducir `HardenedRelease` persistido/firmado, canary, probes confiables y
-promoción atómica antes de que `deploy` acepte únicamente artefactos
-endurecidos.
+El deploy todavía no consume `HardenedCandidate`. El siguiente hito está
+definido en `aspecs/0083-apps-trusted-deployment-pipeline.md`:
+`TrustedRelease` firmada, guard de deploy, probes independientes y rollback.
+Hasta que 0083 se implemente, ningún resultado de esta A.SPEC debe presentarse
+como “deploy endurecido”.
