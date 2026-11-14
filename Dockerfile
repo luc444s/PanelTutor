@@ -62,7 +62,7 @@ RUN chmod 755 /app/scripts/site_backup.py /app/scripts/site_backup_link.py \
 
 COPY scripts/dangerous_build /app/scripts/dangerous_build
 COPY scripts/dangerous_build_normalize.py /app/scripts/dangerous_build_normalize.py
-RUN printf '#!/bin/sh\nPYTHONPATH=/app/scripts exec python3 /app/scripts/dangerous_build_normalize.py "$@"\n' > /usr/local/bin/dangerous-build-normalize && chmod 755 /usr/local/bin/dangerous-build-normalize
+RUN printf '#!/bin/sh\nPYTHONPATH=/app/scripts:/app/plugins:/app/vendor/systutor-core:/app exec python3 /app/scripts/dangerous_build_normalize.py "$@"\n' > /usr/local/bin/dangerous-build-normalize && chmod 755 /usr/local/bin/dangerous-build-normalize
 
 COPY --from=frontend-build /app/apps/web/dist/ ./static/
 
