@@ -39,6 +39,10 @@ dangerous-build-normalize harden <checkout> \
    herramientas externas no hay éxito.
 6. `--apply` publica únicamente los archivos cambiados, con backup versionado,
    manifest de hashes y rollback automático ante fallo parcial.
+7. Servicios `image:` son ciudadanos de primera clase: el motor hace pull,
+   resuelve el tag a digest, escanea el digest con Trivy y usa ese digest en el
+   smoke aislado. Hadolint se omite limpiamente cuando no existe Dockerfile.
+   `--require-build` permite al administrador prohibir imágenes externas.
 
 ## PLATFORM CONTRACT — ISOLATION FIRST
 
@@ -148,6 +152,12 @@ invariants:
   - id: H9
     statement: deployable exige arranque temporal exitoso bajo el aislamiento final.
     proof: Compose up --wait con override efímero, seguido siempre por down --volumes.
+  - id: H10
+    statement: una imagen externa nunca se ejecuta desde un tag mutable no resuelto.
+    proof: pull + inspect RepoDigests + Trivy del digest + override runtime por digest.
+  - id: H11
+    statement: running sin healthcheck no demuestra que una aplicación sea desplegable.
+    proof: imagen externa limpia pero sin healthcheck bloquea antes del smoke y de apply.
 ```
 
 ## STRUCTURE
@@ -225,3 +235,8 @@ prohibited:
 - GoCortex Broken Bank `463f71e`: candidate blocked antes de BuildKit con 11
   hallazgos internos bloqueantes, 232 Trivy y 66 Hadolint; `--apply` no modificó
   ningún byte del checkout y no dejó recursos efímeros.
+- `odoo:18.0`: tag resuelto a
+  `odoo@sha256:d0b20aa4ec8a4d97ca096ada36275d77963d571c1cb1cceca69faf6098326c83`;
+  cero HIGH/CRITICAL en Trivy image y usuario upstream `100:101`, pero sin
+  healthcheck de imagen/Compose. El motor bloqueó antes del smoke y de apply,
+  conservó la fuente y no dejó recursos efímeros.

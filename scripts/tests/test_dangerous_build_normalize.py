@@ -263,7 +263,14 @@ def test_gate_combines_tools_and_buildkit_on_clean_project(tmp_path: Path) -> No
     calls = tmp_path / "calls"
     fake_tool(tools, "trivy", f"echo trivy:$@ >> {calls}; echo '{{\"Results\":[]}}'")
     fake_tool(tools, "hadolint", f"echo hadolint:$@ >> {calls}; echo '[]'")
-    fake_tool(tools, "docker", f"echo docker:$DOCKER_BUILDKIT:$@ >> {calls}; exit 0")
+    fake_tool(
+        tools,
+        "docker",
+        f"echo docker:$DOCKER_BUILDKIT:$@ >> {calls}; "
+        "if [ \"$1 $2\" = \"image inspect\" ]; then "
+        "echo '{\"RepoDigests\":[],\"Config\":{"
+        "\"Healthcheck\":{\"Test\":[\"CMD\",\"true\"]}}}'; fi; exit 0",
+    )
     env = {**os.environ, "PATH": f"{tools}:{os.environ.get('PATH', '')}"}
 
     result = run(

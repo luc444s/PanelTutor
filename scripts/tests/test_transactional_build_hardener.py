@@ -68,7 +68,11 @@ def tools(tmp_path: Path, *, trivy_body: str | None = None) -> tuple[dict[str, s
     fake_tool(
         binaries,
         "docker",
-        f"echo docker:$DOCKER_BUILDKIT:$@ >> {calls}; exit 0",
+        f"echo docker:$DOCKER_BUILDKIT:$@ >> {calls}; "
+        "if [ \"$1 $2\" = \"image inspect\" ]; then "
+        "echo '{\"RepoDigests\":[\"fixture@sha256:abc123\"],"
+        "\"Config\":{\"User\":\"10001:10001\","
+        "\"Healthcheck\":{\"Test\":[\"CMD\",\"true\"]}}}'; fi; exit 0",
     )
     return {**os.environ, "PATH": f"{binaries}:{os.environ.get('PATH', '')}"}, calls
 
@@ -217,6 +221,109 @@ def test_vulnerable_built_image_blocks_publication_and_is_removed(tmp_path: Path
     recorded = calls.read_text(encoding="utf-8")
     assert "docker:1:build" in recorded
     assert "docker:1:image rm --force" in recorded
+
+
+def test_external_image_is_pulled_pinned_scanned_and_smoke_tested(tmp_path: Path) -> None:
+    root = tmp_path / "checkout"
+    root.mkdir()
+    (root / "compose.yml").write_text(
+        """services:
+  app:
+    image: example/app:18.0
+    ports: ["8069:8069"]
+    healthcheck:
+      test: ["CMD", "true"]
+""",
+        encoding="utf-8",
+    )
+    env, calls = tools(tmp_path)
+    docker = tmp_path / "bin" / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        f"echo docker:$DOCKER_BUILDKIT:$@ >> {calls}\n"
+        "if [ \"$1 $2\" = \"image inspect\" ]; then "
+        "echo '{\"RepoDigests\":[\"example/app@sha256:abc123\"],"
+        "\"Config\":{\"Healthcheck\":null}}'; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "harden",
+            str(root),
+            "--compose-file",
+            "compose.yml",
+            "--service-user",
+            "app=100:101",
+            "--apply",
+            "--format",
+            "json",
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    service = payload["gate"]["buildkit"]["services"][0]
+    assert service["source"] == "external"
+    assert service["resolved"] == "example/app@sha256:abc123"
+    assert payload["gate"]["hadolint"]["dockerfiles"] == []
+    assert payload["gate"]["buildkit"]["runtime"]["passed"] is True
+    recorded = calls.read_text(encoding="utf-8")
+    assert "pull example/app:18.0" in recorded
+    assert "build --file" not in recorded
+
+
+def test_external_image_without_any_healthcheck_is_not_deployable(tmp_path: Path) -> None:
+    root = tmp_path / "checkout"
+    root.mkdir()
+    compose = root / "compose.yml"
+    compose.write_text("services:\n  app:\n    image: example/app:18.0\n", encoding="utf-8")
+    before = compose.read_bytes()
+    env, _calls = tools(tmp_path)
+    docker = tmp_path / "bin" / "docker"
+    docker.write_text(
+        "#!/bin/sh\n"
+        "if [ \"$1 $2\" = \"image inspect\" ]; then "
+        "echo '{\"RepoDigests\":[\"example/app@sha256:abc123\"],"
+        "\"Config\":{\"Healthcheck\":null}}'; fi\n"
+        "exit 0\n",
+        encoding="utf-8",
+    )
+    docker.chmod(0o755)
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(SCRIPT),
+            "harden",
+            str(root),
+            "--compose-file",
+            "compose.yml",
+            "--service-user",
+            "app=100:101",
+            "--apply",
+            "--format",
+            "json",
+        ],
+        cwd=ROOT,
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 2, result.stderr
+    payload = json.loads(result.stdout)
+    service = payload["gate"]["buildkit"]["services"][0]
+    assert service["healthcheck"] is False
+    assert payload["gate"]["buildkit"]["runtime"]["attempted"] is False
+    assert payload["applied"] is False
+    assert compose.read_bytes() == before
 
 
 def test_publication_failure_restores_previously_replaced_files(

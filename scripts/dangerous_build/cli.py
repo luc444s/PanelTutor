@@ -668,7 +668,14 @@ def _hadolint_gate(root: Path, args: argparse.Namespace) -> dict[str, Any]:
         return _tool_error("required executable is unavailable")
     dockerfiles = _discover_dockerfiles(root)
     if not dockerfiles:
-        return _tool_error("no Dockerfiles were found")
+        return {
+            "available": True,
+            "blocking": 0,
+            "findings": [],
+            "error": None,
+            "dockerfiles": [],
+            "skipped": "Compose uses external images only",
+        }
     command = [
         executable,
         "--format",
@@ -716,6 +723,44 @@ def _build_context(result: AuditResult, service: str) -> Path:
     build = config["build"]
     context = build if isinstance(build, str) else build.get("context", ".")
     return (result.compose.parent / str(context)).resolve()
+
+
+def _inspect_image(
+    executable: str,
+    reference: str,
+    root: Path,
+    args: argparse.Namespace,
+    environment: dict[str, str],
+) -> dict[str, Any] | None:
+    try:
+        completed = subprocess.run(
+            [
+                executable,
+                "image",
+                "inspect",
+                reference,
+                "--format",
+                "{{json .}}",
+            ],
+            cwd=root,
+            capture_output=True,
+            text=True,
+            timeout=args.tool_timeout,
+            check=False,
+            env=environment,
+        )
+        payload = json.loads(completed.stdout) if completed.returncode == 0 else None
+    except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def _has_healthcheck(config: dict[str, Any], image: dict[str, Any]) -> bool:
+    compose_health = config.get("healthcheck")
+    if isinstance(compose_health, dict) and compose_health.get("disable") is not True:
+        return bool(compose_health.get("test"))
+    image_config = image.get("Config") or {}
+    return bool(image_config.get("Healthcheck")) if isinstance(image_config, dict) else False
 
 
 def _runtime_isolation_errors(result: AuditResult) -> list[str]:
@@ -834,13 +879,6 @@ def _buildkit_gate(
             "services": [],
             "error": "skipped because static checks are blocking",
         }
-    if not result.dockerfiles:
-        return {
-            "attempted": False,
-            "passed": False,
-            "services": [],
-            "error": "Compose has no checkout-contained build to validate",
-        }
     executable = shutil.which("docker")
     if not executable:
         return {
@@ -851,6 +889,7 @@ def _buildkit_gate(
         }
     services: list[dict[str, Any]] = []
     tags: dict[str, str] = {}
+    ephemeral_tags: dict[str, str] = {}
     passed = True
     environment = {**os.environ, "DOCKER_BUILDKIT": "1"}
     for index, (service, dockerfile) in enumerate(sorted(result.dockerfiles.items())):
@@ -864,6 +903,7 @@ def _buildkit_gate(
         safe_service = re.sub(r"[^a-z0-9_.-]+", "-", service.lower()).strip("-.")
         tag = f"spanel-gate-{os.getpid()}-{index}-{safe_service or 'service'}"
         tags[service] = tag
+        ephemeral_tags[service] = tag
         command = [
             executable,
             "build",
@@ -884,24 +924,101 @@ def _buildkit_gate(
                 env=environment,
             )
             service_passed = completed.returncode == 0
+            metadata = (
+                _inspect_image(executable, tag, context, args, environment)
+                if service_passed
+                else None
+            )
+            healthcheck = bool(
+                metadata
+                and _has_healthcheck(result.data["services"][service], metadata)
+            )
             image_scan = (
                 _trivy_image_gate(tag, context, args)
-                if service_passed
+                if service_passed and metadata
                 else _tool_error("image was not produced")
             )
-            service_passed = service_passed and image_scan["blocking"] == 0
+            service_passed = (
+                service_passed
+                and metadata is not None
+                and healthcheck
+                and image_scan["blocking"] == 0
+            )
         except (OSError, subprocess.TimeoutExpired):
             service_passed = False
+            healthcheck = False
             image_scan = _tool_error("image build could not execute")
         services.append(
-            {"service": service, "passed": service_passed, "image_scan": image_scan}
+            {
+                "service": service,
+                "source": "build",
+                "passed": service_passed,
+                "healthcheck": healthcheck,
+                "image_scan": image_scan,
+            }
+        )
+        passed = passed and service_passed
+    image_services = sorted(set(result.data["services"]).difference(result.dockerfiles))
+    for service in image_services:
+        config = result.data["services"][service]
+        reference = str(config.get("image", "")).strip() if isinstance(config, dict) else ""
+        if not reference:
+            services.append(
+                {
+                    "service": service,
+                    "source": "external",
+                    "passed": False,
+                    "image_scan": _tool_error("service has no image reference"),
+                }
+            )
+            passed = False
+            continue
+        try:
+            pulled = subprocess.run(
+                [executable, "pull", reference],
+                cwd=result.root,
+                capture_output=True,
+                text=True,
+                timeout=args.build_timeout,
+                check=False,
+                env=environment,
+            )
+            metadata = _inspect_image(executable, reference, result.root, args, environment)
+            digests = (metadata.get("RepoDigests") or []) if metadata else []
+            resolved = str(digests[0]) if isinstance(digests, list) and digests else reference
+            healthcheck = bool(
+                metadata
+                and _has_healthcheck(result.data["services"][service], metadata)
+            )
+            image_scan = (
+                _trivy_image_gate(resolved, result.root, args)
+                if pulled.returncode == 0 and metadata is not None
+                else _tool_error("external image pull or inspection failed")
+            )
+            service_passed = healthcheck and image_scan["blocking"] == 0
+        except (OSError, subprocess.TimeoutExpired, json.JSONDecodeError):
+            resolved = reference
+            healthcheck = False
+            image_scan = _tool_error("external image validation could not execute")
+            service_passed = False
+        tags[service] = resolved
+        services.append(
+            {
+                "service": service,
+                "source": "external",
+                "reference": reference,
+                "resolved": resolved,
+                "healthcheck": healthcheck,
+                "passed": service_passed,
+                "image_scan": image_scan,
+            }
         )
         passed = passed and service_passed
     runtime = {"attempted": False, "passed": None, "errors": []}
     if passed and getattr(args, "runtime_smoke", False):
         runtime = _runtime_smoke(result, args, executable, environment, tags)
         passed = runtime["passed"] is True
-    for service, tag in tags.items():
+    for service, tag in ephemeral_tags.items():
         try:
             subprocess.run(
                 [executable, "image", "rm", "--force", tag],
@@ -1085,7 +1202,11 @@ def build_parser() -> argparse.ArgumentParser:
     harden.add_argument("source_dir", nargs="?", default=".")
     harden.add_argument("--compose-file")
     harden.add_argument("--non-root", action="store_true", default=True)
-    harden.add_argument("--require-build", action="store_true", default=True)
+    harden.add_argument(
+        "--require-build",
+        action="store_true",
+        help="reject image-only services instead of validating their pulled images",
+    )
     harden.add_argument("--apply", action="store_true")
     harden.add_argument("--out-dir")
     harden.add_argument("--env-file", type=Path)
