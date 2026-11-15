@@ -123,7 +123,7 @@ def test_compose_hardening_creates_isolation_envelope() -> None:
     assert service["cap_drop"] == ["ALL"]
     assert service["security_opt"] == ["no-new-privileges:true"]
     assert service["read_only"] is True
-    assert service["environment"]["API_TOKEN"] == "${API_TOKEN}"
+    assert service["environment"]["API_TOKEN"] == "literal"
     assert fixed["networks"]["default"]["internal"] is True
     assert service["volumes"][0].endswith(":/app/data")
     assert "./data:/app/data" not in service["volumes"]

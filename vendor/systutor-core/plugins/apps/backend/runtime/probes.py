@@ -223,11 +223,14 @@ def run_functional_probe(
 ) -> dict[str, Any]:
     if str(runner.transport) == "ssh":
         raise ProbeFailed("functional probes require a local Docker runner")
-    result = runner.run(
-        _probe_argv(image, command, network, limits),
-        timeout=timeout,
-        check=False,
-    )
+    try:
+        result = runner.run(
+            _probe_argv(image, command, network, limits),
+            timeout=timeout,
+            check=False,
+        )
+    except AppDeployError as exc:
+        raise ProbeFailed("the independent functional probe did not complete") from exc
     output = (result.stdout + result.stderr).encode()
     evidence = {
         "returncode": result.returncode,
@@ -307,7 +310,12 @@ def run_probes(
     checks = _int_env(environ, "SPANEL_APPS_PROBE_CHECKS", 3)
     window = _int_env(environ, "SPANEL_APPS_PROBE_WINDOW_SECONDS", 30)
     timeout = _int_env(environ, "SPANEL_APPS_PROBE_TIMEOUT_SECONDS", 30)
-    if not 1 <= checks <= 60 or not 0 <= window <= 3600:
+    startup = _int_env(environ, "SPANEL_APPS_PROBE_STARTUP_SECONDS", 180)
+    if (
+        not 1 <= checks <= 60
+        or not 0 <= window <= 3600
+        or not 0 <= startup <= 3600
+    ):
         raise ProbeFailed("the probe window is invalid")
     assert_compose_healthchecks(runner, release, compose_rel, project, services)
     isolation = check_isolation(runner, containers)
@@ -321,15 +329,35 @@ def run_probes(
     restart_counts: dict[str, int] = {}
     interval = window / checks if checks else 0
     for index in range(checks):
-        functional.append(
-            run_functional_probe(
-                runner,
-                network=network,
-                image=image,
-                command=command,
-                timeout=timeout,
+        if index == 0:
+            startup_deadline = time.monotonic() + startup
+            while True:
+                try:
+                    functional.append(
+                        run_functional_probe(
+                            runner,
+                            network=network,
+                            image=image,
+                            command=command,
+                            timeout=timeout,
+                        )
+                    )
+                    break
+                except ProbeFailed:
+                    remaining = startup_deadline - time.monotonic()
+                    if remaining <= 0:
+                        raise
+                    sleep(min(2, remaining))
+        else:
+            functional.append(
+                run_functional_probe(
+                    runner,
+                    network=network,
+                    image=image,
+                    command=command,
+                    timeout=timeout,
+                )
             )
-        )
         restart_counts = _inspect_stability(runner, containers)
         if index + 1 < checks and interval:
             sleep(interval)

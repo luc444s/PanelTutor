@@ -24,6 +24,7 @@ POLICY = {
     "writable_paths": [
         {"service": "db", "path": "/run/postgresql", "mode": "0775"},
         {"service": "db", "path": "/var/run/postgresql", "mode": "0775"},
+        {"service": "web", "path": "/run/odoo", "mode": "0775"},
     ],
 }
 

@@ -10,10 +10,6 @@ import yaml
 
 from .dockerfile import WritablePath
 
-SECRET_NAME = re.compile(
-    r"(?i)(secret|password|passwd|token|api[_-]?key|private[_-]?key|credential)"
-)
-
 
 class ComposeHardeningError(ValueError):
     """Compose cannot be hardened without an explicit operator decision."""
@@ -52,29 +48,6 @@ def _container_port(value: Any) -> str | None:
     text = str(value).split("/", 1)[0]
     target = text.rsplit(":", 1)[-1]
     return target if target.isdigit() else None
-
-
-def _environment(value: Any) -> Any:
-    if isinstance(value, dict):
-        return {
-            name: "${" + str(name) + "}"
-            if SECRET_NAME.search(str(name))
-            and isinstance(content, str)
-            and content
-            and not content.startswith("${")
-            else content
-            for name, content in value.items()
-        }
-    if isinstance(value, list):
-        result: list[Any] = []
-        for raw in value:
-            name, separator, content = str(raw).partition("=")
-            if separator and SECRET_NAME.search(name) and content and not content.startswith("${"):
-                result.append(f"{name}=${{{name}}}")
-            else:
-                result.append(raw)
-        return result
-    return value
 
 
 def _managed_volume(service: str, path: str) -> str:
@@ -143,8 +116,6 @@ def harden_compose(text: str, policies: dict[str, ServicePolicy]) -> str:
             for key in ("network", "entitlements", "privileged", "ssh", "secrets"):
                 build.pop(key, None)
 
-        if "environment" in config:
-            config["environment"] = _environment(config["environment"])
         if "env_file" in config:
             config.pop("env_file", None)
             config["x-spanel-external-env"] = True

@@ -120,7 +120,7 @@ def test_external_and_fixed_resources_are_rejected(tmp_path: Path) -> None:
     assert {"compose_external_resource", "compose_fixed_resource_name"} <= codes(result)
 
 
-def test_versioned_secret_sources_are_rejected_without_echoing_values(
+def test_inline_environment_values_are_tenant_owned_but_secret_files_are_rejected(
     tmp_path: Path,
 ) -> None:
     canary = "unique-canary-value"
@@ -140,10 +140,10 @@ secrets:
     result = app.audit_project(project(tmp_path, compose))
     assert {
         "compose_repo_env_file",
-        "compose_inline_secret",
         "compose_inline_build_secret",
         "compose_repo_secret_file",
     } <= codes(result)
+    assert "compose_inline_secret" not in codes(result)
     assert canary not in app.render_report(result)
 
 

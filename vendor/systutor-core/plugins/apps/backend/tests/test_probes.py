@@ -10,7 +10,7 @@ from plugins.apps.backend.runtime.probes import (
     run_functional_probe,
     run_probes,
 )
-from plugins.apps.backend.runtime.types import Completed
+from plugins.apps.backend.runtime.types import AppDeployError, Completed
 
 IMAGE = "probe@sha256:" + "d" * 64
 CANARY = "do-not-store-this-output"
@@ -154,6 +154,63 @@ def test_run_probes_accepts_running_service_without_healthcheck(tmp_path) -> Non
         sleep=lambda _seconds: None,
     )
     assert evidence["stability"]["restart_counts"] == {"web": 0}
+
+
+def test_run_probes_retries_functional_probe_during_startup(tmp_path) -> None:
+    class StartupRunner(FakeRunner):
+        attempts = 0
+
+        def run(self, argv, **kwargs):
+            if argv[:2] == ["docker", "run"]:
+                self.attempts += 1
+                if self.attempts == 1:
+                    self.calls.append(list(argv))
+                    return Completed(1, "not ready")
+            return super().run(argv, **kwargs)
+
+    payload = container()
+    payload["State"].pop("Health")
+    runner = StartupRunner(payload, healthcheck=False)
+    evidence = run_probes(
+        runner,
+        release=tmp_path,
+        compose_rel="compose.yml",
+        project="proj",
+        services=["web"],
+        containers={"web": "cid1"},
+        environ=env(SPANEL_APPS_PROBE_STARTUP_SECONDS="5"),
+        sleep=lambda _seconds: None,
+    )
+    assert runner.attempts == 2
+    assert len(evidence["functional"]["checks"]) == 1
+
+
+def test_run_probes_retries_functional_probe_timeout_during_startup(tmp_path) -> None:
+    class TimeoutRunner(FakeRunner):
+        attempts = 0
+
+        def run(self, argv, **kwargs):
+            if argv[:2] == ["docker", "run"]:
+                self.attempts += 1
+                if self.attempts == 1:
+                    raise AppDeployError("command failed to execute: docker")
+            return super().run(argv, **kwargs)
+
+    payload = container()
+    payload["State"].pop("Health")
+    runner = TimeoutRunner(payload, healthcheck=False)
+    evidence = run_probes(
+        runner,
+        release=tmp_path,
+        compose_rel="compose.yml",
+        project="proj",
+        services=["web"],
+        containers={"web": "cid1"},
+        environ=env(SPANEL_APPS_PROBE_STARTUP_SECONDS="5"),
+        sleep=lambda _seconds: None,
+    )
+    assert runner.attempts == 2
+    assert len(evidence["functional"]["checks"]) == 1
 
 
 def test_run_probes_rejects_declared_unhealthy_service(tmp_path) -> None:

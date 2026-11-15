@@ -140,14 +140,7 @@ def _audit_environment(
     line: int,
     findings: list[Finding],
 ) -> None:
-    pairs: list[tuple[str, Any]] = []
-    if isinstance(value, dict):
-        pairs = [(str(key), item) for key, item in value.items()]
-    elif isinstance(value, list):
-        for item in value:
-            key, separator, content = str(item).partition("=")
-            pairs.append((key, content if separator else None))
-    elif value is not None:
+    if not isinstance(value, (dict, list)) and value is not None:
         _finding(
             findings,
             "error",
@@ -158,20 +151,9 @@ def _audit_environment(
             "Service environment must be a mapping or list.",
             "Use standard Compose environment syntax.",
         )
-        return
-    for key, content in pairs:
-        text = "" if content is None else str(content).strip()
-        if SECRET_NAME_RE.search(key) and text and not text.startswith("${"):
-            _finding(
-                findings,
-                "error",
-                "compose_inline_secret",
-                service,
-                compose_rel,
-                line,
-                "A secret-like environment key has a literal versioned value.",
-                "Reference a variable supplied by the external private env file.",
-            )
+    # Environment values are tenant-owned application content. Isolation-only
+    # admission validates their Compose shape but does not classify or rewrite
+    # values that merely look like credentials.
 
 
 def _dockerfile_instructions(path: Path) -> list[tuple[str, str, int]]:

@@ -164,6 +164,7 @@ imágenes base viejas
 lenguajes obsoletos (PHP 5, Python 2, etc.)
 lockfiles desactualizados o muertos
 estilo de Dockerfile
+valores literales de variables de entorno, incluso si parecen credenciales
 ```
 
 ### 4. Probes
@@ -173,6 +174,8 @@ Se mantienen los tres niveles:
 1. **Aislamiento**: non-root, `cap_drop`, `no-new-privileges`, read-only, sin
    privileged/devices/host namespaces, sin binds, sin puertos, red interna.
 2. **Funcional**: HTTP/TCP/command independiente, imagen fijada por digest.
+   El primer éxito admite una ventana acotada de arranque con reintentos; si la
+   aplicación nunca responde, el deploy hace rollback.
 3. **Estabilidad**: ventana con N chequeos, servicio `running`, healthcheck
    `healthy` cuando exista y `RestartCount == 0`.
 
