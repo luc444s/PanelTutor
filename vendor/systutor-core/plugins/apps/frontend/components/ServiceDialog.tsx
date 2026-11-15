@@ -6,24 +6,29 @@ import { Tabs } from "@systutor/shell/ui/tabs";
 
 import { useT } from "@/i18n/use-i18n";
 
-import type { AppAction, Operation, ServiceDetail } from "../types";
+import type {
+  AppAction, DeploymentDetail, Operation, OperationSummary, ServiceDetail,
+} from "../types";
+import { ServiceDeployments } from "./ServiceDeployments";
 import { ServiceDomains } from "./ServiceDomains";
 import { ServiceEnvironment } from "./ServiceEnvironment";
 import { ServiceLogs } from "./ServiceLogs";
 import { ServiceOperations } from "./ServiceOperations";
 import { ServiceOverview } from "./ServiceOverview";
 
-type Tab = "overview" | "variables" | "domains" | "logs" | "operations";
+type Tab = "overview" | "deployments" | "variables" | "domains" | "logs" | "operations";
 type ServiceAction = Exclude<AppAction, "down">;
 
 export function ServiceDialog({ applicationId, applicationName, service, operations,
-  canManage, canManageDomains, canReadDomains, canReveal, pending, updatedAt,
-  onClose, onAction }: {
+  deployments, canManage, canDeploy, canManageDomains, canReadDomains, canReveal,
+  pending, updatedAt, onClose, onAction, onAccepted }: {
   applicationId: string;
   applicationName: string;
   service: ServiceDetail;
   operations: Operation[];
+  deployments: DeploymentDetail[];
   canManage: boolean;
+  canDeploy: boolean;
   canManageDomains: boolean;
   canReadDomains: boolean;
   canReveal: boolean;
@@ -31,6 +36,7 @@ export function ServiceDialog({ applicationId, applicationName, service, operati
   updatedAt: number;
   onClose: () => void;
   onAction: (action: ServiceAction) => void;
+  onAccepted: (operation: OperationSummary) => void;
 }) {
   const t = useT();
   const [tab, setTab] = useState<Tab>("overview");
@@ -50,6 +56,13 @@ export function ServiceDialog({ applicationId, applicationName, service, operati
       label: t("Overview"),
       content: <ServiceOverview service={service} canManage={canManage}
         pending={pending} updatedAt={updatedAt} onAction={onAction} />,
+    },
+    {
+      value: "deployments" as const,
+      label: t("Deployments"),
+      content: <ServiceDeployments applicationId={applicationId} service={service}
+        deployments={deployments} canDeploy={canDeploy}
+        pending={pending} onAccepted={onAccepted} />,
     },
     {
       value: "variables" as const,

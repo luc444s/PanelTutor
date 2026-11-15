@@ -118,6 +118,27 @@ class HardeningRequest(BaseModel):
         )
 
 
+class DeployScopeRequest(BaseModel):
+    """Global by default; a service scope never implies dependencies."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: Literal["global", "service"] = "global"
+    service: str | None = Field(default=None, min_length=1, max_length=255)
+
+    @model_validator(mode="after")
+    def valid_scope(self):
+        if self.type == "global" and self.service is not None:
+            raise ValueError("global scope cannot select a service")
+        if self.type == "service" and not self.service:
+            raise ValueError("service scope requires a service")
+        if self.service is not None and any(
+            character in self.service for character in "`\r\n\t /:\\"
+        ):
+            raise ValueError("service is invalid")
+        return self
+
+
 class DeployRequest(BaseModel):
     """A deployment may only carry a hardening policy or a signed release id."""
 
@@ -128,6 +149,7 @@ class DeployRequest(BaseModel):
     hardened_operation_id: str | None = Field(
         default=None, min_length=1, max_length=128
     )
+    scope: DeployScopeRequest | None = None
 
     @field_validator("hardened_operation_id")
     @classmethod
@@ -149,6 +171,7 @@ class RollbackRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     to_deployment_id: str = Field(min_length=1, max_length=36)
+    scope: DeployScopeRequest | None = None
 
     @field_validator("to_deployment_id")
     @classmethod

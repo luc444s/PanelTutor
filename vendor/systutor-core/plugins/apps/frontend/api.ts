@@ -4,7 +4,8 @@ import type {
   AppAction, Application, ApplicationCreate, ApplicationDetail, DeployPayload,
   DeploymentDetail, GithubInstallation, GithubManifestStart,
   GithubProvider, GithubRepository, GithubStatus, HardeningPolicy, Operation,
-  OperationSummary, Release, ReleaseEvidence, ReleaseVerification,
+  DeploymentScope, OperationSummary, Release, ReleaseEvidence,
+  ReleaseVerification,
 } from "./types";
 
 const ROOT = "/api/v1/plugins/apps";
@@ -93,9 +94,13 @@ export const getReleaseEvidence = (id: string, release: string) =>
   apiRequest<ReleaseEvidence>(
     `${ROOT}/applications/${encodeURIComponent(id)}/releases/${encodeURIComponent(release)}/evidence`,
   );
-export const rollbackApplication = (id: string, deploymentId: string, key: string) =>
-  apiRequest<OperationSummary>(`${ROOT}/applications/${encodeURIComponent(id)}/rollback`,
-    operationOptions("POST", key, { to_deployment_id: deploymentId }));
+export const rollbackApplication = (
+  id: string, deploymentId: string, key: string, scope?: DeploymentScope,
+) => apiRequest<OperationSummary>(`${ROOT}/applications/${encodeURIComponent(id)}/rollback`,
+    operationOptions("POST", key, {
+      to_deployment_id: deploymentId,
+      ...(scope ? { scope } : {}),
+    }));
 export const runApplicationAction = (id: string, action: AppAction, key: string) =>
   apiRequest<OperationSummary>(`${ROOT}/applications/${encodeURIComponent(id)}/actions/${action}`,
     operationOptions("POST", key));

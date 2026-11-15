@@ -206,10 +206,12 @@ export function ApplicationDetail({ application, canCreate, canManage, canManage
     {selectedService ? <ServiceDialog key={`${application.id}:${selectedService.name}`}
       applicationId={application.id} applicationName={application.name}
       service={selectedService} operations={appOperations}
-      canManage={canManage} canReadDomains={canReadDomains}
+      deployments={detail.data?.deployments ?? []}
+      canManage={canManage} canDeploy={canDeploy} canReadDomains={canReadDomains}
       canManageDomains={canManageDomains} canReveal={canReveal}
-      pending={pending} updatedAt={detail.dataUpdatedAt}
+      pending={pending || busy} updatedAt={detail.dataUpdatedAt}
       onClose={() => setServiceName(null)}
+      onAccepted={onAccepted}
       onAction={(action) => void accept(() =>
         runServiceAction(application.id, selectedService.name, action, newIdempotencyKey()))} /> : null}
     <DeployDialog application={current} open={deployOpen} blocked={blocked} onClose={() => setDeployOpen(false)} onAccepted={(operation) => { setDeployOpen(false); onAccepted(operation); }} />

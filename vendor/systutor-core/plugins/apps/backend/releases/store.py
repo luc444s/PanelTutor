@@ -255,6 +255,11 @@ def list_releases(
             "created_at": item.created_at,
             "expires_at": item.expires_at,
             "expired": item.expired(),
+            "service_fingerprints": (
+                dict(item.service_fingerprints)
+                if item.service_fingerprints is not None else {}
+            ),
+            "shared_fingerprint": item.shared_fingerprint,
         }
         for item in releases[:MAX_LISTED_RELEASES]
     ]

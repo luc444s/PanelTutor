@@ -448,6 +448,9 @@ def runtime_snapshot(
             ),
             ("restart_count", "{{.RestartCount}}"),
             ("created_at", "{{.Created}}"),
+            ("started_at", "{{.State.StartedAt}}"),
+            ("container_id", "{{.Id}}"),
+            ("image_id", "{{.Image}}"),
             ("user", "{{.Config.User}}"),
         ):
             inspected = runner.run(

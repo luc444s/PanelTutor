@@ -291,6 +291,7 @@ class AppsWorker:
             return self.execution.trusted_deploy(
                 operation_id, application_id, release, source, tenant_names,
                 repository=source[0], branch=source[1],
+                scope=operation_report.get("scope"),
             )
 
     def reconcile_routes(self) -> int:

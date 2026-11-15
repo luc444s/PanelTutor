@@ -1,8 +1,8 @@
 """Trusted release orchestration shared by the Apps worker.
 
 The worker owns operation lifecycle and source preparation; this module owns the
-parts that consume a signed release: hardening, deploy and rollback.  Every
-entry point re-verifies the descriptor before touching the runtime.
+parts that consume a signed release: hardening, scoped deploy and rollback.
+Every entry point re-verifies the descriptor before touching the runtime.
 """
 
 from __future__ import annotations
@@ -19,16 +19,10 @@ from sqlalchemy.orm import Session
 
 from ..managed_environment import MANAGED_DATABASE_NAMES
 from ..models import Application, Deployment, Operation
-from ..runtime import (
-    AppDeployError,
-    DeployOptions,
-    LifecycleOptions,
-    Runner,
-    lifecycle,
-)
-from ..runtime.deployment import _publish_release_state
-from ..runtime.release_deploy import deploy_trusted
+from ..runtime import AppDeployError, Runner
 from .pipeline import create_release, release_result
+from .planner import DeployScope, plan_deployment
+from .scoped_execution import ScopedRestoreError, deploy_scoped
 from .store import find_release, release_store_root
 from .trusted import TrustedRelease
 from .verify import verify_release
@@ -46,6 +40,19 @@ def application_lock(application_id: str) -> threading.Lock:
 
 def pending_env_path(operation_id: str) -> Path:
     return release_store_root(os.environ) / "pending" / f"{operation_id}.env"
+
+
+def _declared_services(
+    release: TrustedRelease,
+    manifest: dict[str, Any] | None = None,
+) -> list[str]:
+    if release.service_fingerprints:
+        return sorted(release.service_fingerprints)
+    if isinstance(manifest, dict):
+        services = manifest.get("services")
+        if isinstance(services, list):
+            return sorted({str(item) for item in services if str(item)})
+    return []
 
 
 class ReleaseExecution:
@@ -104,10 +111,12 @@ class ReleaseExecution:
         return self.trusted_deploy(
             operation_id, application_id, release, source, tenant_names,
             repository=source[0], branch=source[1],
+            scope=operation_report.get("scope"),
         )
 
     def trusted_deploy(self, operation_id, application_id, release, source,
-                       tenant_names, *, repository, branch) -> dict:
+                       tenant_names, *, repository, branch,
+                       scope: object = None) -> dict:
         with self.session_factory() as db:
             current_app = db.get(Application, application_id)
             previous = (
@@ -117,6 +126,16 @@ class ReleaseExecution:
             previous_release = (
                 Path(previous.release) if previous and previous.release else None
             )
+            previous_manifest = (
+                dict(previous.manifest)
+                if previous is not None and isinstance(previous.manifest, dict)
+                else None
+            )
+        requested = DeployScope.from_value(scope)
+        services = _declared_services(release, previous_manifest)
+        plan = plan_deployment(
+            release, previous_manifest, requested, services=services or None
+        )
         env_file = pending_env_path(operation_id)
         runner = self.runner_factory(self.transport())
         lock = application_lock(application_id)
@@ -124,38 +143,29 @@ class ReleaseExecution:
             raise RuntimeError("Another build or deployment is active")
         try:
             try:
-                manifest = deploy_trusted(
-                    release,
-                    DeployOptions(
-                        repo=repository, branch=branch, project=source[3],
-                        non_root=True,
-                        env_file=env_file if env_file.exists() else None,
-                        release_id=operation_id,
-                        publish_state=False,
-                        tenant_environment_names=tenant_names,
-                    ),
+                manifest = deploy_scoped(
                     runner,
+                    release,
+                    plan=plan,
+                    scope=requested,
+                    project=source[3],
+                    previous_manifest=previous_manifest,
+                    previous_release=previous_release,
+                    env_file=env_file if env_file.exists() else None,
+                    staging_id=operation_id,
+                    tenant_environment_names=tenant_names,
+                    publish_state=True,
+                    require_expiry=True,
                 )
-            except Exception:
-                if previous_release is not None:
-                    try:
-                        lifecycle(
-                            LifecycleOptions(
-                                command="start", project=source[3],
-                                release=previous_release,
-                            ),
-                            runner,
-                        )
-                    except Exception:
-                        with self.session_factory() as db:
-                            failed_app = db.get(Application, application_id)
-                            if failed_app is not None:
-                                failed_app.status = "degraded"
-                                db.commit()
+            except ScopedRestoreError:
+                with self.session_factory() as db:
+                    failed_app = db.get(Application, application_id)
+                    if failed_app is not None:
+                        failed_app.status = "degraded"
+                        db.commit()
                 raise
             if manifest is None:
                 raise RuntimeError("Deployment produced no manifest")
-            _publish_release_state(runner, Path(str(manifest["release"])), manifest)
             with self.session_factory() as db:
                 deployment = Deployment(
                     application_id=application_id,
@@ -186,6 +196,7 @@ class ReleaseExecution:
         result = {
             "deployment_id": deployment_id,
             "status": "running",
+            "scope": plan.to_dict(),
         }
         result.update(release_result(release))
         return result
@@ -196,7 +207,8 @@ class ReleaseExecution:
             operation = db.get(Operation, operation_id)
             if app is None or operation is None:
                 raise RuntimeError("Application not found")
-            target_id = (operation.report or {}).get("to_deployment_id")
+            report = dict(operation.report or {})
+            target_id = report.get("to_deployment_id")
             target = db.get(Deployment, target_id) if isinstance(target_id, str) else None
             if (
                 target is None or target.application_id != app.id
@@ -212,64 +224,90 @@ class ReleaseExecution:
             current_release = (
                 Path(current.release) if current is not None and current.release else None
             )
-            target_release = Path(target.release) if target.release else None
+            current_manifest = (
+                dict(current.manifest)
+                if current is not None and isinstance(current.manifest, dict)
+                else None
+            )
+            target_release_path = Path(target.release) if target.release else None
             target_manifest = dict(target.manifest or {})
-            target_row_id = target.id
             release = TrustedRelease.from_dict(target.manifest["hardened_release"])
-        if target_release is None:
-            raise AppDeployError("Rollback target is not a signed release")
+            ingress_service, ingress_port = app.ingress_service, app.ingress_port
         verify_release(
             release_store_root(os.environ), release, environ=os.environ,
             require_expiry=False,
+        )
+        requested = DeployScope.from_value(report.get("scope"))
+        services = _declared_services(release, target_manifest)
+        plan = plan_deployment(
+            release, current_manifest, requested, services=services or None
         )
         runner = self.runner_factory(self.transport())
         lock = application_lock(application_id)
         if not lock.acquire(blocking=False):
             raise RuntimeError("Another build or deployment is active")
+        staging_release = target_release_path
+        if (
+            staging_release is not None
+            and runner.transport == "local"
+            and not staging_release.exists()
+        ):
+            staging_release = None
         try:
             try:
-                if current_release is not None:
-                    lifecycle(
-                        LifecycleOptions(
-                            command="down", project=project, release=current_release,
-                        ),
-                        runner,
-                    )
-                lifecycle(
-                    LifecycleOptions(
-                        command="start", project=project,
-                        release=target_release,
-                    ),
+                manifest = deploy_scoped(
                     runner,
+                    release,
+                    plan=plan,
+                    scope=requested,
+                    project=project,
+                    previous_manifest=current_manifest,
+                    previous_release=current_release,
+                    env_file=None,
+                    staging_id=operation_id,
+                    publish_state=True,
+                    require_expiry=False,
+                    staging_release=staging_release,
                 )
-            except Exception:
+            except ScopedRestoreError:
                 with self.session_factory() as db:
                     failed_app = db.get(Application, application_id)
                     if failed_app is not None:
                         failed_app.status = "degraded"
                         db.commit()
-                raise AppDeployError(
-                    "Rollback could not restore the signed release"
-                ) from None
-            target_manifest["status"] = "running"
-            _publish_release_state(runner, target_release, target_manifest)
+                raise
             with self.session_factory() as db:
-                target = db.get(Deployment, target_row_id)
-                app = db.get(Application, application_id)
-                if target is not None:
-                    target.status = "running"
-                    target.manifest = target_manifest
-                if app is not None:
-                    app.active_deployment_id = target_row_id
-                    app.status = "running"
+                deployment = Deployment(
+                    application_id=application_id,
+                    operation_id=operation_id,
+                    repository=release.repo,
+                    branch=release.branch,
+                    commit=manifest.get("commit"),
+                    tree_hash=manifest.get("tree_hash"),
+                    compose_file=manifest.get("compose"),
+                    ingress_service=ingress_service,
+                    ingress_port=ingress_port,
+                    status="running",
+                    release=manifest.get("release"),
+                    manifest=manifest,
+                    finished_at=datetime.now(UTC),
+                )
+                db.add(deployment)
+                db.flush()
+                current_app = db.get(Application, application_id)
+                if current_app is not None:
+                    current_app.active_deployment_id = deployment.id
+                    current_app.status = "running"
                 db.commit()
+                deployment_id = deployment.id
             self.refresh_routes(application_id)
         finally:
             lock.release()
         result = {
-            "deployment_id": target_row_id,
+            "deployment_id": deployment_id,
             "status": "running",
             "rollback": True,
+            "scope": plan.to_dict(),
         }
         result.update(release_result(release))
         return result

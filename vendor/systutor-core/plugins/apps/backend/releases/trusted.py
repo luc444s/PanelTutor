@@ -47,8 +47,12 @@ _FIELDS = {
     "tool_versions",
     "created_at",
     "expires_at",
+    "service_fingerprints",
+    "shared_fingerprint",
     "signature",
 }
+_FINGERPRINT_FIELDS = {"service_fingerprints", "shared_fingerprint"}
+_LEGACY_FIELDS = _FIELDS - _FINGERPRINT_FIELDS
 _MAX_DOCKERFILES = 64
 
 
@@ -163,6 +167,8 @@ class TrustedRelease:
     created_at: str
     expires_at: str
     signature: str = ""
+    service_fingerprints: Mapping[str, str] | None = None
+    shared_fingerprint: str | None = None
 
     def __post_init__(self) -> None:
         if self.schema != SCHEMA:
@@ -214,12 +220,31 @@ class TrustedRelease:
             raise ReleaseRejected("release expiry is invalid")
         if self.signature and not _SHA256.fullmatch(self.signature):
             raise ReleaseRejected("release signature is invalid")
+        if self.service_fingerprints is None:
+            if self.shared_fingerprint is not None:
+                raise ReleaseRejected("release fingerprints are incomplete")
+        else:
+            if not isinstance(self.service_fingerprints, Mapping):
+                raise ReleaseRejected("release service fingerprints are invalid")
+            if len(self.service_fingerprints) > 256:
+                raise ReleaseRejected("release service fingerprints are invalid")
+            fingerprints: dict[str, str] = {}
+            for service, digest in self.service_fingerprints.items():
+                fingerprints[_identifier(str(service), field="service")] = _hash(
+                    digest, field="service fingerprint"
+                )
+            object.__setattr__(
+                self,
+                "service_fingerprints",
+                MappingProxyType(dict(sorted(fingerprints.items()))),
+            )
+            _hash(self.shared_fingerprint, field="shared fingerprint")
 
     @property
     def body(self) -> dict[str, Any]:
         """The signed payload, i.e. the descriptor without ``signature``."""
 
-        return {
+        body = {
             "schema": self.schema,
             "algorithm": self.algorithm,
             "key_id": self.key_id,
@@ -243,6 +268,10 @@ class TrustedRelease:
             "created_at": self.created_at,
             "expires_at": self.expires_at,
         }
+        if self.service_fingerprints is not None:
+            body["service_fingerprints"] = dict(self.service_fingerprints)
+            body["shared_fingerprint"] = self.shared_fingerprint
+        return body
 
     def signed_bytes(self) -> bytes:
         return canonical_json(self.body)
@@ -272,7 +301,9 @@ class TrustedRelease:
 
     @classmethod
     def from_dict(cls, value: object) -> TrustedRelease:
-        if not isinstance(value, Mapping) or set(value) != _FIELDS:
+        if not isinstance(value, Mapping) or not (
+            set(value) == _FIELDS or set(value) == _LEGACY_FIELDS
+        ):
             raise ReleaseRejected("release descriptor is invalid")
         try:
             return cls(
@@ -299,6 +330,8 @@ class TrustedRelease:
                 created_at=value["created_at"],
                 expires_at=value["expires_at"],
                 signature=value["signature"],
+                service_fingerprints=value.get("service_fingerprints"),
+                shared_fingerprint=value.get("shared_fingerprint"),
             )
         except ReleaseRejected:
             raise

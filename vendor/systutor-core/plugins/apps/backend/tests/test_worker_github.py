@@ -368,15 +368,17 @@ def test_deploy_existing_release_avoids_clone_and_github(
         "containers": {"web": "cid"}, "status": "running",
     }
     monkeypatch.setattr(
-        execution_module, "find_release", lambda *_args: SimpleNamespace()
+        execution_module, "find_release", lambda *_args: SimpleNamespace(
+            service_fingerprints={"web": "a" * 64},
+            shared_fingerprint="b" * 64, release_id="op-signed",
+        )
     )
     monkeypatch.setattr(
-        execution_module, "deploy_trusted", lambda *_args, **_kwargs: manifest
+        execution_module, "deploy_scoped", lambda *_args, **_kwargs: manifest
     )
     monkeypatch.setattr(
         execution_module, "release_result", lambda _release: {"release_id": "op-signed"}
     )
-    monkeypatch.setattr(execution_module, "_publish_release_state", lambda *_args: None)
     worker = AppsWorker(
         lambda: Session(db.get_bind()), cipher, github=github,
         runner_factory=lambda transport, environ=None: SimpleNamespace(
@@ -419,6 +421,8 @@ def test_rollback_downs_new_starts_signed_previous_and_moves_active(
     seed(db, cipher)
     target_release = tmp_path / "state" / "app-demo" / "releases" / "d-signed"
     current_release = tmp_path / "state" / "app-demo" / "releases" / "d-current"
+    target_release.mkdir(parents=True)
+    current_release.mkdir(parents=True)
     db.add(Deployment(
         id="d-current", application_id="a1", operation_id="current",
         repository="acme/repo", branch="main", status="running",
@@ -441,27 +445,38 @@ def test_rollback_downs_new_starts_signed_previous_and_moves_active(
         report={"to_deployment_id": "d-signed"},
     ))
     db.commit()
-    commands: list[str] = []
-    published: list[dict] = []
+    captured: list[dict] = []
 
     class FakeRelease:
+        release_id = "op-old"
+        service_fingerprints = {"web": "a" * 64}
+        shared_fingerprint = "b" * 64
+        repo = "acme/repo"
+        branch = "main"
+
         @classmethod
         def from_dict(cls, _value):
-            return SimpleNamespace(body={})
+            return cls()
+
+    manifest = {
+        "release": str(target_release), "commit": "a" * 40,
+        "tree_hash": "b" * 64, "compose": "compose.yml",
+        "containers": {"web": "cid"}, "status": "running",
+        "requested_scope": "global", "effective_services": ["web"],
+        "service_releases": {"web": "op-old"},
+    }
 
     monkeypatch.setattr(execution_module, "TrustedRelease", FakeRelease)
     monkeypatch.setattr(execution_module, "verify_release", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         execution_module, "release_result", lambda _release: {"release_id": "op-old"}
     )
-    monkeypatch.setattr(
-        execution_module, "lifecycle",
-        lambda options, _runner: commands.append(options.command),
-    )
-    monkeypatch.setattr(
-        execution_module, "_publish_release_state",
-        lambda _runner, _path, manifest: published.append(dict(manifest)),
-    )
+
+    def fake_deploy(*_args, **kwargs):
+        captured.append(dict(kwargs))
+        return manifest
+
+    monkeypatch.setattr(execution_module, "deploy_scoped", fake_deploy)
     worker = AppsWorker(
         lambda: Session(db.get_bind()), cipher, github=FakeGithub(),
         runner_factory=lambda transport, environ=None: SimpleNamespace(
@@ -469,12 +484,14 @@ def test_rollback_downs_new_starts_signed_previous_and_moves_active(
         ),
     )
     result = worker.execution.rollback_operation("op-rb", "a1")
-    assert commands == ["down", "start"]
-    assert published and published[-1]["status"] == "running"
+    assert captured and captured[-1]["staging_release"] == target_release
+    assert captured[-1]["previous_manifest"]["project"] == "app-demo"
     assert result["rollback"] is True
     db.expire_all()
-    assert db.get(Application, "a1").active_deployment_id == "d-signed"
-    assert db.get(Deployment, "d-signed").status == "running"
+    active_id = db.get(Application, "a1").active_deployment_id
+    assert active_id not in {None, "d-current", "d-signed"}
+    assert db.get(Deployment, active_id).operation_id == "op-rb"
+    assert db.get(Deployment, "d-signed").status == "stopped"
     assert db.get(Application, "a1").status == "running"
 
 

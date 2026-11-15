@@ -11,6 +11,7 @@ from typing import Any
 from ..hardening import HardenedCandidate, HardeningPolicy
 from ..runtime.audit import audit_project
 from ..runtime.deployment import _git_commit
+from .fingerprints import compute_fingerprints
 from .store import build_artifact, release_store_root, write_release
 from .trusted import (
     SCHEMA,
@@ -83,6 +84,7 @@ def create_release(
         dockerfiles[relative] = _sha256(dockerfile)
     policy_data = policy.as_dict()
     gate = _plain(candidate.gate)
+    fingerprints = compute_fingerprints(checkout, audit)
     artifact = build_artifact(checkout)
     key_ring = ReleaseKeyRing.from_environ(environ)
     created = datetime.now(UTC)
@@ -110,6 +112,8 @@ def create_release(
         tool_versions=_tool_versions(environ),
         created_at=created.isoformat(),
         expires_at=expires,
+        service_fingerprints=fingerprints["service_fingerprints"],
+        shared_fingerprint=fingerprints["shared_fingerprint"],
     ).sign(key_ring)
     write_release(release_store_root(environ), release, artifact)
     return release
@@ -131,4 +135,9 @@ def release_result(release: TrustedRelease) -> dict[str, Any]:
         "commit": release.commit,
         "repo": release.repo,
         "branch": release.branch,
+        "service_fingerprints": (
+            dict(release.service_fingerprints)
+            if release.service_fingerprints is not None else {}
+        ),
+        "shared_fingerprint": release.shared_fingerprint,
     }

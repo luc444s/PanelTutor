@@ -131,6 +131,26 @@ export function ReleasesPanel({
       <Button variant="secondary" disabled={releases.isFetching}
         onClick={() => void releases.refetch()}>{t("Refresh")}</Button>
     </div>
+    {activeDeployment ? <div className="rounded border border-border p-3 text-sm">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h4 className="font-medium">{t("Effective scope of the active deployment")}</h4>
+        <Badge>{activeDeployment.strategy ?? "global"}</Badge>
+      </div>
+      <dl className="mt-2 grid gap-2 text-xs sm:grid-cols-3">
+        <div><dt className="text-muted-foreground">{t("Requested scope")}</dt>
+          <dd>{activeDeployment.requested_scope ?? "global"}</dd></div>
+        <div><dt className="text-muted-foreground">{t("Effective services")}</dt>
+          <dd>{(activeDeployment.effective_services ?? []).join(", ") || t("No runtime changes")}</dd></div>
+        <div><dt className="text-muted-foreground">{t("Global release")}</dt>
+          <dd className="break-all font-mono">{activeDeployment.global_release_id ?? activeReleaseId ?? "—"}</dd></div>
+      </dl>
+      {activeDeployment.fallback_reason ? <p className="mt-2 text-xs text-amber-700">
+        {t("Fallback")}: {activeDeployment.fallback_reason}
+      </p> : null}
+      {(activeDeployment.overrides ?? []).length > 0 ? <p className="mt-2 text-xs text-muted-foreground">
+        {t("Service overrides")}: {(activeDeployment.overrides ?? []).join(", ")}
+      </p> : null}
+    </div> : null}
     {releases.isError ? <Alert title={t("Error")}>
       {t("Could not load the releases.")}
     </Alert> : null}

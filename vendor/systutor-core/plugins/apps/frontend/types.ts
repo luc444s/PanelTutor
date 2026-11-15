@@ -117,10 +117,15 @@ export type HardeningPolicy = {
   writable_paths: HardeningWritablePath[];
 };
 
+export type DeploymentScope =
+  | { type: "global" }
+  | { type: "service"; service: string };
+
 export type DeployPayload = {
   environment: Array<[string, string]>;
   hardening?: HardeningPolicy;
   hardened_operation_id?: string;
+  scope?: DeploymentScope;
 };
 
 export type OperationSummary = {
@@ -193,7 +198,26 @@ export type DeploymentDetail = Deployment & {
     environment_names: string[];
     environment: ServiceEnvironmentVariable[];
     created_at: string | null;
+    started_at?: string | null;
+    container_id?: string | null;
+    image_id?: string | null;
+    release_id?: string | null;
+    override?: boolean;
   }>;
+  global_release_id?: string | null;
+  service_releases?: Record<string, string>;
+  overrides?: string[];
+  requested_scope?: string | null;
+  requested_service?: string | null;
+  effective_services?: string[];
+  strategy?: string | null;
+  fallback_reason?: string | null;
+  service_probes?: ProbeEvidence | null;
+  preserved?: {
+    services?: string[];
+    before?: Record<string, unknown>;
+    after?: Record<string, unknown>;
+  } | null;
   created_at: string | null;
   finished_at: string | null;
 };

@@ -5,7 +5,10 @@
 
 ## STATUS
 
-Definida. Implementación pendiente.
+Implementada. Verificación local completa (unitarias, lint, build y tests de
+frontend). **E2E real con Docker pendiente de ejecutar en el lab**: este entorno
+no tiene Docker ni credenciales `SPANEL_E2E_*`, por lo que la aceptación live y
+los composition checks siguen abiertos.
 
 ## WHY
 
@@ -442,16 +445,40 @@ structural_constraints:
 - Commit: pending
 - Deployment: pending
 
+## Verificación ejecutada
+
+```text
+ruff check vendor/systutor-core/plugins/apps \
+  scripts/e2e_apps_scoped_deploy.py \
+  scripts/tests/test_e2e_apps_scoped_deploy_live.py   -> clean
+PYTHONPATH=vendor/systutor-core/src:vendor/systutor-core \
+  python -m pytest vendor/systutor-core/plugins/apps/backend/tests -q
+                                                      -> 141 passed
+npm --prefix apps/web run build                       -> OK
+npm --prefix apps/web test -- --run                   -> 54 passed
+git diff --check                                      -> clean
+```
+
+Pendiente de ejecutar en el lab, con Docker y credenciales reales:
+
+```bash
+SPANEL_LIVE_TESTS=1 python -m pytest \
+  scripts/tests/test_e2e_apps_scoped_deploy_live.py -q -s
+```
+
 ## Definition of Done
 
-- [ ] Objective satisfied
-- [ ] Scope respected
-- [ ] Contract satisfied
-- [ ] Independent falsable truth exists now
-- [ ] Invariants preserved
-- [ ] Verification passed
-- [ ] Rollback / compensation is honest
-- [ ] Composition checks passed when applicable
-- [ ] No unrelated changes
-- [ ] Structural constraints respected
-- [ ] Traceability established
+- [x] Objective satisfied — planner, ejecutor y UI implementados con cobertura
+      unitaria.
+- [x] Scope respected
+- [x] Contract satisfied
+- [x] Independent falsable truth exists now — tests unitarios y script E2E real
+      contra Git/API/Docker.
+- [x] Invariants preserved
+- [ ] Verification passed — falta el E2E real en lab (bloqueado: sin Docker ni
+      `SPANEL_E2E_*`).
+- [x] Rollback / compensation is honest
+- [ ] Composition checks passed when applicable — pendientes junto al E2E real.
+- [x] No unrelated changes
+- [x] Structural constraints respected
+- [ ] Traceability established — deployment en lab pendiente.

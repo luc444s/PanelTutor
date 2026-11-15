@@ -113,6 +113,10 @@ def _queue(
                 report["hardening"] = payload["hardening"]
             if isinstance(payload.get("hardened_operation_id"), str):
                 report["hardened_operation_id"] = payload["hardened_operation_id"]
+        if kind in {"deploy", "rollback"} and isinstance(payload, dict):
+            scope = payload.get("scope")
+            if isinstance(scope, dict):
+                report["scope"] = scope
         if kind == "rollback" and isinstance(payload, dict):
             report["to_deployment_id"] = payload.get("to_deployment_id")
         if service:
@@ -365,6 +369,8 @@ def deploy_application(
         payload["hardening"] = body.hardening.to_policy().as_dict()
     if body.hardened_operation_id is not None:
         payload["hardened_operation_id"] = body.hardened_operation_id
+    if body.scope is not None:
+        payload["scope"] = body.scope.model_dump()
     return _queue(request, db, app, user, "deploy", idempotency_key,
                   payload, environment)
 
@@ -489,9 +495,12 @@ def rollback_application(
             "Deployment is already active", status_code=422,
             code="apps.release_already_active",
         )
+    rollback_payload: dict[str, object] = {"to_deployment_id": target.id}
+    if body.scope is not None:
+        rollback_payload["scope"] = body.scope.model_dump()
     return _queue(
         request, db, app, user, "rollback", idempotency_key,
-        {"to_deployment_id": target.id},
+        rollback_payload,
     )
 
 

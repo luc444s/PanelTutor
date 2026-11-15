@@ -498,6 +498,12 @@ def _deployment_view(row: Deployment) -> dict:
     ports = manifest.get("service_ports", {})
     runtime = manifest.get("service_runtime", {})
     release = _release_summary(manifest, row.id)
+    service_releases = manifest.get("service_releases")
+    service_releases = (
+        service_releases if isinstance(service_releases, dict) else {}
+    )
+    overrides = manifest.get("overrides")
+    overrides = [str(item) for item in overrides] if isinstance(overrides, list) else []
     details = []
     for service in services:
         state = runtime.get(service) if isinstance(runtime, dict) else {}
@@ -515,6 +521,14 @@ def _deployment_view(row: Deployment) -> dict:
             "environment": _environment_metadata(manifest, service),
             "created_at": state.get("created_at") or row.created_at,
             **({"user": state["user"]} if state.get("user") else {}),
+            **({"started_at": state["started_at"]} if state.get("started_at") else {}),
+            **({"container_id": state["container_id"]} if state.get("container_id") else {}),
+            **({"image_id": state["image_id"]} if state.get("image_id") else {}),
+            **(
+                {"release_id": service_releases.get(service)}
+                if service in service_releases else {}
+            ),
+            **({"override": service in overrides} if service_releases else {}),
         })
     probes = manifest.get("probes")
     return {
@@ -525,8 +539,24 @@ def _deployment_view(row: Deployment) -> dict:
         "release_id": release.get("release_id") if release else None,
         "release_summary": release,
         "probes": probes if isinstance(probes, dict) else None,
+        "service_probes": (
+            manifest.get("service_probes")
+            if isinstance(manifest.get("service_probes"), dict) else None
+        ),
+        "preserved": (
+            manifest.get("preserved")
+            if isinstance(manifest.get("preserved"), dict) else None
+        ),
         "services": services,
         "service_details": details,
+        "global_release_id": manifest.get("global_release_id"),
+        "service_releases": service_releases,
+        "overrides": overrides,
+        "requested_scope": manifest.get("requested_scope"),
+        "requested_service": manifest.get("requested_service"),
+        "effective_services": manifest.get("effective_services") or [],
+        "strategy": manifest.get("strategy"),
+        "fallback_reason": manifest.get("fallback_reason"),
         "created_at": row.created_at, "finished_at": row.finished_at,
     }
 
