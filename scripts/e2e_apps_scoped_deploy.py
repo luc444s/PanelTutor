@@ -50,6 +50,18 @@ REQUIRED_PERMISSIONS = frozenset({
     "apps.applications.create",
     "apps.deployments.create",
 })
+# The fixture database image runs as postgres (uid/gid 70) and needs its
+# runtime socket directory writable even with a read-only root filesystem.
+HARDENING_POLICY = {
+    "service_users": {
+        "backend": {"uid": 10001, "gid": 10001},
+        "frontend": {"uid": 101, "gid": 101},
+        "database": {"uid": 70, "gid": 70},
+    },
+    "writable_paths": [
+        {"service": "database", "path": "/var/run/postgresql", "mode": "0775"}
+    ],
+}
 
 
 def _run_git(
@@ -324,7 +336,8 @@ def write_evidence(path: Path, payload: dict[str, Any]) -> None:
 
 def deploy(client: ApiClient, root: str, payload: dict[str, Any], timeout: int,
            label: str) -> dict[str, Any]:
-    return api.queue(client, "POST", f"{root}/deployments", payload, timeout, label)
+    body = {**payload, "hardening": HARDENING_POLICY}
+    return api.queue(client, "POST", f"{root}/deployments", body, timeout, label)
 
 
 def run(args: argparse.Namespace) -> int:
