@@ -2,7 +2,7 @@
 
 ## STATUS
 
-Implementado en código. E2E live pendiente de corrida contra el laboratorio.
+Implementado y validado en laboratorio con E2E black-box de Odoo y ESPHome.
 
 Sucede y reemplaza a A.SPEC 0086. Cambia la admisión de Apps a **solo
 aislamiento**: Trivy y Hadolint salen del pipeline. La seguridad interna de la
@@ -295,6 +295,9 @@ Casos obligatorios:
 - Probes de aislamiento fallidos → **rollback**.
 - App sin healthcheck pero estable y con probe funcional verde → **deploy**.
 - App con healthcheck declarado en estado `unhealthy` → **rollback**.
+- App que solicita `privileged`, host network, puerto publicado, nombre fijo y
+  bind del repositorio, pero funciona sin ellos tras normalizar → **deploy del
+  candidato aislado**, nunca del Compose original.
 - `harden` no ejecuta Trivy/Hadolint (test que verifica que no se invocan).
 - Release no contiene `advisories`/`insecure`.
 
