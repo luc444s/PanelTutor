@@ -59,6 +59,9 @@ volver a un estado global coherente**.
 - Canary, blue/green, porcentajes de tráfico o múltiples réplicas.
 - Deploy parcial entre aplicaciones distintas.
 - Debilitar aislamiento, firma, probes o red interna.
+- Runner falso, Docker simulado o mocks de runtime como evidencia de la
+  selección incremental. Las unitarias pueden probar funciones puras, pero la
+  preservación de contenedores se demuestra únicamente con Docker real.
 
 ## CONTRACT
 
@@ -263,24 +266,70 @@ invariants:
 - rollback genera `up -d --no-deps`, nunca `down` global + `start`;
 - valores de environment no aparecen en fingerprint/evidencia.
 
-### Integración con runner falso
+### E2E obligatorio — Software para Editores con Docker real
 
-- container IDs de servicios no afectados permanecen iguales;
-- fallo en el segundo servicio restaura el primero;
-- el manifest activo no se publica antes de probes;
-- DB conserva exactamente los mismos mounts antes y después de rollback.
+La prueba de aceptación usa exclusivamente:
 
-### E2E Docker real
+```text
+repo:     luc444s/software-de-gestion-para-editores
+branch:   feature/workflow-diseno
+compose:  docker-compose.dokploy.yml
+services: frontend, backend, database
+```
 
-Fixture con `frontend`, `backend` y `database`:
+No se acepta runner falso, mocks de Docker ni una fixture reducida como prueba
+de esta A.SPEC. El flujo se ejecuta por la API HTTPS y el worker reales del lab:
 
-1. deploy inicial global: inicia los tres;
-2. cambiar solo frontend: cambia solo container ID de frontend;
-3. cambiar backend: cambia solo backend;
-4. deploy manual de frontend a release anterior: DB/backend intactos;
-5. deploy global: elimina override y sincroniza mapa completo;
-6. provocar probe fallido: restaura subconjunto y conserva datos DB;
-7. confirmar firma, evidencia, cero reinicios y HTTPS funcional.
+1. Comprobar que la rama remota está limpia y que
+   `frontend/public/test.md` no existe.
+2. Desplegar la aplicación completa desde el commit inicial y exigir release
+   firmada, probes verdes y cero reinicios.
+3. Capturar para cada servicio: container ID, image ID, `StartedAt`,
+   `RestartCount`, mounts y release efectiva.
+4. Escribir `frontend/public/test.md` con un canary único no secreto.
+5. Crear un commit real y ejecutar `git push` a la rama configurada.
+6. Solicitar **Deploy global** desde PanelTutor; no indicar manualmente
+   `frontend` ni enviar una lista de servicios.
+7. El planner debe reportar:
+
+   ```json
+   {
+     "requested_scope": "global",
+     "effective_services": ["frontend"],
+     "strategy": "incremental",
+     "fallback_reason": null
+   }
+   ```
+
+8. Verificar que solo `frontend` cambia container ID, image ID y `StartedAt`.
+9. Verificar por HTTP que `/test.md` devuelve exactamente el canary pusheado.
+10. Verificar que `backend` y `database` conservan exactamente container ID,
+    image ID y `StartedAt`; ambos mantienen `RestartCount == 0`.
+11. Verificar que database conserva el mismo volumen/mount y un dato centinela
+    creado antes del redeploy.
+12. Verificar que los probes globales y por servicio pasan y que la evidencia
+    no contiene secretos.
+13. Revertir el commit de `test.md`, ejecutar otro `git push` y hacer deploy
+    global para devolver la rama y la app a su estado inicial. Este segundo
+    deploy también debe afectar solo `frontend`.
+14. Guardar evidencia JSON con commits inicial/canary/revert, releases,
+    fingerprints, plan, IDs anteriores/posteriores, probes y cleanup.
+15. Al finalizar, la rama no contiene `test.md` y la aplicación permanece
+    desplegada y funcional sobre el commit de revert; no se elimina como parte
+    del cleanup.
+
+La prueba falla si `backend` o `database` se recrean, reinician o cambian de
+mount, aunque la aplicación siga respondiendo.
+
+### Casos reales adicionales
+
+Después del canary obligatorio de frontend:
+
+1. un cambio exclusivo de backend debe preservar frontend y database;
+2. un deploy manual de frontend a una release anterior debe preservar backend
+   y database;
+3. un deploy global posterior debe eliminar el override individual;
+4. un probe fallido debe restaurar solo el subconjunto tocado.
 
 Comandos mínimos:
 
@@ -290,6 +339,8 @@ PYTHONPATH=vendor/systutor-core/src:vendor/systutor-core python -m pytest \
   vendor/systutor-core/plugins/apps/backend/tests -q
 npm --prefix apps/web run build
 npm --prefix apps/web test -- --run
+SPANEL_LIVE_TESTS=1 python -m pytest \
+  scripts/tests/test_e2e_apps_scoped_deploy_live.py -q -s
 git diff --check
 ```
 
@@ -317,11 +368,13 @@ change_surface:
     - apps/web/src/i18n/es/apps.ts
     - scripts/e2e_apps_*.py
     - scripts/tests/test_e2e_apps_*.py
+    - temporary commits to luc444s/software-de-gestion-para-editores
   prohibited:
     - database schema changes
     - alembic
     - weakening isolation or probes
     - volume deletion or data rollback
+    - fake runners as acceptance evidence
 ```
 
 ## Blast Radius
@@ -361,6 +414,7 @@ composition:
     - incremental execution never bypasses global verification
   composition_checks:
     - full deploy from no active state
+    - real push of frontend/public/test.md changes only frontend container
     - incremental deploy followed by global rollback
     - service override followed by global deploy
     - failed partial deploy followed by verified restoration
