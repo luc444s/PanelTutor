@@ -123,7 +123,7 @@ export function ReleasesPanel({
   return <div className="space-y-4">
     <div className="flex items-center justify-between gap-2">
       <div>
-        <h3 className="text-sm font-medium">{t("Signed releases")}</h3>
+        <h3 className="text-sm font-medium">{t("Deployments")}</h3>
         <p className="text-xs text-muted-foreground">
           {t("Releases are the only deployable artifact. Verify the signature before deploying or rolling back.")}
         </p>

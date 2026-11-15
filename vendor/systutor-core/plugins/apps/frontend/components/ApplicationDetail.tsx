@@ -15,8 +15,7 @@ import {
 } from "../api";
 import { actionAllowed } from "../logic";
 import type {
-  AppAction, Application, AuditReport, DeploymentDetail, Finding,
-  OperationSummary,
+  AppAction, Application, AuditReport, Finding, OperationSummary,
 } from "../types";
 import { DeleteDialog } from "./DeleteDialog";
 import { DeployDialog } from "./DeployDialog";
@@ -28,27 +27,10 @@ import { ServiceOperations } from "./ServiceOperations";
 import { SourceDialog } from "./SourceDialog";
 import { StatusIndicator } from "./StatusIndicator";
 
-type Tab = "overview" | "audit" | "deployments" | "releases" | "operations";
+type Tab = "overview" | "audit" | "deployments" | "operations";
 const ACTIONS: Array<[AppAction, string]> = [
   ["refresh", "Refresh all"], ["down", "Down"],
 ];
-
-function DeploymentCard({ deployment, active }: {
-  deployment: DeploymentDetail;
-  active: boolean;
-}) {
-  const t = useT();
-  const status = active
-    ? t("Active")
-    : deployment.status === "running" ? t("Previous") : deployment.status;
-  return <div className="rounded border border-border p-3 text-sm">
-    <div className="flex flex-wrap items-center gap-2">
-      <strong>{status}</strong>
-      <code>{deployment.commit?.slice(0, 8) ?? "—"}</code>
-    </div>
-    {deployment.public_error ? <p className="text-xs text-destructive">{deployment.public_error}</p> : null}
-  </div>;
-}
 
 export function ApplicationDetail({ application, canCreate, canManage, canManageDomains,
   canReadDomains, canReveal, canDeploy, canDelete, onClose, onAccepted }: {
@@ -181,16 +163,6 @@ export function ApplicationDetail({ application, canCreate, canManage, canManage
     {
       value: "deployments" as const,
       label: t("Deployments"),
-      content: <div className="space-y-2">
-        {(detail.data?.deployments ?? []).map((deployment) =>
-          <DeploymentCard key={deployment.id} deployment={deployment}
-            active={deployment.id === activeDeployment?.id} />)}
-        {(detail.data?.deployments ?? []).length === 0 ? <p className="text-sm text-muted-foreground">{t("No deployments.")}</p> : null}
-      </div>,
-    },
-    {
-      value: "releases" as const,
-      label: t("Releases"),
       content: <ReleasesPanel
         applicationId={application.id}
         canDeploy={canDeploy}
