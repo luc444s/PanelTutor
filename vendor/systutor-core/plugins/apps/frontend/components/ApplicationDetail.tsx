@@ -33,10 +33,17 @@ const ACTIONS: Array<[AppAction, string]> = [
   ["refresh", "Refresh all"], ["down", "Down"],
 ];
 
-function DeploymentCard({ deployment }: { deployment: DeploymentDetail }) {
+function DeploymentCard({ deployment, active }: {
+  deployment: DeploymentDetail;
+  active: boolean;
+}) {
+  const t = useT();
+  const status = active
+    ? t("Active")
+    : deployment.status === "running" ? t("Previous") : deployment.status;
   return <div className="rounded border border-border p-3 text-sm">
     <div className="flex flex-wrap items-center gap-2">
-      <strong>{deployment.status}</strong>
+      <strong>{status}</strong>
       <code>{deployment.commit?.slice(0, 8) ?? "—"}</code>
     </div>
     {deployment.public_error ? <p className="text-xs text-destructive">{deployment.public_error}</p> : null}
@@ -176,7 +183,8 @@ export function ApplicationDetail({ application, canCreate, canManage, canManage
       label: t("Deployments"),
       content: <div className="space-y-2">
         {(detail.data?.deployments ?? []).map((deployment) =>
-          <DeploymentCard key={deployment.id} deployment={deployment} />)}
+          <DeploymentCard key={deployment.id} deployment={deployment}
+            active={deployment.id === activeDeployment?.id} />)}
         {(detail.data?.deployments ?? []).length === 0 ? <p className="text-sm text-muted-foreground">{t("No deployments.")}</p> : null}
       </div>,
     },

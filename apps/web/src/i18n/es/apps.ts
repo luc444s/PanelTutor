@@ -190,6 +190,8 @@ const messages: Record<string, string> = {
   "Rollback to a signed deployment": "Rollback a un deployment firmado",
   "No previous signed deployment is available.": "No hay un deployment firmado anterior disponible.",
   "Rollback": "Rollback",
+  "Active": "Activo",
+  "Previous": "Anterior",
   "Commit": "Commit",
   "Created": "Creada",
   "Signature": "Firma",
