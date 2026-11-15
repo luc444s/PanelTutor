@@ -13,6 +13,8 @@ _SERVICE = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_SERVICES = 64
 _MAX_WRITABLE_PATHS = 256
+_RUNTIME_USER = re.compile(r"([1-9][0-9]{0,9})(?::([1-9][0-9]{0,9}))?\Z")
+_DEFAULT_RUNTIME_ID = 1000
 
 
 class HardeningRejected(RuntimeError):
@@ -110,6 +112,22 @@ class HardeningPolicy:
                 for item in self.writable_paths
             ],
         }
+
+
+def automatic_hardening_policy(services: object) -> HardeningPolicy:
+    """Build the server-owned runtime policy from inspected Compose services."""
+    if not isinstance(services, Mapping):
+        raise ValueError("inspected services are invalid")
+    users = []
+    for service in sorted(services):
+        name = _service_name(service)
+        config = services[service]
+        config = config if isinstance(config, Mapping) else {}
+        match = _RUNTIME_USER.fullmatch(str(config.get("user", "")))
+        uid = int(match.group(1)) if match else _DEFAULT_RUNTIME_ID
+        gid = int(match.group(2) or match.group(1)) if match else _DEFAULT_RUNTIME_ID
+        users.append(RuntimeUserPolicy(name, uid, gid))
+    return HardeningPolicy(tuple(users))
 
 
 def _json_evidence(value: object, *, depth: int = 0) -> Any:

@@ -11,8 +11,8 @@ contrato anterior.
 ## WHY
 
 A.SPEC 0083 convirtió la release endurecida y firmada en la única entrada
-desplegable. El router responde `422 apps.trusted_release_required` cuando el
-payload no trae `hardening` ni `hardened_operation_id`.
+desplegable. La política que produce esa release es responsabilidad interna del
+motor, no una configuración del usuario.
 
 El frontend sigue llamando `POST /deployments` con `{ environment }`
 (`vendor/systutor-core/plugins/apps/frontend/api.ts`). Consecuencias:
@@ -29,16 +29,16 @@ El frontend sigue llamando `POST /deployments` con `{ environment }`
 
 ## CONTRACT
 
-1. La UI nunca envía un deploy sin `hardening` o `hardened_operation_id`.
-2. La política cubre **todos** los servicios; el submit se bloquea hasta que
-   cada uno tenga UID/GID válidos.
+1. La UI envía solo environment o una release previa; nunca expone la política.
+2. El worker genera una política para **todos** los servicios inspeccionados:
+   conserva UID/GID numéricos declarados y usa `1000:1000` como default non-root.
 3. Los hallazgos de auditoría son informativos. El hardener y sus probes son la
    autoridad de admisión; un estado `blocked` de auditoría previa no impide el
    deploy endurecido.
 4. La UI muestra solo errores seguros (`error_code`, `public_error`); nunca
    `stdout`/`stderr` crudos del hardener ni valores de entorno.
-5. El deployment muestra `release_id`, commit, hashes de artefacto/Compose/
-   árbol/gate, `key_id`, expiración y resultado de los probes.
+5. Deployments muestra solo estado y commit. Los hashes y checks se consultan
+   bajo demanda en el modal **Evidencia** de Releases.
 6. Una release solo se puede desplegar desde la lista que entrega el backend y
    solo con `hardened_operation_id`.
 7. Los paths escribibles se validan en cliente y servidor: absolutos,
@@ -65,10 +65,10 @@ Frontend:
 
 - `types.ts` / `api.ts`: tipos y llamadas para política, hardening, releases,
   verify, evidence y rollback.
-- `DeployDialog`: editor de política por servicio + paths escribibles.
+- `DeployDialog`: environment y confirmación; sin controles internos del motor.
 - `ApplicationDetail`: quitar el bloqueo por auditoría; advertir que el gate es
   la autoridad.
-- Pestaña **Deployments**: release, hashes, probes y estado firmado.
+- Pestaña **Deployments**: estado y commit en una línea.
 - Nueva pestaña **Releases**: listar, verificar, ver evidencia, desplegar
   release y rollback firmado.
 
@@ -77,8 +77,8 @@ Frontend:
 - Cambios al motor `scripts/dangerous_build/**`.
 - Formato de firma, almacén o probes (A.SPEC 0083).
 - Migraciones de modelos o Alembic.
-- Inferencia automática de UID/GID desde imágenes; en esta fase el operador los
-  declara. Puede abordarse en una A.SPEC posterior.
+- Inferencia desde metadata interna de imágenes; el fallback non-root ya es
+  automático, pero inspeccionar `/etc/passwd` de imágenes queda fuera de alcance.
 - Overrides de gate inseguros desde la UI: son exclusivos de laboratorio y se
   definen en A.SPEC 0086.
 - Actualizar `scripts/e2e_apps_api.py` al contrato nuevo (deuda separada).
@@ -119,26 +119,19 @@ Frontend:
 `DeployDialog`:
 
 1. Resumen de fuente e ingress.
-2. Por cada servicio del último `inspect` (o del deployment activo):
-   - UID y GID (prefill con `compose_user` si es numérico).
-   - Aviso si el servicio es `image:` y el usuario no es numérico.
-3. Editor opcional de writable paths: servicio, path absoluto, modo.
-4. Bloque `.env` existente.
-5. Confirmación por slug.
+2. Bloque `.env` existente.
+3. Confirmación por slug.
 
 Submit:
 
 ```json
 {
-  "environment": [["NAME", "value"]],
-  "hardening": {
-    "service_users": {"web": {"uid": 10001, "gid": 10002}},
-    "writable_paths": []
-  }
+  "environment": [["NAME", "value"]]
 }
 ```
 
-El worker endurece, firma, despliega y ejecuta probes en una sola operación.
+El worker inspecciona, genera la política, endurece, firma, despliega y ejecuta
+probes en una sola operación.
 
 ### 3. Preview opcional (fase 1.5)
 
@@ -175,16 +168,16 @@ la app.
 ### 6. i18n y accesibilidad
 
 - Todas las cadenas nuevas van a `apps/web/src/i18n/es/apps.ts`.
-- Inputs con `label`, `inputMode="numeric"`, `autoComplete="off"`.
-- Diálogo responsive; el editor de servicios usa acordeón o lista compacta.
+- Inputs con `label` y `autoComplete="off"`.
+- Diálogos responsive; Evidencia y Rollback usan modal amplio.
 
 ## INVARIANTS
 
-- `I1` El submit de deploy no se habilita sin política completa.
+- `I1` La política runtime nunca se solicita ni se muestra al usuario.
 - `I2` La UI nunca inventa ni reutiliza un `release_id` ajeno a la lista.
-- `I3` Cada servicio expuesto por `inspect` tiene su campo UID/GID.
+- `I3` Cada servicio inspeccionado recibe UID/GID non-root del motor.
 - `I4` Ningún error nuevo incluye secretos, stdout/stderr ni valores de env.
-- `I5` Writable paths inválidos se rechazan en cliente y en servidor.
+- `I5` La política generada se valida en servidor antes del hardener.
 - `I6` El deploy por UI sigue pasando por el worker y los probes; no hay atajo
   HTTP a Docker.
 

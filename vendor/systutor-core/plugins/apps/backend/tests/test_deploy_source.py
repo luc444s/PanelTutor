@@ -163,19 +163,23 @@ def test_deploy_rejects_managed_database_override(tmp_path: Path) -> None:
     assert error.value.code == "apps.environment_managed"
 
 
-def test_deploy_without_a_signed_release_is_rejected(tmp_path: Path) -> None:
+def test_deploy_without_a_policy_queues_server_owned_hardening(tmp_path: Path) -> None:
     db = database(tmp_path)
     user = db.get(User, "u1")
-    resources = SimpleNamespace(cipher=lambda: TokenCipher(b"k" * 32))
+    resources = SimpleNamespace(
+        cipher=lambda: TokenCipher(b"k" * 32),
+        dispatcher=SimpleNamespace(enqueue=lambda _operation_id: "message"),
+        settings=SimpleNamespace(state_root=tmp_path / "state"),
+    )
     request = SimpleNamespace(
         headers={}, app=SimpleNamespace(state=SimpleNamespace(apps_resources=resources))
     )
-    with pytest.raises(AppError) as error:
-        router_module.deploy_application(
-            "a1", DeployRequest(), request, "unsigned", db, context(), user,
-        )
-    assert error.value.code == "apps.trusted_release_required"
-    assert error.value.status_code == 422
+    result = router_module.deploy_application(
+        "a1", DeployRequest(), request, "automatic", db, context(), user,
+    )
+    operation = db.get(Operation, result.operation_id)
+    assert operation.kind == "deploy"
+    assert "hardening" not in operation.report
 
 
 def test_cross_tenant_application_access_is_not_found(tmp_path: Path) -> None:

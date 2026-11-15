@@ -13,10 +13,10 @@ import {
   appsKeys, getApplication, inspectApplication, listOperations, newIdempotencyKey,
   runApplicationAction, runServiceAction,
 } from "../api";
-import { actionAllowed, probeChecksPassed } from "../logic";
+import { actionAllowed } from "../logic";
 import type {
   AppAction, Application, AuditReport, DeploymentDetail, Finding,
-  OperationSummary, ProbeEvidence,
+  OperationSummary,
 } from "../types";
 import { DeleteDialog } from "./DeleteDialog";
 import { DeployDialog } from "./DeployDialog";
@@ -33,48 +33,12 @@ const ACTIONS: Array<[AppAction, string]> = [
   ["refresh", "Refresh all"], ["down", "Down"],
 ];
 
-function ProbesSummary({ probes }: { probes: ProbeEvidence | null }) {
-  const t = useT();
-  if (!probes) return null;
-  const functional = probes.functional?.checks ?? [];
-  const restartCounts = Object.entries(probes.stability?.restart_counts ?? {});
-  const green = probeChecksPassed(probes);
-  return <div className="text-xs text-muted-foreground">
-    <span className={green ? "text-green-600" : "text-destructive"}>
-      {green ? t("Probes green") : t("Probes not green")}
-    </span>
-    {" · "}
-    {t("Functional checks: {value}", { value: String(functional.length) })}
-    {" · "}
-    {t("Restarts: {value}", {
-      value: restartCounts.map(([name, count]) => `${name}=${count}`).join(", ") || "—",
-    })}
-  </div>;
-}
-
 function DeploymentCard({ deployment }: { deployment: DeploymentDetail }) {
-  const t = useT();
-  const summary = deployment.release_summary;
-  return <div className="space-y-2 rounded border border-border p-3 text-sm">
+  return <div className="rounded border border-border p-3 text-sm">
     <div className="flex flex-wrap items-center gap-2">
       <strong>{deployment.status}</strong>
-      <span>{t("commit")} <code>{deployment.commit ?? "—"}</code></span>
-      {deployment.release_id ? <span className="font-mono text-xs">{deployment.release_id}</span> : null}
+      <code>{deployment.commit?.slice(0, 8) ?? "—"}</code>
     </div>
-    <div className="text-muted-foreground">
-      {t("Services: {value}", { value: deployment.services.join(", ") || "—" })}
-    </div>
-    {summary ? <>
-      <dl className="grid gap-1 text-xs sm:grid-cols-2">
-        <div><dt className="text-muted-foreground">{t("Key")}</dt><dd className="font-mono">{summary.key_id ?? "—"}</dd></div>
-        <div><dt className="text-muted-foreground">{t("Expires")}</dt><dd>{summary.expires_at ? new Date(summary.expires_at).toLocaleString() : "—"}</dd></div>
-        <div className="sm:col-span-2"><dt className="text-muted-foreground">{t("Artifact hash")}</dt><dd className="break-all font-mono">{summary.artifact_sha256 ?? "—"}</dd></div>
-        <div className="sm:col-span-2"><dt className="text-muted-foreground">{t("Compose hash")}</dt><dd className="break-all font-mono">{summary.compose_sha256 ?? "—"}</dd></div>
-        <div className="sm:col-span-2"><dt className="text-muted-foreground">{t("Tree hash")}</dt><dd className="break-all font-mono">{summary.hardened_tree_sha256 ?? "—"}</dd></div>
-        <div className="sm:col-span-2"><dt className="text-muted-foreground">{t("Gate hash")}</dt><dd className="break-all font-mono">{summary.gate_sha256 ?? "—"}</dd></div>
-      </dl>
-      <ProbesSummary probes={deployment.probes} />
-    </> : <p className="text-xs text-muted-foreground">{t("This deployment has no signed release metadata.")}</p>}
     {deployment.public_error ? <p className="text-xs text-destructive">{deployment.public_error}</p> : null}
   </div>;
 }
@@ -211,9 +175,6 @@ export function ApplicationDetail({ application, canCreate, canManage, canManage
       value: "deployments" as const,
       label: t("Deployments"),
       content: <div className="space-y-2">
-        <Alert title={t("Isolation-only admission")}>
-          {t("The app's internal security is the app owner's responsibility; the platform guarantees isolation, signature and probes.")}
-        </Alert>
         {(detail.data?.deployments ?? []).map((deployment) =>
           <DeploymentCard key={deployment.id} deployment={deployment} />)}
         {(detail.data?.deployments ?? []).length === 0 ? <p className="text-sm text-muted-foreground">{t("No deployments.")}</p> : null}
@@ -271,7 +232,7 @@ export function ApplicationDetail({ application, canCreate, canManage, canManage
       onClose={() => setServiceName(null)}
       onAction={(action) => void accept(() =>
         runServiceAction(application.id, selectedService.name, action, newIdempotencyKey()))} /> : null}
-    <DeployDialog application={current} services={inspectedServices} open={deployOpen} blocked={blocked} onClose={() => setDeployOpen(false)} onAccepted={(operation) => { setDeployOpen(false); onAccepted(operation); }} />
+    <DeployDialog application={current} open={deployOpen} blocked={blocked} onClose={() => setDeployOpen(false)} onAccepted={(operation) => { setDeployOpen(false); onAccepted(operation); }} />
     <DeleteDialog application={current} open={deleteOpen} onClose={() => setDeleteOpen(false)} onAccepted={(operation) => { setDeleteOpen(false); onAccepted(operation); }} />
     <SourceDialog application={current} open={sourceOpen} onClose={() => setSourceOpen(false)} />
   </>;

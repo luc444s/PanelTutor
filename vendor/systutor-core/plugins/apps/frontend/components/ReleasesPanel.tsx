@@ -185,23 +185,6 @@ export function ReleasesPanel({
         </li>)}
       </ul>
     </div> : null}
-    {selected && evidence ? <div className="space-y-1 rounded border border-border p-3 text-sm">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h4 className="font-medium">{t("Evidence of {release}", { release: selected.release_id })}</h4>
-        {releaseBadge(selected)}
-      </div>
-      <div className="grid gap-2 py-2 text-xs sm:grid-cols-3">
-        <span>{t("Isolation")}: ✓</span>
-        <span>{t("Functional probe")}: ✓</span>
-        <span>{t("Signed")}: ✓</span>
-      </div>
-      <dl className="grid gap-1 text-xs sm:grid-cols-2">
-        <div><dt className="text-muted-foreground">artifact</dt><dd className="font-mono break-all">{evidence.release.artifact_sha256}</dd></div>
-        <div><dt className="text-muted-foreground">compose</dt><dd className="font-mono break-all">{evidence.release.compose_sha256}</dd></div>
-        <div><dt className="text-muted-foreground">tree</dt><dd className="font-mono break-all">{evidence.release.hardened_tree_sha256}</dd></div>
-        <div><dt className="text-muted-foreground">gate</dt><dd className="font-mono break-all">{evidence.release.gate_sha256}</dd></div>
-      </dl>
-    </div> : null}
     <div className="space-y-2">
       <h3 className="text-sm font-medium">{t("Rollback to a signed deployment")}</h3>
       {rollbackTargets.length === 0 ? <p className="text-sm text-muted-foreground">
@@ -220,6 +203,28 @@ export function ReleasesPanel({
           onClick={() => setRollbackTarget(deployment)}>{t("Rollback")}</Button>
       </div>)}
     </div>
+    <Dialog open={selected !== null && evidence !== null}
+      onClose={() => setEvidence(null)}
+      title={selected ? t("Evidence of {release}", { release: selected.release_id }) : ""}
+      maxWidthClassName="max-w-[900px]"
+      actions={<div className="flex justify-end">
+        <Button variant="secondary" onClick={() => setEvidence(null)}>{t("Close")}</Button>
+      </div>}>
+      {selected && evidence ? <div className="space-y-4 text-sm">
+        {releaseBadge(selected)}
+        <div className="grid gap-2 text-xs sm:grid-cols-3">
+          <span>{t("Isolation")}: ✓</span>
+          <span>{t("Functional probe")}: ✓</span>
+          <span>{t("Signed")}: ✓</span>
+        </div>
+        <dl className="grid gap-3 text-xs sm:grid-cols-2">
+          <div><dt className="text-muted-foreground">artifact</dt><dd className="break-all font-mono">{evidence.release.artifact_sha256}</dd></div>
+          <div><dt className="text-muted-foreground">compose</dt><dd className="break-all font-mono">{evidence.release.compose_sha256}</dd></div>
+          <div><dt className="text-muted-foreground">tree</dt><dd className="break-all font-mono">{evidence.release.hardened_tree_sha256}</dd></div>
+          <div><dt className="text-muted-foreground">gate</dt><dd className="break-all font-mono">{evidence.release.gate_sha256}</dd></div>
+        </dl>
+      </div> : null}
+    </Dialog>
     <Dialog open={rollbackTarget !== null} onClose={() => setRollbackTarget(null)}
       title={t("Confirm rollback")}
       description={t("Review the current and target releases before continuing.")}

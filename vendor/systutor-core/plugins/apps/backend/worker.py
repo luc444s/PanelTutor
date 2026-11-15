@@ -20,7 +20,12 @@ from .catalog import audit as record_catalog_audit
 from .catalog import mark_installation_suspended, require_source
 from .crypto import EncryptedValue, TokenCipher
 from .github import GithubClient, UrllibGithubClient, app_jwt_for, repository_row
-from .hardening import CommandHardeningEngine, HardeningPolicy, HardeningRejected
+from .hardening import (
+    CommandHardeningEngine,
+    HardeningPolicy,
+    HardeningRejected,
+    automatic_hardening_policy,
+)
 from .managed_environment import MANAGED_DATABASE_NAMES, clear_managed_environment
 from .models import (
     Application,
@@ -271,14 +276,15 @@ class AppsWorker:
                 return report
             if kind != "deploy":
                 raise AppDeployError("Unsupported source operation")
+            raw_policy = operation_report.get("hardening")
             try:
-                policy = HardeningPolicy.from_dict(
-                    operation_report.get("hardening")
+                policy = (
+                    HardeningPolicy.from_dict(raw_policy)
+                    if raw_policy is not None
+                    else automatic_hardening_policy(audit.data["services"])
                 )
             except (TypeError, ValueError):
-                raise AppDeployError(
-                    "A signed trusted release is required"
-                ) from None
+                raise AppDeployError("Runtime policy could not be generated") from None
             release, _candidate = self.execution.harden_checkout(
                 checkout, source, policy, operation_id, application_id, tenant_id,
             )

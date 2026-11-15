@@ -14,6 +14,7 @@ from plugins.apps.backend.hardening import (
     HardeningRejected,
     RuntimeUserPolicy,
     WritablePathPolicy,
+    automatic_hardening_policy,
 )
 from plugins.apps.backend.schemas import HardeningRequest
 
@@ -23,6 +24,22 @@ def policy() -> HardeningPolicy:
         (RuntimeUserPolicy("web", 10001, 10002),),
         (WritablePathPolicy("web", "/app/data", "0750"),),
     )
+
+
+def test_automatic_policy_uses_inspected_user_or_safe_default() -> None:
+    generated = automatic_hardening_policy({
+        "database": {"image": "postgres:16"},
+        "web": {"build": ".", "user": "1200:1300"},
+        "worker": {"user": "1400"},
+    })
+    assert generated.as_dict() == {
+        "service_users": {
+            "database": {"uid": 1000, "gid": 1000},
+            "web": {"uid": 1200, "gid": 1300},
+            "worker": {"uid": 1400, "gid": 1400},
+        },
+        "writable_paths": [],
+    }
 
 
 def applied() -> dict:

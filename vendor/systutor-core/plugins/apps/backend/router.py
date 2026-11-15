@@ -352,12 +352,6 @@ def deploy_application(
     user: User = Depends(require_permission("apps.deployments.create")),
 ) -> OperationView:
     app = catalog.get_application(db, context.current_tenant_id, application_id)
-    if body.hardening is None and body.hardened_operation_id is None:
-        raise AppError(
-            "A signed trusted release is required",
-            status_code=422,
-            code="apps.trusted_release_required",
-        )
     cipher = _resources(request).cipher()
     tenant_environment = (
         body.environment

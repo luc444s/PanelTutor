@@ -284,7 +284,7 @@ def run(args: argparse.Namespace) -> int:
     password_path = os.environ.get("SPANEL_E2E_PASSWORD_FILE", "").strip()
     if not email or not password_path:
         raise E2EError("SPANEL_E2E_EMAIL and SPANEL_E2E_PASSWORD_FILE are required")
-    base_policy = parse_policy(args.policy_json)
+    parse_policy(args.policy_json)  # Backward-compatible CLI validation; engine owns policy.
     deploy_environment = environment_pairs(args.env_json)
     canary = f"canary-{secrets.token_hex(8)}"
     deploy_environment.append(["E2E_LOG_CANARY", canary])
@@ -299,7 +299,7 @@ def run(args: argparse.Namespace) -> int:
     started = time.monotonic()
     print(f"Black-box trusted deploy target: {base_url}")
     try:
-        print("[1/12] Real login and permission validation")
+        print("[1/10] Real login and permission validation")
         login = client.request(
             "POST", "/api/v1/auth/login", {"email": email, "password": password}
         )
@@ -315,7 +315,7 @@ def run(args: argparse.Namespace) -> int:
             raise E2EError(f"login lacks permissions: {', '.join(sorted(missing))}")
         print("login ok")
 
-        print("[2/12] Resolve the authorized GitHub repository")
+        print("[2/10] Resolve the authorized GitHub repository")
         installation_id, repository_id = find_repository(client, repository)
         print(f"source {repository}")
 
@@ -337,7 +337,7 @@ def run(args: argparse.Namespace) -> int:
         root = f"/api/v1/plugins/apps/applications/{application_id}"
         print(f"app created ({application.get('slug')})")
 
-        print("[3/12] Inspect through the API and worker")
+        print("[3/10] Inspect through the API and worker")
         api.queue(client, "POST", f"{root}/inspect", None, args.operation_timeout, "inspect")
         detail = client.request("GET", root)
         services = detail.get("services")
@@ -345,29 +345,12 @@ def run(args: argparse.Namespace) -> int:
             raise E2EError("inspection did not expose any services")
         print(f"inspect: succeeded ({len(services)} services)")
 
-        policy = policy_for(services, base_policy)
-
-        print("[4/12] Negative deploy without a signed release")
-        negative_environment = [
-            item for item in deploy_environment if item[0] != "E2E_LOG_CANARY"
-        ]
-        expect_http_error(
-            client,
-            "POST",
-            f"{root}/deployments",
-            {"environment": negative_environment},
-            422,
-            "trusted release",
-            "deploy without policy",
-        )
-        print("negative deploy without policy: 422 apps.trusted_release_required")
-
-        print("[5/12] Hardened deploy with the frontend contract")
+        print("[4/10] Deploy with the engine-owned runtime policy")
         operation = api.queue(
             client,
             "POST",
             f"{root}/deployments",
-            {"environment": deploy_environment, "hardening": policy},
+            {"environment": deploy_environment},
             args.deploy_timeout,
             "deploy",
         )
@@ -388,9 +371,9 @@ def run(args: argparse.Namespace) -> int:
             for name in ("artifact_sha256", "compose_sha256", "hardened_tree_sha256", "key_id")
         ):
             raise E2EError("the deployment did not expose the signed hashes")
-        print(f"deploy hardened succeeded (release {release_id})")
+        print(f"automatic hardened deploy succeeded (release {release_id})")
 
-        print("[6/12] Verify the signed release is listed")
+        print("[5/10] Verify the signed release is listed")
         releases = client.request("GET", f"{root}/releases")
         listed = next(
             (
@@ -405,11 +388,11 @@ def run(args: argparse.Namespace) -> int:
             raise E2EError("the release exposes insecure or advisory metadata")
         print("release: signed, no insecure metadata")
 
-        print("[7/12] Verify probes and non-root runtime")
+        print("[6/10] Verify probes and non-root runtime")
         runtime = assert_runtime(detail, release_id)
         print("runtime: running, non-root, probes green")
 
-        print("[8/12] Cryptographic verification")
+        print("[7/10] Cryptographic verification")
         verification = client.request(
             "POST", f"{root}/releases/{release_id}/verify"
         )
@@ -420,7 +403,7 @@ def run(args: argparse.Namespace) -> int:
             raise E2EError("release verification reported a failed check")
         print("verify: valid")
 
-        print("[9/12] Evidence without secrets")
+        print("[8/10] Evidence without secrets")
         evidence = client.request("GET", f"{root}/releases/{release_id}/evidence")
         api.assert_no_secrets(
             json.dumps(evidence, default=str, sort_keys=True), sensitive, "evidence"
@@ -430,7 +413,7 @@ def run(args: argparse.Namespace) -> int:
         )
         print("evidence: ok")
 
-        print("[10/12] Redeploy the signed release")
+        print("[9/10] Redeploy the signed release")
         api.queue(
             client,
             "POST",
@@ -465,7 +448,7 @@ def run(args: argparse.Namespace) -> int:
             "cleanup": "pending",
         }
 
-        print("[11/12] Cleanup the temporary application")
+        print("[10/10] Cleanup the temporary application")
         _cleanup(client, application_id, str(application.get("slug")), args.operation_timeout)
         result["cleanup"] = "application deleted (404 verified)"
         print("cleanup: application deleted")
@@ -482,7 +465,7 @@ def run(args: argparse.Namespace) -> int:
                 )
                 result["cleanup"] = "preserved"
             elif result.get("cleanup") != "application deleted (404 verified)":
-                print("[12/12] Cleanup after failure")
+                print("Cleanup after failure")
                 try:
                     _cleanup(
                         client,
