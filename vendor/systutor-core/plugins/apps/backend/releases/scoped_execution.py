@@ -46,6 +46,20 @@ class ScopedRestoreError(AppDeployError):
     restore_failed = True
 
 
+class ScopedDeployFailed(AppDeployError):
+    """A partial deployment failed, but the touched subset was restored.
+
+    The manifest carries the verified restoration evidence so the caller can
+    publish the restored container identities as the new active state.
+    """
+
+    restore_failed = False
+
+    def __init__(self, message: str, manifest: Mapping[str, Any]) -> None:
+        super().__init__(message)
+        self.manifest = dict(manifest)
+
+
 def _release_dir(state_root: Path, project: str, release_id: str) -> Path:
     return state_root / project / "releases" / release_id
 
@@ -486,11 +500,17 @@ def deploy_scoped(
                     else:
                         manifest["restoration"]["probes"] = restored_probes
                         manifest["restoration"]["container_ids"] = restored_containers
+                        manifest["restoration"]["service_runtime"] = runtime_snapshot(
+                            runner, restored_containers
+                        )
             _write_manifest(runner, staged, manifest)
             if failed:
                 raise ScopedRestoreError(
                     "restoration failed; the application is degraded"
                 ) from exc
+            raise ScopedDeployFailed(
+                str(exc) or "scoped deployment failed", manifest
+            ) from exc
         elif initial and up_started:
             runner.run(
                 _compose_command(

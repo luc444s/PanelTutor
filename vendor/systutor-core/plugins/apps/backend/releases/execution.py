@@ -10,7 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,7 +22,11 @@ from ..models import Application, Deployment, Operation
 from ..runtime import AppDeployError, Runner
 from .pipeline import create_release, release_result
 from .planner import DeployScope, plan_deployment
-from .scoped_execution import ScopedRestoreError, deploy_scoped
+from .scoped_execution import (
+    ScopedDeployFailed,
+    ScopedRestoreError,
+    deploy_scoped,
+)
 from .store import find_release, release_store_root
 from .trusted import TrustedRelease
 from .verify import verify_release
@@ -72,6 +76,77 @@ class ReleaseExecution:
         self.hardening_engine = hardening_engine
         self.route_refresh = route_refresh
         self.transport = transport
+
+    def _publish_restored_state(
+        self,
+        *,
+        application_id: str,
+        operation_id: str,
+        previous_id: str | None,
+        manifest: Mapping[str, Any],
+        repository: str,
+        branch: str,
+    ) -> str | None:
+        """Persist the verified restoration as the new active deployment.
+
+        A failed partial deploy can recreate the touched containers while
+        restoring them.  Without publishing those new identities the historical
+        manifest would point at dead container IDs and the next deployment
+        could not prove the untouched services.
+        """
+
+        if previous_id is None:
+            return None
+        restoration = manifest.get("restoration")
+        restoration = restoration if isinstance(restoration, Mapping) else {}
+        containers = restoration.get("container_ids")
+        if not isinstance(containers, Mapping) or not containers:
+            return None
+        with self.session_factory() as db:
+            previous = db.get(Deployment, previous_id)
+            app = db.get(Application, application_id)
+            if (
+                previous is None
+                or app is None
+                or app.active_deployment_id != previous.id
+            ):
+                return None
+            base = dict(previous.manifest or {})
+            runtime = restoration.get("service_runtime")
+            merged = {
+                **base,
+                "containers": dict(sorted(containers.items())),
+                "service_runtime": (
+                    runtime if isinstance(runtime, Mapping)
+                    else base.get("service_runtime") or {}
+                ),
+                "probes": restoration.get("probes") or base.get("probes"),
+                "status": "running",
+                "restoration": dict(restoration),
+            }
+            deployment = Deployment(
+                application_id=application_id,
+                operation_id=operation_id,
+                repository=repository,
+                branch=branch,
+                commit=previous.commit,
+                tree_hash=previous.tree_hash,
+                compose_file=previous.compose_file,
+                ingress_service=previous.ingress_service,
+                ingress_port=previous.ingress_port,
+                status="running",
+                release=previous.release,
+                manifest=merged,
+                finished_at=datetime.now(UTC),
+            )
+            db.add(deployment)
+            db.flush()
+            app.active_deployment_id = deployment.id
+            app.status = "running"
+            db.commit()
+            deployment_id = deployment.id
+        self.refresh_routes(application_id)
+        return deployment_id
 
     def harden_checkout(self, checkout, source, policy, operation_id, application_id,
                         tenant_id):
@@ -131,6 +206,7 @@ class ReleaseExecution:
                 if previous is not None and isinstance(previous.manifest, dict)
                 else None
             )
+            previous_id = previous.id if previous is not None else None
         requested = DeployScope.from_value(scope)
         services = _declared_services(release, previous_manifest)
         plan = plan_deployment(
@@ -157,6 +233,16 @@ class ReleaseExecution:
                     publish_state=True,
                     require_expiry=True,
                 )
+            except ScopedDeployFailed as exc:
+                self._publish_restored_state(
+                    application_id=application_id,
+                    operation_id=operation_id,
+                    previous_id=previous_id,
+                    manifest=exc.manifest,
+                    repository=repository,
+                    branch=branch,
+                )
+                raise
             except ScopedRestoreError:
                 with self.session_factory() as db:
                     failed_app = db.get(Application, application_id)
@@ -229,6 +315,7 @@ class ReleaseExecution:
                 if current is not None and isinstance(current.manifest, dict)
                 else None
             )
+            current_id = current.id if current is not None else None
             target_release_path = Path(target.release) if target.release else None
             target_manifest = dict(target.manifest or {})
             release = TrustedRelease.from_dict(target.manifest["hardened_release"])
@@ -269,6 +356,16 @@ class ReleaseExecution:
                     require_expiry=False,
                     staging_release=staging_release,
                 )
+            except ScopedDeployFailed as exc:
+                self._publish_restored_state(
+                    application_id=application_id,
+                    operation_id=operation_id,
+                    previous_id=current_id,
+                    manifest=exc.manifest,
+                    repository=release.repo,
+                    branch=release.branch,
+                )
+                raise
             except ScopedRestoreError:
                 with self.session_factory() as db:
                     failed_app = db.get(Application, application_id)

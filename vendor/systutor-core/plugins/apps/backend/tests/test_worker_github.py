@@ -495,6 +495,62 @@ def test_rollback_downs_new_starts_signed_previous_and_moves_active(
     assert db.get(Application, "a1").status == "running"
 
 
+def test_restored_partial_deploy_publishes_new_active_identity(tmp_path: Path) -> None:
+    db = database(tmp_path)
+    cipher = TokenCipher(b"k" * 32)
+    seed(db, cipher)
+    db.add(Deployment(
+        id="d-current", application_id="a1", operation_id="current",
+        repository="acme/repo", branch="main", status="running",
+        release=str(tmp_path / "release"),
+        manifest={
+            "project": "app-demo",
+            "containers": {"web": "old"},
+            "service_runtime": {"web": {"status": "running"}},
+            "service_releases": {"web": "op-current"},
+            "global_release_id": "op-current",
+            "probes": {"functional": {"checks": []}},
+        },
+    ))
+    app = db.get(Application, "a1")
+    app.active_deployment_id = "d-current"
+    app.status = "running"
+    db.add(Operation(
+        id="op-deploy", application_id="a1", tenant_id="t1", actor_user_id="u1",
+        kind="deploy", status="running", idempotency_key="failed-scoped",
+        request_hash="h",
+    ))
+    db.commit()
+    worker = AppsWorker(lambda: Session(db.get_bind()), cipher, github=FakeGithub())
+    deployment_id = worker.execution._publish_restored_state(
+        application_id="a1",
+        operation_id="op-deploy",
+        previous_id="d-current",
+        manifest={
+            "restoration": {
+                "container_ids": {"web": "new"},
+                "service_runtime": {
+                    "web": {"status": "running", "started_at": "2026-01-01T00:00:00Z"}
+                },
+                "probes": {"functional": {"checks": [{"returncode": 0}]}},
+            }
+        },
+        repository="acme/repo",
+        branch="main",
+    )
+    assert deployment_id not in {None, "d-current"}
+    db.expire_all()
+    app = db.get(Application, "a1")
+    assert app.active_deployment_id == deployment_id
+    assert app.status == "running"
+    deployment = db.get(Deployment, deployment_id)
+    assert deployment is not None
+    assert deployment.operation_id == "op-deploy"
+    assert deployment.manifest["containers"] == {"web": "new"}
+    assert deployment.manifest["service_runtime"]["web"]["status"] == "running"
+    assert deployment.manifest["probes"]["functional"]["checks"][0]["returncode"] == 0
+
+
 def test_successful_inspect_updates_application_summary(tmp_path: Path) -> None:
     db = database(tmp_path)
     cipher = TokenCipher(b"k" * 32)
