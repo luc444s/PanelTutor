@@ -5,10 +5,15 @@
 
 ## STATUS
 
-Implementada. Verificación local completa (unitarias, lint, build y tests de
-frontend). **E2E real con Docker pendiente de ejecutar en el lab**: este entorno
-no tiene Docker ni credenciales `SPANEL_E2E_*`, por lo que la aceptación live y
-los composition checks siguen abiertos.
+Implementada y verificada en el lab real (`100.67.5.50`). El E2E obligatorio
+pasó con Docker, API y worker reales: deploy inicial, canary de frontend,
+deploy global incremental de solo `frontend`, probes verdes, cero reinicios,
+base de datos intacta y revert global. Evidencia:
+`artifacts/0088-scoped-e2e.json`.
+
+Quedan como casos adicionales no ejecutados en esta corrida: deploy manual por
+servicio a una release anterior, limpieza explícita de override con un global
+posterior y restauración automática tras un probe fallido.
 
 ## WHY
 
@@ -443,7 +448,10 @@ structural_constraints:
 - owner: PanelTutor Apps
 - approver: Lucas (platform owner)
 - Commit: 2ec1acb
-- Deployment: pendiente — E2E real en lab con Docker y `SPANEL_E2E_*`.
+- Deployment: verificado en lab el 2026-11-15. Aplicación
+  `scoped-e2e-45fd702497` (`705cd067-aaa0-490c-aab0-5dd591a8fe1c`) desplegada
+  sobre el commit de revert `8e802927c41b433f9700ce26da7422cf153377a6`.
+  Evidencia: `artifacts/0088-scoped-e2e.json`.
 
 ## Verificación ejecutada
 
@@ -459,26 +467,40 @@ npm --prefix apps/web test -- --run                   -> 54 passed
 git diff --check                                      -> clean
 ```
 
-Pendiente de ejecutar en el lab, con Docker y credenciales reales:
+E2E real ejecutado en el lab (`http://127.0.0.1:3000`) con Docker real:
 
-```bash
-SPANEL_LIVE_TESTS=1 python -m pytest \
-  scripts/tests/test_e2e_apps_scoped_deploy_live.py -q -s
+```text
+E2E OK
+status: passed
+initial_commit: 2f1c615617b7b3e72169271990477040a1bdffc5
+canary_commit:  1c5464e32b629f48fccb2b1da4841ad3a1043e1f
+revert_commit:  8e802927c41b433f9700ce26da7422cf153377a6
+initial: 3 servicios, restart_count=0
+canary:  effective_services=["frontend"], fallback_reason=null,
+         backend/database con mismo container_id, image_id y started_at
+http:    /test.md devolvió el canary en 8080
+final:   effective_services=["frontend"], branch sin test.md
 ```
+
+Para que el fixture arrancara se envió su política de hardening explícita
+(`database` uid/gid 70 y `/var/run/postgresql` escribible). La política
+automática por defecto usa uid 1000 y no es compatible con `postgres:16-alpine`
+sin `user` en el Compose del fixture.
 
 ## Definition of Done
 
-- [x] Objective satisfied — planner, ejecutor y UI implementados con cobertura
-      unitaria.
+- [x] Objective satisfied — planner, ejecutor y UI implementados; E2E de canary
+      incremental verificado en lab.
 - [x] Scope respected
 - [x] Contract satisfied
-- [x] Independent falsable truth exists now — tests unitarios y script E2E real
-      contra Git/API/Docker.
+- [x] Independent falsable truth exists now — evidencia Docker/API/Git real en
+      `artifacts/0088-scoped-e2e.json`.
 - [x] Invariants preserved
-- [ ] Verification passed — falta el E2E real en lab (bloqueado: sin Docker ni
-      `SPANEL_E2E_*`).
+- [x] Verification passed — E2E obligatorio de la A.SPEC en lab.
 - [x] Rollback / compensation is honest
-- [ ] Composition checks passed when applicable — pendientes junto al E2E real.
+- [ ] Composition checks passed when applicable — pasaron los obligatorios
+      (deploy completo, canary solo frontend y revert global); faltan los casos
+      adicionales de override por servicio y restauración fallida.
 - [x] No unrelated changes
 - [x] Structural constraints respected
-- [ ] Traceability established — deployment en lab pendiente.
+- [x] Traceability established — app y evidencia desplegadas en lab.

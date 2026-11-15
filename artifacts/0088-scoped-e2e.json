@@ -1,0 +1,159 @@
+{
+  "application_id": "705cd067-aaa0-490c-aab0-5dd591a8fe1c",
+  "application_left_deployed": true,
+  "application_slug": "scoped-e2e-45fd702497",
+  "base_url": "http://127.0.0.1:3000",
+  "branch": "feature/workflow-diseno",
+  "branch_clean_after_revert": true,
+  "canary": {
+    "release_id": "653b584c-645e-46fe-b87b-5d78b62f31a2",
+    "services": {
+      "backend": {
+        "container_id": "7504c4f2c2accd0093314580f2cd0bcb02e5e43de7093c9003052a2d65470c2f",
+        "image_id": "sha256:3b94c87198daa0550af6b257dc46c0affafa092f5987eb941cfdaa58a00d95f9",
+        "mounts": [],
+        "release_id": "653b584c-645e-46fe-b87b-5d78b62f31a2",
+        "restart_count": 0,
+        "started_at": "2026-11-15T22:36:15.688825567Z"
+      },
+      "database": {
+        "container_id": "cb3bb224dd98eb192993d5d57bff071a3a7a22d86c780c2da3219b3747e18e15",
+        "image_id": "sha256:bc553ecb841cc97f132176827999b6c7c17d04c25ee1b450b35bcfb523190704",
+        "mounts": [
+          {
+            "destination": "/var/lib/postgresql/data",
+            "name": "app-545c26591a784efb93b6e6f7_database-data",
+            "source": "/var/lib/docker/volumes/app-545c26591a784efb93b6e6f7_database-data/_data",
+            "type": "volume"
+          }
+        ],
+        "release_id": "653b584c-645e-46fe-b87b-5d78b62f31a2",
+        "restart_count": 0,
+        "started_at": "2026-11-15T22:36:09.869458402Z"
+      },
+      "frontend": {
+        "container_id": "1cd4d0b085283dcec01a544a824def991b2e13a24917fb291713e4ed4a11d6f1",
+        "image_id": "sha256:e51c4df54f6f44871d9aa3101318d49e0ee8fdb156cb23c773fefb1e56010a6a",
+        "mounts": [],
+        "release_id": "653b584c-645e-46fe-b87b-5d78b62f31a2",
+        "restart_count": 0,
+        "started_at": "2026-11-15T22:37:18.030583926Z"
+      }
+    }
+  },
+  "canary_commit": "1c5464e32b629f48fccb2b1da4841ad3a1043e1f",
+  "canary_scope": {
+    "effective_services": [
+      "frontend"
+    ],
+    "fallback_reason": null,
+    "requested_scope": "global",
+    "requested_service": null,
+    "strategy": "incremental"
+  },
+  "compose_file": "docker-compose.dokploy.yml",
+  "database_sentinel_created": true,
+  "elapsed_seconds": 153.44,
+  "final": {
+    "release_id": "1e76c283-14e3-4b1b-bcf1-d4f494d1784a",
+    "scope": {
+      "effective_services": [
+        "frontend"
+      ],
+      "fallback_reason": null,
+      "requested_scope": "global",
+      "requested_service": null,
+      "strategy": "incremental"
+    },
+    "services": {
+      "backend": {
+        "container_id": "7504c4f2c2accd0093314580f2cd0bcb02e5e43de7093c9003052a2d65470c2f",
+        "image_id": "sha256:3b94c87198daa0550af6b257dc46c0affafa092f5987eb941cfdaa58a00d95f9",
+        "mounts": [],
+        "release_id": "1e76c283-14e3-4b1b-bcf1-d4f494d1784a",
+        "restart_count": 0,
+        "started_at": "2026-11-15T22:36:15.688825567Z"
+      },
+      "database": {
+        "container_id": "cb3bb224dd98eb192993d5d57bff071a3a7a22d86c780c2da3219b3747e18e15",
+        "image_id": "sha256:bc553ecb841cc97f132176827999b6c7c17d04c25ee1b450b35bcfb523190704",
+        "mounts": [
+          {
+            "destination": "/var/lib/postgresql/data",
+            "name": "app-545c26591a784efb93b6e6f7_database-data",
+            "source": "/var/lib/docker/volumes/app-545c26591a784efb93b6e6f7_database-data/_data",
+            "type": "volume"
+          }
+        ],
+        "release_id": "1e76c283-14e3-4b1b-bcf1-d4f494d1784a",
+        "restart_count": 0,
+        "started_at": "2026-11-15T22:36:09.869458402Z"
+      },
+      "frontend": {
+        "container_id": "53d8f0d8f842c9ac319dd1de92705ce2d4eb6b0a1dee14d8de1415c2e24d177c",
+        "image_id": "sha256:978d6db4e2bb6a97c85391202aa3b4bcc8f09d366a1f6a577e33be2bcdc71cd9",
+        "mounts": [],
+        "release_id": "1e76c283-14e3-4b1b-bcf1-d4f494d1784a",
+        "restart_count": 0,
+        "started_at": "2026-11-15T22:37:55.589628868Z"
+      }
+    }
+  },
+  "http_canary": {
+    "path": "/test.md",
+    "port": 8080,
+    "sha256": "37d353b2ffc38cfe758e3b9262d71e8a6ad9aa4c617d5251cd41653dee628c84"
+  },
+  "initial": {
+    "release_id": "559e9703-8109-4175-aa5d-960f119eb64c",
+    "scope": {
+      "effective_services": [
+        "backend",
+        "database",
+        "frontend"
+      ],
+      "fallback_reason": null,
+      "requested_scope": "global",
+      "requested_service": null,
+      "strategy": "initial"
+    },
+    "services": {
+      "backend": {
+        "container_id": "7504c4f2c2accd0093314580f2cd0bcb02e5e43de7093c9003052a2d65470c2f",
+        "image_id": "sha256:3b94c87198daa0550af6b257dc46c0affafa092f5987eb941cfdaa58a00d95f9",
+        "mounts": [],
+        "release_id": "559e9703-8109-4175-aa5d-960f119eb64c",
+        "restart_count": 0,
+        "started_at": "2026-11-15T22:36:15.688825567Z"
+      },
+      "database": {
+        "container_id": "cb3bb224dd98eb192993d5d57bff071a3a7a22d86c780c2da3219b3747e18e15",
+        "image_id": "sha256:bc553ecb841cc97f132176827999b6c7c17d04c25ee1b450b35bcfb523190704",
+        "mounts": [
+          {
+            "destination": "/var/lib/postgresql/data",
+            "name": "app-545c26591a784efb93b6e6f7_database-data",
+            "source": "/var/lib/docker/volumes/app-545c26591a784efb93b6e6f7_database-data/_data",
+            "type": "volume"
+          }
+        ],
+        "release_id": "559e9703-8109-4175-aa5d-960f119eb64c",
+        "restart_count": 0,
+        "started_at": "2026-11-15T22:36:09.869458402Z"
+      },
+      "frontend": {
+        "container_id": "3764fc2d6a186fd7243eb0484f61513bc5c3b49e5ccb301ade022b1636705ce9",
+        "image_id": "sha256:978d6db4e2bb6a97c85391202aa3b4bcc8f09d366a1f6a577e33be2bcdc71cd9",
+        "mounts": [],
+        "release_id": "559e9703-8109-4175-aa5d-960f119eb64c",
+        "restart_count": 0,
+        "started_at": "2026-11-15T22:36:27.936367218Z"
+      }
+    }
+  },
+  "initial_commit": "2f1c615617b7b3e72169271990477040a1bdffc5",
+  "repository": "luc444s/software-de-gestion-para-editores",
+  "revert_commit": "8e802927c41b433f9700ce26da7422cf153377a6",
+  "sentinel": "sentinel-8b40daed730172a3",
+  "status": "passed"
+}
