@@ -129,7 +129,7 @@ export function FileTable({
               onTouchCancel={cancelLongPress}
             >
               <td className="p-2 align-middle">
-                <div className="flex items-center">
+                <div className="flex h-full items-center justify-center">
                   <input
                     type="checkbox"
                     aria-label={t("Select {name}", { name: entry.name })}

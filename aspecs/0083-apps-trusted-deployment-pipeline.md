@@ -424,7 +424,7 @@ La validación live debe demostrar:
 - [x] Rollback firmado probado.
 - [x] CLI final implementada.
 - [x] Suites de Apps y CLI en verde.
-- [ ] Evidencia live de P6 registrada.
+- [x] Evidencia live de P6 registrada.
 
 ## IMPLEMENTATION NOTES
 
@@ -454,12 +454,23 @@ ruff: All checks passed
 git diff --check: limpio
 ```
 
+### Evidencia live en laboratorio
+
+- App scratch `luc444s/spanel-trusted-e2e` (commit `43de55e`), política
+  `web=10001:10002`, sin writable paths.
+- Tres releases firmadas y desplegadas por el worker real:
+  `f495cccd`, `b8e663f6` y `9c8fdd53`.
+- Probes: aislamiento efectivo, funcional con
+  `alpine@sha256:d9e853…` fijado por digest, y estabilidad (2 chequeos, 0
+  restarts).
+- Contenedor `web`: `user=10001:10002`, rootfs read-only, `cap_drop: ALL`,
+  `no-new-privileges`, sin puertos publicados, health `healthy`.
+- Causa del bloqueo previo: el worker no incluía el plugin `buildx`, así que
+  `docker build` con `DOCKER_BUILDKIT=1` abortaba antes de construir. El
+  `Dockerfile` ahora instala `buildx` en `/usr/local/lib/docker/cli-plugins`.
+
 ## GAPS
 
-- **P6 live**: el laboratorio no ejecuta esta implementación. Requiere
-  sincronizar el working tree, reconstruir backend/worker, configurar
-  `SPANEL_APPS_RELEASE_SIGNING_KEY`, `SPANEL_APPS_PROBE_IMAGE` y
-  `SPANEL_APPS_PROBE_COMMAND`, y autorización para mutar apps del lab.
 - **Digests de imágenes externas**: la release firma el Compose, pero un tag
   externo puede mutar después de la firma. Falta un mapa firmado
   `service -> image@sha256` y ejecutar por digest. Debe abordarse en una A.SPEC

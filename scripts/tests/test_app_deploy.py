@@ -243,7 +243,9 @@ def test_env_file_must_be_external_private_regular_and_not_symlink(
 def test_override_adds_confinement_and_ownership() -> None:
     rendered = yaml_load(
         app._override(
-            {"services": {"worker": {}}, "volumes": {"data": {}}}, "demo", True
+            {"services": {"worker": {"build": "."}}, "volumes": {"data": {}}},
+            "demo",
+            True,
         )
     )
     service = rendered["services"]["worker"]
@@ -254,6 +256,40 @@ def test_override_adds_confinement_and_ownership() -> None:
     assert service["labels"][app.OWNER_LABEL] == "demo"
     assert rendered["volumes"]["data"]["labels"][app.OWNER_LABEL] == "demo"
     assert rendered["networks"]["default"]["labels"][app.OWNER_LABEL] == "demo"
+
+
+def test_override_keeps_upstream_image_for_non_build_service() -> None:
+    rendered = yaml_load(
+        app._override(
+            {"services": {"database": {"image": "neutral:1"}}}, "demo", True
+        )
+    )
+    service = rendered["services"]["database"]
+    assert "image" not in service
+    assert service["labels"][app.OWNER_LABEL] == "demo"
+    assert service["cap_drop"] == ["ALL"]
+
+
+def test_override_replaces_repo_env_file_with_staged_private_env(tmp_path: Path) -> None:
+    private = tmp_path / "private" / "app.env"
+    rendered = yaml_load(
+        app._override(
+            {
+                "services": {
+                    "web": {
+                        "build": ".",
+                        "x-spanel-external-env": True,
+                    },
+                    "database": {"image": "neutral:1"},
+                }
+            },
+            "demo",
+            True,
+            private,
+        )
+    )
+    assert rendered["services"]["web"]["env_file"] == [str(private)]
+    assert "env_file" not in rendered["services"]["database"]
 
 
 def test_override_labels_implicit_and_declared_networks() -> None:
@@ -313,6 +349,43 @@ def test_audit_error_blocks_before_runner(tmp_path: Path) -> None:
     result = app.audit_project(project(tmp_path, basic("    privileged: true\n")))
     with pytest.raises(app.AppDeployError, match="audit has errors"):
         app.deploy(deploy_args(dry_run=False), result, NoCallRunner())
+
+
+@pytest.mark.parametrize(
+    ("returncode", "message"),
+    [
+        (1, "remote project release already exists"),
+        (5, "cannot verify remote project release availability"),
+    ],
+)
+def test_remote_release_check_distinguishes_collision_from_transport_failure(
+    tmp_path: Path, returncode: int, message: str
+) -> None:
+    root = tmp_path / "source"
+    root.mkdir()
+    result = app.audit_project(project(root, basic()), non_root=True)
+
+    class RemoteRunner:
+        transport = "ssh"
+        host = "lab.example"
+
+        def __init__(self) -> None:
+            self.environ = {"SPANEL_APP_REMOTE_ROOT": "/var/lib/spanel/apps-e2e"}
+
+        def run(self, argv: list[str], **_kwargs: object) -> app.Completed:
+            assert argv[:3] == ["test", "!", "-e"]
+            return app.Completed(returncode)
+
+    with pytest.raises(app.AppDeployError, match=message):
+        app.deploy(
+            deploy_args(
+                dry_run=False,
+                project="remote-check",
+                transport="ssh",
+            ),
+            result,
+            RemoteRunner(),
+        )
 
 
 class SpyRunner:
@@ -381,6 +454,28 @@ def test_post_build_root_image_aborts(tmp_path: Path) -> None:
     with pytest.raises(app.AppDeployError, match="definite non-root"):
         app._image_users(runner, release, "compose.yaml", "demo", False, ["worker"])
     assert not any("up" in call for call in runner.calls)
+
+
+def test_compose_non_root_user_allows_root_default_image(tmp_path: Path) -> None:
+    release = tmp_path / "release"
+    runner = SpyRunner(
+        [
+            app.Completed(
+                0,
+                json.dumps({
+                    "services": {
+                        "database": {"image": "upstream:1", "user": "database"}
+                    }
+                }),
+            ),
+        ],
+        tmp_path,
+    )
+    images = app._image_users(
+        runner, release, "compose.yaml", "demo", False, ["database"]
+    )
+    assert images == {"database": "upstream:1"}
+    assert len(runner.calls) == 1
 
 
 def test_compose_environment_preflight_lists_missing_names(tmp_path: Path) -> None:

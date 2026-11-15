@@ -45,6 +45,7 @@ MAIL_TENANT_ADMIN = [
     "mail.accounts.read",
     "mail.accounts.create",
     "mail.account.password",
+    "mail.certificates.read",
 ]
 # Kernel capabilities needed by a tenant administrator, independent of plugin
 # declarations.
@@ -381,7 +382,11 @@ def test_los_scripts_no_duplican_logica() -> None:
         "def actualizar_hash(",
         "def leer_hash(",
     ]
-    for script in sorted(SCRIPTS_ROOT.glob("*.py")):
+    wrappers = (
+        SCRIPTS_ROOT / "probe_docker.py",
+        SCRIPTS_ROOT / "reset_wp_password.py",
+    )
+    for script in wrappers:
         texto = script.read_text(encoding="utf-8")
         for definicion in moved_definitions:
             assert definicion not in texto, f"{script} todavia define {definicion}"

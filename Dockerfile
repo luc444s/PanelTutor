@@ -16,6 +16,7 @@ RUN npm run build
 FROM python:3.12-slim
 
 ARG DOCKER_COMPOSE_VERSION=2.32.4
+ARG DOCKER_BUILDX_VERSION=0.37.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     openssh-client sshpass libpq-dev gcc curl git gh \
@@ -25,8 +26,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && curl -fsSL \
     "https://github.com/docker/compose/releases/download/v${DOCKER_COMPOSE_VERSION}/docker-compose-linux-x86_64" \
     -o /usr/local/lib/docker/cli-plugins/docker-compose \
+    && curl -fsSL \
+    "https://github.com/docker/buildx/releases/download/v${DOCKER_BUILDX_VERSION}/buildx-v${DOCKER_BUILDX_VERSION}.linux-amd64" \
+    -o /usr/local/lib/docker/cli-plugins/docker-buildx \
     && chmod 755 /usr/local/lib/docker/cli-plugins/docker-compose \
+    /usr/local/lib/docker/cli-plugins/docker-buildx \
     && docker compose version \
+    && docker buildx version \
     && rm -rf /var/lib/apt/lists/*
 
 # Transactional build hardener (A.SPEC 0080/0083) runs inside the worker.

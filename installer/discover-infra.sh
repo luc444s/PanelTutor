@@ -174,13 +174,13 @@ docker volume ls --format '{{.Name}}\t{{.Driver}}\t{{.Scope}}' \
 printf 'name\tdriver\tmountpoint\tscope\n' >"$OUTPUT/docker/volume-details.tsv"
 while IFS= read -r volume; do
   [ -n "$volume" ] || continue
-  docker volume inspect --format '{{.Name}}\t{{.Driver}}\t{{.Mountpoint}}\t{{.Scope}}' "$volume" \
+  docker volume inspect --format '{{printf "%s\t%s\t%s\t%s" .Name .Driver .Mountpoint .Scope}}' "$volume" \
     >>"$OUTPUT/docker/volume-details.tsv" 2>/dev/null || true
 done < <(docker volume ls -q)
 printf 'name\tdriver\tinternal\tipv6\tsubnet\tgateway\n' >"$OUTPUT/docker/network-details.tsv"
 while IFS= read -r network; do
   [ -n "$network" ] || continue
-  docker network inspect --format '{{range .IPAM.Config}}{{$.Name}}\t{{$.Driver}}\t{{$.Internal}}\t{{$.EnableIPv6}}\t{{.Subnet}}\t{{.Gateway}}{{println}}{{end}}' "$network" \
+  docker network inspect --format '{{range .IPAM.Config}}{{printf "%s\t%s\t%t\t%t\t%s\t%s\n" $.Name $.Driver $.Internal $.EnableIPv6 .Subnet .Gateway}}{{end}}' "$network" \
     >>"$OUTPUT/docker/network-details.tsv" 2>/dev/null || true
 done < <(docker network ls -q)
 capture "$OUTPUT/docker/swarm-secrets.txt" docker secret ls --format '{{.Name}}'
@@ -196,14 +196,15 @@ while IFS= read -r container; do
   safe=$(safe_name "$container")
 
   docker inspect --format \
-    '{{.Name}}\t{{.Config.Image}}\t{{.Config.Hostname}}\t{{.HostConfig.RestartPolicy.Name}}\t{{.HostConfig.NetworkMode}}\t{{.State.Status}}\t{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+    '{{printf "%s\t%s\t%s\t%s\t%s\t%s\t" .Name .Config.Image .Config.Hostname .HostConfig.RestartPolicy.Name .HostConfig.NetworkMode .State.Status}}{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
     "$container" 2>/dev/null | sed 's#^/##' >"$OUTPUT/docker/containers/${safe}.summary.tsv" || true
   docker port "$container" >"$OUTPUT/docker/containers/${safe}.ports.txt" 2>&1 || true
   docker inspect --format '{{range $name, $net := .NetworkSettings.Networks}}{{printf "%s\t%s\t%s\t%s\n" $name $net.IPAddress $net.Gateway $net.MacAddress}}{{end}}' \
     "$container" >"$OUTPUT/docker/containers/${safe}.networks.tsv" 2>/dev/null || true
 
-  docker inspect --format '{{range .Mounts}}{{printf "%s\t%s\t%s\t%s\t%s\n" .Type .Source .Destination .Mode .RW}}{{end}}' \
+  docker inspect --format '{{range .Mounts}}{{printf "%s\t%s\t%s\t%s\t%t\n" .Type .Source .Destination .Mode .RW}}{{end}}' \
     "$container" 2>/dev/null | while IFS=$'\t' read -r type source destination mode rw; do
+      [ -n "$type" ] || continue
       printf '%s\t%s\t%s\t%s\t%s\t%s\n' "$container" "$type" "$source" "$destination" "$mode" "$rw"
     done >>"$OUTPUT/docker/mounts.tsv"
 
@@ -217,6 +218,7 @@ while IFS= read -r container; do
 
   docker inspect --format '{{range $key, $value := .Config.Labels}}{{printf "%s\t%s\n" $key $value}}{{end}}' \
     "$container" 2>/dev/null | while IFS=$'\t' read -r key value; do
+      [ -n "$key" ] || continue
       if is_sensitive_name "$key"; then
         printf '%s=<redacted>\n' "$key"
       else
@@ -311,8 +313,11 @@ fi
 cat >"$OUTPUT/replication/README.md" <<'EOF'
 # Plan de réplica
 
-Este paquete es un **inventario**, no un backup. No contiene valores de entorno,
-claves privadas, correo, bases de datos ni contenido de volúmenes.
+Este paquete es un **inventario**, no un backup. El inventario generado no
+exporta valores de entorno, claves privadas, correo, bases de datos ni contenido
+de volúmenes. **Excepción:** si se usó `--copy-compose`, los YAML copiados son
+originales y pueden contener credenciales inline; todo el paquete pasa a ser
+material secreto hasta que esos archivos sean revisados y saneados.
 
 ## Orden recomendado
 
@@ -370,6 +375,14 @@ This directory is private (0700). It contains no environment values by design,
 but hostnames, paths, IP addresses and topology may still be sensitive.
 Start with replication/README.md.
 EOF
+
+if [ "$COPY_COMPOSE" = "1" ]; then
+  cat >>"$OUTPUT/README.txt" <<'EOF'
+
+WARNING: --copy-compose was used. Original Compose files may contain inline
+credentials. Treat this entire directory and its archive as secret material.
+EOF
+fi
 
 chmod -R go-rwx "$OUTPUT"
 

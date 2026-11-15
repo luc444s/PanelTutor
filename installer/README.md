@@ -34,3 +34,13 @@ Antes de compartir el paquete, revise especialmente:
 El script necesita Bash y acceso al daemon Docker. Herramientas como `ss`,
 `systemctl`, `ufw`, `nft` y `openssl` son opcionales; cuando existen se obtiene
 un diagnóstico más completo.
+
+## Base para instalaciones nuevas
+
+[`baseline/`](baseline/) define la plataforma mínima reproducible observada en
+producción, sin copiar datos ni servicios heredados. Es el contrato y manifiesto
+de entrada para el futuro `install.sh` de PanelTutor.
+
+El diseño del CLI, sus proveedores cPanel/Plesk/bare metal y las fases de
+migración están documentados en
+[`MIGRATION_CLI_PLAN.md`](MIGRATION_CLI_PLAN.md).

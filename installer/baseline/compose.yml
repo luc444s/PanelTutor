@@ -1,0 +1,155 @@
+name: paneltutor-platform
+
+services:
+  traefik:
+    image: ${TRAEFIK_IMAGE:-traefik:v3.7.8}
+    container_name: traefik
+    command:
+      - --api.dashboard=false
+      - --entrypoints.web.address=:80
+      - --entrypoints.websecure.address=:443
+      - --providers.docker=true
+      - --providers.docker.exposedbydefault=false
+      - --providers.docker.network=proxy
+      - --certificatesresolvers.letsencrypt.acme.email=${ACME_EMAIL:?Set ACME_EMAIL}
+      - --certificatesresolvers.letsencrypt.acme.storage=/letsencrypt/acme.json
+      # TLS-ALPN avoids competing with Certbot's HTTP webroot for MAIL_HOST.
+      - --certificatesresolvers.letsencrypt.acme.tlschallenge=true
+      - --log.level=INFO
+      - --accesslog=true
+    ports:
+      - 80:80
+      - 443:443
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ${PLATFORM_STATE_DIR:-/opt/paneltutor/state}/traefik:/letsencrypt
+    networks:
+      - proxy
+    restart: unless-stopped
+
+  # Certbot uses this webroot only for the SMTP/IMAP certificate. Traefik owns
+  # web certificates in acme.json; both issuers have separate responsibilities.
+  acme-webroot:
+    image: nginx:alpine
+    container_name: paneltutor-acme-webroot
+    volumes:
+      - ${PLATFORM_STATE_DIR:-/opt/paneltutor/state}/acme-challenge:/usr/share/nginx/html:ro
+    networks:
+      - proxy
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.mail-acme.entrypoints=web
+      - traefik.http.routers.mail-acme.rule=Host(`${MAIL_HOST:?Set MAIL_HOST}`) && PathPrefix(`/.well-known/acme-challenge/`)
+      - traefik.http.routers.mail-acme.priority=1000
+      - traefik.http.services.mail-acme.loadbalancer.server.port=80
+    restart: unless-stopped
+
+  mailserver:
+    image: ${DMS_IMAGE:-ghcr.io/docker-mailserver/docker-mailserver:15.1.0}
+    container_name: mailserver
+    hostname: ${MAIL_HOST:?Set MAIL_HOST}
+    environment:
+      SSL_TYPE: manual
+      SSL_CERT_PATH: /etc/letsencrypt/live/${MAIL_HOST}/fullchain.pem
+      SSL_KEY_PATH: /etc/letsencrypt/live/${MAIL_HOST}/privkey.pem
+      ENABLE_FAIL2BAN: 1
+      ENABLE_CLAMAV: 0
+      ENABLE_SPAMASSASSIN: 1
+      ENABLE_POSTGREY: 0
+      ENABLE_POP3: 0
+      ONE_DIR: 1
+      PERMIT_DOCKER: network
+      POSTMASTER_ADDRESS: ${POSTMASTER_ADDRESS:?Set POSTMASTER_ADDRESS}
+      POSTFIX_MESSAGE_SIZE_LIMIT: 104857600
+    ports:
+      - 25:25
+      - 465:465
+      - 587:587
+      - 993:993
+    volumes:
+      - ${PLATFORM_STATE_DIR:-/opt/paneltutor/state}/mail/data:/var/mail
+      - ${PLATFORM_STATE_DIR:-/opt/paneltutor/state}/mail/state:/var/mail-state
+      - ${PLATFORM_STATE_DIR:-/opt/paneltutor/state}/mail/logs:/var/log/mail
+      - ${PLATFORM_STATE_DIR:-/opt/paneltutor/state}/mail/config:/tmp/docker-mailserver
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    cap_add:
+      - NET_ADMIN
+    healthcheck:
+      test: ["CMD-SHELL", "ss --listening --tcp | grep -q ':25 ' || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    networks:
+      mail-internal:
+        aliases:
+          - ${MAIL_HOST}
+    restart: unless-stopped
+
+  roundcube:
+    image: ${ROUNDCUBE_IMAGE:-roundcube/roundcubemail:1.7.2-apache}
+    container_name: paneltutor-webmail
+    environment:
+      ROUNDCUBEMAIL_DB_TYPE: sqlite
+      ROUNDCUBEMAIL_DEFAULT_HOST: ssl://${MAIL_HOST:?Set MAIL_HOST}
+      ROUNDCUBEMAIL_DEFAULT_PORT: 993
+      ROUNDCUBEMAIL_SMTP_SERVER: tls://${MAIL_HOST:?Set MAIL_HOST}
+      ROUNDCUBEMAIL_SMTP_PORT: 587
+      ROUNDCUBEMAIL_SMTP_USER: "%u"
+      ROUNDCUBEMAIL_SMTP_PASS: "%p"
+    volumes:
+      - ${PLATFORM_STATE_DIR:-/opt/paneltutor/state}/roundcube/data:/var/roundcube/data
+      - ${PLATFORM_STATE_DIR:-/opt/paneltutor/state}/roundcube/config:/var/roundcube/config
+    networks:
+      - proxy
+      - mail-internal
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=proxy
+      - traefik.http.routers.webmail-http.entrypoints=web
+      - traefik.http.routers.webmail-http.rule=Host(`${WEBMAIL_DOMAIN:?Set WEBMAIL_DOMAIN}`)
+      - traefik.http.routers.webmail-http.middlewares=webmail-https
+      - traefik.http.middlewares.webmail-https.redirectscheme.scheme=https
+      - traefik.http.middlewares.webmail-https.redirectscheme.permanent=true
+      - traefik.http.routers.webmail.entrypoints=websecure
+      - traefik.http.routers.webmail.rule=Host(`${WEBMAIL_DOMAIN:?Set WEBMAIL_DOMAIN}`)
+      - traefik.http.routers.webmail.tls=true
+      - traefik.http.routers.webmail.tls.certresolver=letsencrypt
+      - traefik.http.services.webmail.loadbalancer.server.port=80
+    depends_on:
+      mailserver:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # Internal database hub. There are no Traefik labels and the diagnostic port
+  # is restricted to loopback. PanelTutor reaches it over the proxy network.
+  phpmyadmin:
+    image: ${PHPMYADMIN_IMAGE:-phpmyadmin:5.2.3}
+    container_name: spanel-phpmyadmin
+    environment:
+      APACHE_PORT: 8080
+      PMA_ARBITRARY: 1
+      PMA_ABSOLUTE_URI: https://${PANEL_DOMAIN:?Set PANEL_DOMAIN}/
+      UPLOAD_LIMIT: 256M
+      MEMORY_LIMIT: 256M
+    ports:
+      - 127.0.0.1:${PHPMYADMIN_LOCAL_PORT:-8081}:8080
+    volumes:
+      - ${PANELTUTOR_ROOT:-/opt/paneltutor/app}/scripts/phpmyadmin_arbitrary.php:/etc/phpmyadmin/config.user.inc.php:ro
+    networks:
+      - proxy
+      - spanel-db
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:8080/"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+networks:
+  proxy:
+    external: true
+  spanel-db:
+    external: true
+  mail-internal:
+    internal: true

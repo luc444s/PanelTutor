@@ -448,6 +448,7 @@ def runtime_snapshot(
             ),
             ("restart_count", "{{.RestartCount}}"),
             ("created_at", "{{.Created}}"),
+            ("user", "{{.Config.User}}"),
         ):
             inspected = runner.run(
                 ["docker", "container", "inspect", "-f", template, container],

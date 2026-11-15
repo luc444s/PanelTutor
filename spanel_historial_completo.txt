@@ -1,0 +1,1178 @@
+a882d514ded674ab1a83f8f84844449fceef2f51 | 2026-09-22T11:09:18-05:00 | Systutor Dev | chore: add plugins symlink to .gitignore
+ 
+
+d428981276bd3b4c994029450587015879987661 | 2026-09-22T11:09:39-05:00 | Systutor Dev | chore: symlink plugins dir + remove from gitignore
+
+35dbc93924fa7c3b9b13a366d13431e674142d05 | 2026-09-22T12:06:05-05:00 | Systutor Dev | docs: add tenant plugin spec
+
+4f9db54edc28c17cd125083f24877b0c9d320ef2 | 2026-09-22T15:56:44-05:00 | Systutor Dev | feat: tenant plugin, mail dual-mode provider, Docker deploy
+- Tenant plugin: CRUD, user assignment, superadmin-only access
+- Mail plugin: SSH + local docker exec modes (MAIL_USE_SSH flag)
+- Superadmin user with full mail access
+- Docker: multi-stage Dockerfile, docker-compose (app + redis)
+- Frontend: modal dialogs for create tenant and create mail account
+- Sidebar: admin section only for superadmin
+- Login: redirect to /app/mail, no hardcoded credentials
+- Database: seed auto-creates tables + admin user on first boot
+- Deployed to 100.67.5.50:8000
+
+02e1fbb023354accd28d029424b3c6ad3cb435a6 | 2026-09-22T15:56:44-05:00 | Systutor Dev | feat: tenant plugin, mail dual-mode provider, Docker deploy
+- Tenant plugin: CRUD, user assignment, superadmin-only access
+- Mail plugin: SSH + local docker exec modes (MAIL_USE_SSH flag)
+- Superadmin user with full mail access
+- Docker: multi-stage Dockerfile, docker-compose (app + redis)
+- Frontend: modal dialogs for create tenant and create mail account
+- Sidebar: admin section only for superadmin
+- Login: redirect to /app/mail, no hardcoded credentials
+- Database: seed auto-creates tables + admin user on first boot
+- Deployed to 100.67.5.50:8000
+
+97754384baa6f35e4561124b5fc1b43fc7ba99b4 | 2026-09-22T15:59:59-05:00 | Systutor Dev | fix: remove .env.docker from git, add .env.docker.example with placeholders
+
+b748af0aed47a5da499f7b65e736a0b8071cea33 | 2026-09-22T15:59:59-05:00 | Systutor Dev | fix: remove .env.docker from git, add .env.docker.example with placeholders
+
+874ddeb55ed3296a69ac724846749bba6392f318 | 2026-09-22T16:49:39-05:00 | Systutor Dev | fix: Dokploy-compatible Dockerfile with auto plugin enablement
+- Port changed to 3000 (configurable via PORT env var)
+- entrypoint.sh: seed + auto-enable plugins via API
+- docker-compose.yml: full stack (app + postgres + redis)
+- .env.docker.example: Dokploy variable reference
+- Plugins auto-discovered and enabled on first boot
+
+fb4ae994ad62b5a93526dd23f4abdfab37af78dd | 2026-09-22T16:49:39-05:00 | Systutor Dev | fix: Dokploy-compatible Dockerfile with auto plugin enablement
+- Port changed to 3000 (configurable via PORT env var)
+- entrypoint.sh: seed + auto-enable plugins via API
+- docker-compose.yml: full stack (app + postgres + redis)
+- .env.docker.example: Dokploy variable reference
+- Plugins auto-discovered and enabled on first boot
+
+b1be128cdfc9c658e9e6fe831b1ca609f5ad16ad | 2026-09-22T16:56:34-05:00 | Systutor Dev | docs: add Spanel README
+
+0c7dccca391f0f900f566430cdd34efc81b29da5 | 2026-09-22T16:56:34-05:00 | Systutor Dev | docs: add Spanel README
+
+5a9db8a74852ab4b14a94d0653396509294ae97e | 2026-09-22T17:45:24-05:00 | Systutor Dev | fix: Dockerfile COPY paths for plugins (symlink issue)
+
+9feff6a672fe9f11ff469bea8b45ff1572c884bd | 2026-09-22T17:46:51-05:00 | Systutor Dev | fix: vendor files as regular files instead of submodules for Docker build
+
+8f6264b466bf06bd1906f5713791d7277774bae3 | 2026-09-22T17:47:50-05:00 | Systutor Dev | fix: apps/web as regular files instead of submodule for Docker build
+
+564cb3b5910ad73f2f8875ae0098ea3ab21d56e3 | 2026-09-22T17:50:34-05:00 | Systutor Dev | fix: Dockerfile paths preserve original directory structure
+
+29b12bfe23808fb61cf3f398f8084ce721c79461 | 2026-09-22T18:04:06-05:00 | Systutor Dev | fix: remove hardcoded secrets from docker-compose.yml, use env_file
+
+8b33fe8615bf6e4d4e91be9a5e1310f692d0b3cd | 2026-09-23T12:30:54-05:00 | Systutor Dev | fix: add .gitkeep to empty plugin directories for Docker build
+
+bfa3929bd175b9f49a29dbeabccb61b9f8f1e282 | 2026-09-23T12:39:46-05:00 | Systutor Dev | fix: symlink plugins dir in frontend build stage for import.meta.glob
+
+5cd0a9c04de24ed942bd043e1d2bb7923a8c5459 | 2026-09-23T12:40:54-05:00 | Systutor Dev | feat: default theme changed to nord_dark
+
+9cfcfc9c118d03e6b16f06872f421b009298dade | 2026-09-23T12:48:29-05:00 | Systutor Dev | fix: plugin glob path points to vendor/systutor-core/plugins directly
+
+47cea365949f03b5fdb0d2f7ba9dd795fccf5541 | 2026-09-23T12:48:59-05:00 | Systutor Dev | fix: remove plugins symlink (breaks on server)
+
+b487e28ad87b5e575fe9ba1eca0c1f0ff0897ba2 | 2026-09-23T14:45:38-05:00 | Systutor Dev | fix: SPA catch-all route to serve index.html on client-side paths
+
+4958d9ce8bc345f0c1c7d52f8dde973f4869a29f | 2026-09-23T16:12:47-05:00 | Systutor Dev | fix: SPA middleware, docker CLI in container, docker socket mount, fix mail container name
+
+c11859dc26d99d33113b3c3630466679b8e280e3 | 2026-09-23T16:19:36-05:00 | Systutor Dev | fix: mail provider local docker exec command, add Docker CLI + socket mount
+
+6033a86a7cfdd994352eae496731eff833466ca2 | 2026-09-23T17:15:58-05:00 | Systutor Dev | fix: sanitize deploy config and mail plugin
+
+ee27043c23556fcb2ea27daf8d24c6050c23d540 | 2026-09-23T17:43:17-05:00 | Systutor Dev | feat: paginate mail accounts grid
+
+9afdc413cc9cac4574fa326a2199b8bbd93d1cfe | 2026-09-23T17:52:02-05:00 | Systutor Dev | fix: keep mail accounts in three columns
+
+e1146b20a9e3a6bc528297bc458744b3335bcd9b | 2026-09-23T18:05:04-05:00 | Systutor Dev | fix: force mail accounts grid columns
+
+914e4389e50bd58d4f9108f2a2fddfb39054afd9 | 2026-09-23T18:41:57-05:00 | Systutor Dev | fix: default app to single worker
+
+d815831a1e2a5d98eb8fa16954b3c012721dd1ca | 2026-09-23T18:53:44-05:00 | Systutor Dev | fix: use single mail column in portrait
+
+0ca3f364dde9d897bd0762aba601151cb4cdf6ee | 2026-09-23T18:56:56-05:00 | Systutor Dev | chore: add traefik routing labels
+
+90a0a4624d187f71c91e5d767965fd00b8682072 | 2026-09-26T00:19:28-05:00 | Systutor Dev | perf: cache mail accounts list in redis with TTL
+The mail accounts list hit the mail server on every request: one
+sshpass/ssh handshake plus a docker exec into DMS, per request, with
+a 30s timeout. react-query ran with staleTime=0, so navigating back to
+the page paid the cost again.
+
+Add a read-through cache over the raw account list, using the
+CacheBackend the kernel already initializes with Redis at startup. The
+cached value is always the RAW provider list; tenant filtering happens
+after the cache, never inside it, so a cache hit cannot serve one
+tenant another tenant's filtered list.
+
+- create_account invalidates the cache; change_password does not, since
+  it does not change the set of accounts
+- all cache get/set/delete are wrapped: a cache failure degrades
+  latency, never availability, and never turns into a 5xx
+- the provider 500 -> 503 mapping is preserved verbatim
+- staleTime on the single mail useQuery; global react-query defaults
+  untouched
+- MAIL_ACCOUNTS_CACHE_ENABLED / _TTL as config, defaults on, with a
+  kill switch that does not require a code change
+
+No new table, no migration, no schema change. DMS remains the sole
+source of truth; the cache is derived and disposable.
+
+A.SPEC 0001. Verified: 85 pytest passed (22 new), ruff delta 0.
+Note: pyright does not cover plugins/** (see pyproject include), so no
+type-check was run against this change. Latency was not measured: the
+DMS host is unreachable from dev.
+
+3f9df493132e666ffe8253b7dabf53e7c4554848 | 2026-09-26T00:21:26-05:00 | Systutor Dev | chore: make the ruff gate green (51 errors -> 0)
+ruff check . failed on a pristine tree, so the lint gate has been red
+since day one. A gate that always fails is a gate nobody runs, and
+while it was red 3 genuinely dead imports and 3 long lines sat
+unnoticed behind 32 false positives.
+
+Root cause of 63% of the noise: per-file-ignores declared
+"../../plugins/*/backend/router.py" = ["B008"], but those patterns
+resolve relative to vendor/systutor-core/, so ../../ points at
+mailadmin/plugins/ which does not exist. The glob matched nothing, so
+the intended FastAPI exemption silently never applied.
+
+- B008 (32): extend-immutable-calls for fastapi.Depends/Query/Path/
+  Body and require_permission, which says "this call in a default is
+  safe" rather than "don't look at this file" and survives moves.
+  require_superadmin cannot go there: it is defined in the file that
+  calls it, so ruff cannot resolve its qualified name (verified with
+  both the bare and the dotted form), so it keeps a per-file-ignores.
+  The dead glob is deleted rather than repaired: a config line that
+  looks like it does something is worse than none.
+- I001 (12) and F401 (3): ruff check . --fix. Not a config decision.
+  All three removed imports verified to have zero remaining
+  references; none were intentional re-exports.
+- E501 (3): wrapped by hand to match the multiline style already used
+  in that file. line-length stays 100.
+
+No runtime change, no schema, no migration. Verified: ruff 51 -> 0,
+ruff check src/ clean, pytest still 85 passed, and none of the four
+files owned by A.SPEC 0001 appear in this diff.
+
+A.SPEC 0002.
+
+1e413017bda0f77a4242698738f35209bb89a037 | 2026-09-26T00:40:09-05:00 | Systutor Dev | fix: sync admin role permissions on every boot
+entrypoint.sh only called seed_demo_data when the admin user did not
+exist, so a permission added to BASE_PERMISSIONS or declared by a newly
+loaded plugin never reached the admin role in any deployment after the
+first. Nothing noticed, because is_superadmin short-circuits
+authorization in five separate places and covers the gap.
+
+That is exactly the debt that blocks removing the bypass, so this makes
+the bypass payable later without touching it now.
+
+- seed.py: extract sync_permissions(db, tenant, plugins) from the
+  permission block of seed_demo_data, and add ensure_seed which decides
+  first-boot-seed vs permissions-sync. The decision moves out of shell
+  into Python, where it is testable.
+- entrypoint.sh: drop the `if not existing` branch, call ensure_seed.
+  The entrypoint gets thinner and stops holding authorization-adjacent
+  logic in bash.
+- tests/test_permission_sync.py: 7 tests. The central one proves the
+  truth with two boots: add a permission, boot again, the role has it.
+  Another asserts the bypass still short-circuits, so this change is
+  provably authorization-neutral.
+- docs/superadmin-debt.md: the debt made controlled. Inventories the
+  five bypass sites, names B4 (system.py) as the one that fails
+  silently if someone cleans up B1 and forgets it, records the
+  invariant that makes removal safe, and lists the triggers to revisit.
+
+Not in scope, deliberately: none of the five bypass sites are touched.
+Reverting grants nothing back that the flag was not already granting, so
+there is no lockout risk.
+
+Falsifiability checked without touching git: the old path leaves a new
+permission unreached (False), ensure_seed reaches it (True).
+
+Also found while verifying: mailadmin/.venv is a copy of Systutor-oss's
+venv and carries two editable installs, so `systutor.*` was importing
+from the wrong project. Tests must run with PYTHONPATH=src. Logged in
+the debt note; fixing it is its own A.SPEC.
+
+Verified with correct imports: 92 pytest passed, ruff clean.
+
+A.SPEC 0003.
+
+c9401dc25bf353da9d66ffbc3d09284c3abeffc8 | 2026-09-26T01:18:40-05:00 | Systutor Dev | refactor(auth): eliminate the is_superadmin bypass
+is_superadmin short-circuited authorization and was written five times.
+Three of those copies sat in the same request path that decides
+permissions, so any future change to the rule had to be made five times
+and the one you forget became a silent backdoor.
+
+B4 (api/v1/system.py:145) was the trap: it read current_permissions
+directly instead of going through has_permission, so removing B1 alone
+would have cost the superadmin core.plugin.runtime.read with no test
+watching.
+
+The flag was also redundant by construction. The admin role already
+receives every BASE_PERMISSIONS union plugin permission through
+sync_permissions, which A.SPEC 0003 made run on every boot. Removing
+the flag therefore costs the superadmin nothing, and
+test_seeded_admin_keeps_full_access is the guard that proves it.
+
+- context.py: has_permission is pure membership; the is_superadmin
+  field is gone. has_warehouse_access keeps only the None-means-all path,
+  which is how a superadmin already got unrestricted access.
+- dependencies.py, system.py: the two remaining inline shortcuts gone,
+  plus the JWT claim validation and the token privilege mismatch check.
+- tenant/router.py: require_superadmin deleted, its 7 call sites now
+  use core.tenants.read / core.tenants.manage, added to BASE_PERMISSIONS.
+- mail: the cross-domain view is now the mail.accounts.read.all
+  permission rather than a flag, so that behaviour does not change.
+- models, security, schemas, service, seed, legacy: column, JWT claim,
+  DTOs and setters removed. The deployed column is left in place on
+  purpose: create_all does not run migrations, and it is now inert.
+- frontend: 40 isSuperadmin uses deleted across 9 files. The permission
+  list was already in the store, so this was duplication, not logic.
+- test_superadmin_bypass_still_present is now
+  test_superadmin_no_longer_bypasses_permissions, with the same
+  measurement and the opposite expectation.
+
+Verified: 95 pytest passed, ruff clean, tsc clean, and greps for
+is_superadmin and require_superadmin come back empty in production code.
+
+A.SPEC 0004. Requires a re-login on deploy: the JWT no longer carries
+is_superadmin and the user DTO no longer returns it.
+
+9c2ae52c871ae9f7889b65e9d23f47210a0c54ac | 2026-09-26T01:25:30-05:00 | Systutor Dev | test(auth): guard permission names against the catalog
+require_permission("core.user.read") with the s missing compiles, passes
+ruff, and passes every existing test. The endpoint it guards then
+returns 403 forever and nothing says why. That is the failure mode this
+file exists to catch.
+
+Walks src/ and plugins/ with ast, collects every literal passed to
+require_permission / require_any_permission, and asserts each one is in
+BASE_PERMISSIONS or a plugin manifest.
+
+Uses ast rather than a regex so a permission named in a comment or a
+docstring is not mistaken for a live guard.
+
+Two guards on the guard itself, because a scanner that matches nothing
+makes every other test here pass vacuously:
+
+- test_scan_actually_found_something fails if the walker stops finding
+  permissions. This caught a real bug while writing it: require_permission
+  is a Name, not an Attribute, so the first version found zero and the
+  parametrized tests silently skipped.
+- test_base_permissions_are_all_used checks the other direction, with an
+  explicit allowlist of the four that are deliberately unguarded.
+  core.auth.me is one of them: GET /auth/me has no require_permission on
+  purpose, since reading your own profile must not need a permission.
+
+Verified by injecting core.permission.manag: the test fails and names
+src/systutor/api/v1/core/permissions.py:15.
+
+120 pytest passed, ruff clean.
+
+6a460633739d26328469d4c0182a307bda86fccd | 2026-09-26T17:17:52-05:00 | Systutor Dev | fix(auth): correct permission names A.SPEC 0004 introduced wrong
+A.SPEC 0004 passed all four of its gates with the mail plugin
+fundamentally broken. Two defects in it, both found by running the app
+rather than the suite:
+
+1. I named the cross-domain permission mail.accounts.read.all. The
+   manifest validates <module>.<resource>.<action>, exactly three
+   segments, so the whole mail plugin failed to load, its manifest was
+   dropped, and sync_permissions silently never granted it. Renamed to
+   mail.accounts.all.
+
+2. I invented core.tenants.read / core.tenants.manage for the tenant
+   plugin. It already declares tenant.tenants.read and
+   tenant.tenants.manage, and AGENTS.md says the kernel carries no
+   business domain logic, so plugin permissions do not belong in
+   BASE_PERMISSIONS. Removed from the kernel catalog, router now uses the
+   plugin namespace.
+
+The second gate that should have caught this, and did not: the mail
+tests use a fake provider and never load a real manifest. So
+test_real_plugin_manifests_load_and_validate now loads the real registry
+and asserts every manifest loads and every permission has three
+segments. Verified by re-injecting the four-segment name: 2 failed,
+9 passed; restored: 11 passed.
+
+test_plugin_manifest_matches_sidecar is also new. plugin.json and
+permissions/*.json declare the same permissions independently and had
+drifted, which is how defect 1 stayed invisible: the permission existed
+in the sidecar that sync never reads.
+
+package.json: npm run services had no PYTHONPATH, so the venv's second
+editable install won and the app ran a sibling project's code, reading
+its .env and its database, with that project's (empty) plugins
+directory. That is why the plugins reported "not found on filesystem".
+
+.env is gitignored and is now read from vendor/systutor-core/, which is
+where the core resolves it. The mail plugin resolved it from the repo
+root instead, so the two components read different files.
+
+Known and still open: ensure_seed only runs in entrypoint.sh, so local
+uvicorn never syncs permissions. A.SPEC 0003's claim that the admin
+holds every permission "after any boot" is narrower than implemented.
+Deferred to its own A.SPEC rather than widened here.
+
+122 pytest passed, ruff clean.
+
+06da9a16e5c222f7e03d8e6658fd37e4504aa537 | 2026-09-26T17:55:27-05:00 | Systutor Dev | fix(mail): allow password changes on every domain for mail.accounts.all
+list_accounts returns accounts of every domain when the caller holds
+mail.accounts.all, but change_password always required the email domain to
+equal tenants.domain. Holders of that permission could see an account in the
+UI and get a 403 domain_mismatch on every save.
+
+change_password now takes can_manage_all and skips the domain check for
+those callers, mirroring list_accounts. The 422 on a malformed email still
+applies to everyone.
+
+Also corrects the plugin README, which documented a nonexistent permission
+name (mail.accounts.password.update instead of mail.account.password).
+
+bd650067ca785fca7b1b9d5e4fa8fd6811a8ad2d | 2026-09-26T17:55:27-05:00 | Systutor Dev | chore(dev): make the dev backend port configurable
+The services script and the vite proxy hardcoded 8000, so mailadmin could
+not run next to another project already bound to that port. Both now read
+PORT / SYSTUTOR_API_PORT and keep 8000 as the default.
+
+5a28cfa72482387b8605db16f8e4c8e3b9c6cf37 | 2026-09-26T18:10:18-05:00 | Systutor Dev | docs: add A.SPEC 0005 for the mail dialogs toast flow
+Specs the change before it lands: both mail dialogs close on submit instead of on
+response, and the whole result travels by toast. Records the three design
+restrictions (one toast per id, client validation keeps the modal, the refetch
+fires instead of blocking) and the falsifiable proofs, including the one that
+makes the sonner argument order a gate.
+
+aa7c5d69bc0dc84d99941758edd90c04cbb07df5 | 2026-09-26T18:10:22-05:00 | Systutor Dev | refactor(mail): close the dialogs on submit and report by toast
+Both dialogs used to stay open for the whole round trip to the mail server,
+which is reached over SSH, and reported errors inside the modal they were
+about to close: a 403 or 404 was unreadable once the modal went away.
+
+Each flow now closes on dispatch, shows a pending toast, and replaces it in
+place with the success or error message. Client-side validation is the
+exception and keeps its Alert, because no request went out and the error
+belongs next to the fields the user just typed.
+
+Two changes beyond moving the close:
+
+- A password change no longer invalidates the accounts query. It does not
+  change the list, which A.SPEC 0001 already proved with
+  test_change_password_does_not_invalidate_cache, so that refetch was a
+  wasted trip to the mail server sitting in front of the success toast.
+- Creation keeps its invalidation, since the new mailbox has to show up, but
+  fires it without awaiting so the confirmation is not delayed.
+
+toast now comes from @systutor/shell/ui/toast, and the ids travel in the data
+object: sonner has no (id, message) overload, so passing the id first renders
+it as the toast text and leaves the pending one spinning forever.
+
+8f07574f01d6cd0b79e0c03a3f1a8d485dde3957 | 2026-09-26T18:38:47-05:00 | Systutor Dev | docs: add A.SPEC 0006 for SSH reuse and the accounts cache TTL
+Specs the change before it lands: reuse one SSH session across mail operations
+instead of one per call, and widen the accounts cache so the frontend refetch is
+answered by Redis rather than a trip to the mail server.
+
+Records the two things that had to be said out loud: production runs
+MAIL_USE_SSH=false, so the reuse only helps the SSH deployments, and the
+pyright gate was already red with 7 pre-existing errors unrelated to this work.
+
+b42b4d4377a55240341ed80cc079fcd4cb6baeda | 2026-09-26T18:38:47-05:00 | Systutor Dev | perf(mail): reuse the SSH session and widen the accounts cache
+Measured against the real provider: a cold read was 1240-1560 ms, and 560 ms of
+that was an SSH handshake that bought nothing. The provider opened a session
+per call, so every read, every mailbox creation and every password change paid
+for one.
+
+build_ssh_command() now builds the argv as a pure function, which is what makes
+the transport testable without a connection. When MAIL_SSH_CONTROL_PATH is set
+it adds ControlMaster=auto, so calls after the first reuse the session: steady
+state drops to ~610 ms, and the end-to-end cold read from ~1250 to ~750 ms.
+Empty keeps the argv byte-for-byte what it always was.
+
+The socket directory is created and chmod'ed to 0700 every time. This is the
+security part: a world-writable directory would let another local user
+pre-create the socket and hijack the session, speaking to the mail server with
+our credentials. If the directory cannot be created the provider logs a warning
+and falls back to one connection per call, so the optimization can never break
+startup. That fallback is not theoretical, it is what happened on the first run
+here: /tmp exists on Termux but belongs to Android and is not writable by the
+app.
+
+The accounts cache goes from 60 s to 300 s, which is deliberately wider than
+the frontend staleTime. A.SPEC 0001 aligned the two so the client would not ask
+while the server could still answer from its own cache, and that was right then,
+when both expired into a trip to the mail server. With Redis in between, letting
+them drift is what avoids the trip: the client refetches every 60 s and gets a
+0.4 ms Redis hit. Writes from the app still invalidate immediately, so the
+wider TTL only bounds how long a mailbox added outside the app stays invisible.
+
+18 new tests in test_provider.py cover the argv, the 0700 mode, the graceful
+degradation and that the password never reaches the argv.
+
+87e398b64a742bf8861eafd5f97ed1ab0533dee7 | 2026-09-28T12:08:16-05:00 | Systutor Dev | docs: add A.SPEC 0007 for the WordPress detection rare cases
+Los 12 casos raros de deteccion, fijados como tests antes de que exista el
+plugin hosting. La razon de fondo esta en el WHY: el filtro se apoyaba en el
+campo `Mounts` de `docker ps`, y ese campo viene truncado con puntos
+suspensivos. Es texto de pantalla, no el dato. Filtrar por ahi produce falsos
+negativos silenciosos: el script no falla, dice que no hay WordPress.
+
+Verificado contra Docker 29.1.3: Mounts='mailadmin_pgda...', '/var/run/docke...'.
+Image, Labels, Names y State si vienen completos. Por eso el filtro son dos
+capas: una sola llamada `docker ps` para Image y Labels, y `docker inspect`
+solo para los candidatos que ya pasaron esa primera.
+
+La spec se corrigio dos veces durante la implementacion, y queda el registro:
+1) el caso 1 decia `gestionable=False` con un default fail-closed que la propia
+   spec contradia en los casos 1 y 7. El usuario decidio que todo WordPress
+   encontrado es operable, porque la maquina es de el y "no es mio" no es una
+   categoria real en este producto.
+2) el conteo de tests: estimaba 15 y son 22. Los 7 de mas corresponden a tres
+   bugs que la spec no anticipo.
+
+b4a49f7cb55f79f09a66e0680fad610c07f790c7 | 2026-09-28T12:08:25-05:00 | Systutor Dev | feat(hosting): detect WordPress containers by signals, not by our own label
+Sustituye a las herramientas que monopolizan sus contenedores: la deteccion no
+requiere ninguna etiqueta. Si la imagen dice wordpress, o hay `spanel.site`, o
+monta `/var/www/html`, es un sitio. Verificado contra el Docker real: los tres
+WordPress que hay ahora mismo no tienen NI UNA etiqueta, y aparecen igual.
+
+`es_sitio` y `gestionable` son banderas independientes, y eso esta fijado como
+invariante I9: endurecer la segunda no puede reducir cuantos sitios se
+encuentran, para que un cambio de seguridad futuro no pueda reducir la
+deteccion por accidente. Y como toda WordPress encontrado es operable, solo la
+etiqueta `spanel.managed` con valor negativo explicito lo saca del alcance.
+
+`Candidato` reemplaza la tupla (bool, str) porque "es un sitio" y "lo puedo
+operar" son preguntas distintas, y `parse_labels` compara por clave exacta
+porque un substring no es una clave: `xspanel.sitex` no es `spanel.site`.
+
+Invariantes de seguridad:
+- I1 la contrasena nunca aparece en el argv; va por SSHPASS en el entorno.
+- I2 el probe es de solo lectura, fijado recorriendo el fuente y verificando
+  que los unicos comandos docker sean version, ps e inspect.
+
+Gates: ruff limpio, pyright 0 errores, 22 tests en 0.04 s. Verificado ademas
+contra el Docker real: 24 contenedores, 3 WordPress, y mariadb, filebrowser y
+traefik descartados.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+685dcc55f3ef384e469fd04890b7a3c88b54bd5c | 2026-09-28T12:08:41-05:00 | Systutor Dev | feat(hosting): reset a WordPress password without stopping the site
+Responde a una pregunta concreta: si el sistema no guarda las contrasenas,
+como entra un usuario que perdio la suya? Regenerando, y sin apagar nada.
+
+El metodo son dos pasos. Primero se le pide el hash al propio WordPress, con
+`wp eval` y `wp_hash_password()`, que es lo que WordPress usa de verdad. No se
+reimplementa ni phpass ni bcrypt: el formato cambio entre versiones y adivinarlo
+es exactamente el error que rompio la primera version de este script. Segundo,
+un UPDATE de UNA fila en la base, que sigue corriendo.
+
+La contrasena entra por stdin, no por un archivo montado, y el PHP se
+autocomprueba con `wp_check_password` antes de imprimir el hash. Esto no es
+defensa teorica: `wordpress:cli` corre como www-data (uid 82), no como root, asi
+que un archivo en 600 no lo puede leer; `file_get_contents` devolvia false,
+`trim(false)` era la cadena vacia, y el script calculaba el hash de la VACIA. Un
+hash con la forma correcta que el script aceptaba y que no servia para nada. Con
+la autoverificacion, eso ahora sale con codigo 1 y un mensaje.
+
+Nada se guarda: ni la contrasena, ni los volumenes, ni las credenciales. Todo se
+deduce de `docker inspect` del propio contenedor, que declara su conexion a la
+base en sus variables de entorno. Por eso la tabla del futuro plugin no necesita
+una sola columna de secretos.
+
+Verificado de punta a punta contra un WordPress 7.0.4 real: login con la nueva
+contrasena da cookie wordpress_logged_in y 302 a wp-admin, la vieja y una
+inventada se rechazan, y el contenedor queda "Up 11 minutes" sin reiniciarse.
+
+OJO: este commit va sin su A.SPEC. El trabajo de deteccion tiene la 0007, pero
+el de escritura no, y la disciplina del proyecto es una spec por unidad de
+trabajo. Queda debida.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
+
+d3a75048b0fa9312becb7a89bc985906181597da | 2026-10-01T18:15:12-05:00 | Systutor Dev | fix(auth): stop the browser autofilling credential forms
+Al abrir "Crear correo" el navegador ofrecia las credenciales del admin en
+los campos de usuario y contraseña. La heurística de Chromium no necesita
+name ni id: un type="text" seguido de type="password" ES un login para él, y
+el shell tiene credenciales guardadas para ese origen (LoginPage declara
+autoComplete="email"/"current-password").
+
+No era solo ruido: el autofill de Chromium no siempre dispara el onChange de
+React, así que el valor visible en el DOM puede no coincidir con el estado y
+se llegaba a mandar la contraseña del admin como contraseña del buzón nuevo.
+
+autocomplete="off" no alcanza: Chromium lo ignora en campos password dentro de
+formularios con forma de login. "new-password" es la única señal declarativa
+que respeta. Los data-* cubren a los gestores de contraseñas, que ignoran
+autocomplete por completo.
+
+Se agregan dos objetos de props en shell/src/ui/input.tsx — newCredentialProps
+y noAutofillProps — y se aplican a los 6 formularios de alta o cambio de
+credenciales: MailAccountsPage (crear y cambiar contraseña), TenantsPage
+(crear tenant y crear usuario), UsersPage y shell/admin/users.tsx.
+
+Los dos logins quedan intactos a propósito: ahí el autocompletado sí se quiere.
+Por eso el helper se importa y no es un default en Input.
+
+Se saca el autoFocus del campo password en MailAccountsPage: dispara la
+sugerencia inline en Chromium al montar y hace zoom en iOS.
+
+El guard de readOnly que se evaluó primero queda fuera y documentado en la
+A.SPEC: los Dialog montan con createPortal y el input no existe en el DOM hasta
+que el modal abre, así que readOnly nunca está presente cuando el navegador
+decide autofillear.
+
+2b51a29b1ca2d9c7ef8a0783ee16e2ecfde8b2dd | 2026-10-04T14:38:31-05:00 | Systutor Dev | license: add AGPL v3 for Spanel (mailadmin)
+
+7ef04caf05a295b21ed5deac22111357cb154466 | 2026-10-22T11:12:07-05:00 | Systutor Dev | feat(hosting): reset exactly one user, never the rows that share a login
+`user_login` is a `KEY`, not a `UNIQUE KEY`, in the WordPress schema
+(verified in the core that ships in the container). A hand-made import can
+leave two rows with the same login, and the reset filtered by login:
+
+    UPDATE wp_users SET user_pass=... WHERE user_login='admin'
+
+With two rows it updated both, then the read-back returned two hashes and
+the script exited 1 saying "el UPDATE no quedo aplicado como se esperaba".
+The message lied: the update was applied, to two accounts.
+
+Measured against two real rows in spanel-demowp-wp with the previous
+script: rc=1, and FILAS CAMBIADAS: 2 de 2.
+
+Now the login is resolved to exactly one row before the hash is computed.
+Two or more matches fail and list every candidate as `ID <n> <login>
+<email>`; `--id N` selects by primary key and skips resolution. The UPDATE
+and the read-back both use `WHERE ID=`. Dry-run resolves too, so ambiguity
+is caught without writing.
+
+The test is a live integration suite, by explicit decision: it runs the
+real script against the real site, creates two administrators and two rows
+sharing a login, and restores a dump in a finalizer. 11 tests, 90s.
+
+Gates: ruff (touched files) and pyright clean; 11 passed.
+
+df5b8a8396048037d91c51691a65582746301aa6 | 2026-10-22T11:12:08-05:00 | Systutor Dev | docs: add the planned A.SPECs for listing, lab and DB credentials
+0008 lists the users of a WordPress with their role. Roles are not in
+wp_users: they live in wp_usermeta under `{prefix}capabilities`, so the
+prefix appears in two places and the listing needs a join.
+
+0009 builds a four-site lab (other prefix, other WordPress version with
+phpass, other MariaDB, several sites on one network). It is the only way
+to exercise the dead `$P$B` branch and the duplicate-login case.
+
+0012 keeps the database password out of every argv. Today it travels in
+`docker exec ... mariadb -p...`, readable with `ps` and unescaped for the
+remote shell. It also validates the table prefix, which a comment already
+promised but the code never did.
+
+None of the three is implemented yet; their Definition of Done stays
+unchecked on purpose. 0012 depends on 0009 for the hostile-password and
+hostile-prefix proofs.
+
+ae6c650ff06de06deaf8e39f3d1749c1a5d8f9d6 | 2026-10-22T11:27:47-05:00 | Systutor Dev | feat(hosting): list WordPress users with their role
+`--listar` prints ID, login, email, status and role for every user of a
+site, and writes nothing. It answers the question the reset could not:
+who are the users, instead of assuming `admin`.
+
+Roles are not in wp_users. WordPress keeps them in wp_usermeta under
+`{prefix}capabilities`, as a PHP-serialized value:
+
+    a:1:{s:13:"administrator";b:1;}
+
+So the listing needs a LEFT JOIN, the prefix appears in two places (the
+table and the meta_key) and both come from the same discovered value, and
+a user with no capabilities row is listed with `-` rather than dropped.
+
+`--listar` is mutually exclusive with `--password`, `--usuario` and `--id`,
+and the rejection happens before any query: a read flag that silently
+ignores a write flag is a trap. It also no longer requires the site volume,
+only the database.
+
+The printed ID is what A.SPEC 0011 asks for when a login is duplicated, so
+the two tools now agree: one test takes the ID from the listing and resets
+exactly that row by it.
+
+The docstring stops claiming to be "A.SPEC 0008": that was a forward
+reference from September that this listing turned into a lie.
+
+Verified live against spanel-demowp-wp: 21 tests, 151 s, ruff and pyright
+clean. The site came back to one user. The one unproven invariant
+(listing without a volume) needs the lab of A.SPEC 0009 and is marked as
+pending, not as passed.
+
+2b33847351167ec226539e86d736b5d105a7d6c3 | 2026-10-22T11:49:02-05:00 | Systutor Dev | docs: split the hosting plugin into three A.SPECs
+0012 closes the foundation: database credentials out of argv, tenant
+administrator permissions declared by the manifest, and the proven
+Docker/WordPress logic moved into plugins/hosting/backend.
+
+0013 adds tenant ownership for sites, the site/user listings and the
+single-row password reset, all guarded by TenantContext.
+
+0014 adds creation and lifecycle. The three are separate commits so the
+permission change, the write path and the destructive provisioning can be
+reviewed and rolled back independently.
+
+c274dfae27bad6d7bc8bfe314d6fa1298f542469 | 2026-10-22T12:40:37-05:00 | Systutor Dev | feat(hosting): close the core for the WordPress plugin
+Keep the database password out of every argv: one helper runs mariadb
+inside the DB container with MYSQL_PWD, falls back to a mode-600
+defaults-extra-file over stdin, and validates the table prefix before any
+SQL is built.
+
+Let plugins declare tenant_admin_permissions in the manifest. The kernel
+syncs exactly that subset, plus core.plugin.runtime.read, to every
+tenant_admin role; the seed admin still receives every plugin permission.
+The hardcoded MAIL_PERMISSIONS list is gone.
+
+Move the proven Docker and WordPress logic into
+plugins/hosting/backend/ and leave probe_docker.py and
+reset_wp_password.py as thin wrappers. The production image copies
+plugins/, not scripts/, so this is the only reachable location.
+
+Verification: ruff and the changed-file pyright gates pass; 111 core
+tests, 22 probe tests and 27 live reset tests pass.
+
+A.SPEC 0012.
+
+5ed35f9c1ec676dc1006ba3d407e14092c87f3d4 | 2026-10-22T13:09:32-05:00 | Systutor Dev | feat(hosting): add the tenant-scoped WordPress plugin
+Add the hosting plugin: manifest, permissions, migration, ownership model,
+guard, service, routes and the Hosting page. Every site lookup filters by
+the kernel TenantContext and a foreign tenant gets 404, never 403. The
+reset selects one WordPress user by ID, verifies the read-back by ID and
+audits the operation without the password or the hash.
+
+The plugin declares its three permissions as tenant_admin_permissions, so
+a tenant administrator gets them from the manifest instead of a hardcoded
+list in the tenant plugin.
+
+A.SPEC 0013.
+
+c97e9eadae85eadded3a0ecc7bab9b9041cafe8c | 2026-10-22T13:09:34-05:00 | Systutor Dev | feat(hosting): add explicit adoption for existing WordPress sites
+Existing containers have no owner. The CLI verifies that the container is
+a WordPress, resolves the tenant by slug through the core Tenant model,
+refuses a container already owned and writes one ownership row plus one
+audit row. A dry run writes nothing.
+
+Adoption is a CLI, not an endpoint: a tenant administrator must not be
+able to claim a site that belongs to somebody else.
+
+A.SPEC 0013.
+
+cb69a8ad5ab8d98cb74e7965550d2d69290e6c15 | 2026-10-22T13:09:37-05:00 | Systutor Dev | test(hosting): cover tenant isolation, adoption and the pure helpers
+Pure tests for the request schemas, the role/format helpers, the Docker
+inspect parser and the migration. The live suite creates two real
+tenants, real tokens and real adoption, then proves that tenant A cannot
+read or reset tenant B's site even with its site_id. Destructive reset
+assertions are limited to spanel-lab-* and skip when the lab is absent.
+
+A.SPEC 0013.
+
+ca21ec010e507fe74d19ad1b8572802e471aac8f | 2026-10-22T13:09:40-05:00 | Systutor Dev | test(hosting): follow the manifests in the tenant-admin assertion
+The 0012 test hardcoded the mail-only tenant-admin permission set. Once
+the hosting manifest declared its own tenant permissions, the assertion
+failed for the right reason. Derive the expected union from the installed
+manifests instead of hardcoding plugin names.
+
+50aee535e13b0d0529f8802e701d84c8cb2e0050 | 2026-10-22T14:01:12-05:00 | Systutor Dev | feat(hosting): provision and operate WordPress sites
+Add tenant-scoped creation, start/stop/restart, bounded logs and delete.
+Creation derives the tenant from TenantContext, generates the DB and admin
+passwords with secrets, writes them only to transient env-files, installs
+WordPress through wordpress:cli and records ownership only after the
+install succeeds. A failure compensates by removing exactly the labeled
+resources created by that attempt.
+
+Delete is platform-only (hosting.sites.delete is not a tenant-admin
+permission) and refuses any resource whose labels do not match the
+owned row. Lifecycle actions are blocked for spanel.managed=false.
+
+A.SPEC 0014.
+
+51598e0e60919ad7471de1f428deccdda605f0c0 | 2026-10-22T14:02:37-05:00 | Systutor Dev | feat(hosting): add creation and lifecycle controls to the Hosting page
+Gate every action by the permission the user actually holds: create,
+start/stop/restart, reset and delete. Delete requires typing the container
+name and is hidden without hosting.sites.delete. The generated admin
+password is shown once, like the reset password. Logs open in a bounded
+dialog.
+
+38588654d36567de1bc20469add69594d64a3658 | 2026-10-22T14:02:41-05:00 | Systutor Dev | test(hosting): prove creation, lifecycle and cleanup on a throwaway lab
+The live suite creates a real spanel-lab-* site, checks the tenant binding,
+exercises start/stop/restart and bounded logs, verifies duplicate domain and
+name are rejected, and deletes it. A failure injection after MariaDB starts
+proves the compensating cleanup leaves no container, volume or ownership
+row behind. Every destructive action is limited to the lab names and the
+demo sites are inspected before and after.
+
+A.SPEC 0014.
+
+3f37887fbc459f6e805dc9cc0f2230892ce09579 | 2026-10-22T14:02:44-05:00 | Systutor Dev | docs(hosting): document provisioning settings and lifecycle routes
+Record the image, network, Traefik, install timeout and log-line settings,
+the compensation rule, and the fact that delete is platform-only.
+
+abf72c89b4113f3ab89517a0f56f54e62ccb3730 | 2026-10-22T19:02:29-05:00 | Systutor Dev | feat(hosting): show each site as a card and open its actions in a dialog
+
+4d017d753ff26141f4c16a76be7a0a50a3d91f82 | 2026-10-22T19:05:33-05:00 | Systutor Dev | feat(hosting): open users, logs and lifecycle actions in their own dialogs
+
+a5a4f05343619ce50fb5a9a8f3cadd06301fcd58 | 2026-10-22T19:09:44-05:00 | Systutor Dev | fix(web): scan plugin frontends for Tailwind and show the real users error
+
+03fd441900462cee806fe3e0a47ce5b2a0b52914 | 2026-10-22T19:19:46-05:00 | Systutor Dev | fix(hosting): only enable the lifecycle action that matches the site state
+
+ee7faff8cacaff8f9f9bcc7ff909a35e387cfacf | 2026-10-22T19:38:02-05:00 | Systutor Dev | feat(kernel): add a platform capability for platform-only permissions
+
+e5b5fa18065c6cd884cc3bbe8150f10a0b36995d | 2026-10-22T19:38:02-05:00 | Systutor Dev | feat(hosting): require the platform capability to delete a site
+
+d0993403437b6e171c196426de8a68da4d1539c2 | 2026-10-22T20:01:50-05:00 | Systutor Dev | test(kernel): keep the suite green outside the host checkout
+
+1b909c316f2673bab63116225d032f9fd1ae0da9 | 2026-10-23T12:32:53-05:00 | Systutor Dev | feat(hosting): add the site config adapter with stable secrets
+
+4b56ade0082ef6ff56125f78ed3184bb9bade91c | 2026-10-23T12:32:53-05:00 | Systutor Dev | test(hosting): add the live config and secrets suite
+
+681bb76fa9ffb134402bb1ee6410f04c14fb87ab | 2026-10-23T12:32:53-05:00 | Systutor Dev | docs(aspec): add 0015 for site config and secrets
+
+c95a005bf4b0539d5cd02ba835b7289733862192 | 2026-10-23T14:35:58-05:00 | Systutor Dev | docs(aspec): add 0016 for the site config UI
+
+ab30059e24386f197601fa43aaa4f6186dc30260 | 2026-10-23T14:36:00-05:00 | Systutor Dev | fix(hosting): reject config writes when spanel.managed=false
+The config and salts routes wrote to any owned site, even when its
+spanel.managed label says the panel must not manage it. Inspect once and
+return 409 before touching the env file or recreating the container.
+
+Cover it with a live test that creates an unmanaged site and expects 409.
+
+511b581f3203891dce720150c69fd2b11c17bc09 | 2026-10-23T14:36:28-05:00 | Systutor Dev | feat(hosting): edit site config and rotate salts from the panel
+Add a Configuración action to the site dialog. It shows the editable
+environment and the names of the secrets, never their values, and sends
+only changed non-empty keys. Managing users can also rotate the WordPress
+salts behind a confirmation that warns about closing every session.
+
+The form is driven by the server whitelist, and the backend rejects
+writes on unmanaged sites, so a site that the panel does not manage stays
+read-only.
+
+78d8c88fd2e6e1f6819cb8a212a6903766cc10bf | 2026-10-23T17:31:32-05:00 | Systutor Dev | fix(shell): show the API error message and remove the duplicate close button
+
+513c19587e6fe8d73d156c4c14cdca8ae8bebcb3 | 2026-10-23T17:31:32-05:00 | Systutor Dev | fix(hosting): keep the SQL fallback command intact through the shell
+
+030b52c608f48e2c75a79cf726c74440c978fca0 | 2026-10-23T17:31:32-05:00 | Systutor Dev | perf(hosting): cache the site user list for one minute
+
+12e841f4d59b6ab0de7801ccc470215f9ecc4fbf | 2026-10-23T17:31:32-05:00 | Systutor Dev | refactor(hosting): rename salts to security keys
+
+03b54e0ed0d6b94dd638692df34630e0c21e122d | 2026-10-23T17:31:32-05:00 | Systutor Dev | feat(hosting): reveal the site database credential and open phpMyAdmin
+
+91bf10778867c0b692c4323fa3f39b4231720e68 | 2026-10-23T17:48:44-05:00 | Systutor Dev | feat(deploy): add a safe phpMyAdmin launcher for an existing MariaDB
+
+d5bf0fbf85d9a8e8a2a0e2bece156e2668aeb4a8 | 2026-10-23T17:51:05-05:00 | Systutor Dev | docs: document hosting and the internal phpMyAdmin flow
+
+cc4bcbba719c0573684c9c42037a095a554e2aba | 2026-10-23T17:54:38-05:00 | Systutor Dev | feat(web): link to the public repository from the shell
+
+f2e966155ca5c2fbf63fa2150661403fd86c78b6 | 2026-10-23T19:35:18-05:00 | Systutor Dev | feat(hosting): read database credentials from wp-config.php
+
+ee5dabe32f561dbe9c66965b373f21eeae546490 | 2026-10-23T21:16:40-05:00 | Systutor Dev | feat(hosting): proxy phpMyAdmin through site-scoped sessions
+
+ad4f94e3bf4c08cbb9913224c4a065d840b7db39 | 2026-10-23T21:44:24-05:00 | Systutor Dev | fix(hosting): release SQL sessions before phpMyAdmin proxy I/O
+
+1fd3202e24b57c3e864475207dad753da54b4b3b | 2026-10-23T21:59:59-05:00 | Systutor Dev | fix(hosting): preserve phpMyAdmin AJAX navigation scripts
+
+381d60ab96f7cf8812d368443507d2c4624a90a8 | 2026-10-23T23:18:34-05:00 | Systutor Dev | feat(filemanager): add tenant-scoped WordPress file manager
+
+d26c6ae6ad505263fb1ae7d7f9f7f0fe0b1650af | 2026-10-24T20:48:02-05:00 | Systutor Dev | feat(filemanager): add desktop modal with list and grid views
+
+f7b8a142ffb4dbdc316444d9929a81c0e498c5dc | 2026-10-24T20:49:02-05:00 | Systutor Dev | feat(filemanager): marquee selection with left-click drag
+
+bb73dc717ad52eff1665d192f26981bf820b54a0 | 2026-10-24T23:34:13-05:00 | Systutor Dev | docs(traefik): specify existing proxy integration and live test
+
+911dd5b8d0e21a0b275cc40aaf6519191eebcbbb | 2026-10-24T23:34:13-05:00 | Systutor Dev | feat(traefik): add isolated lab bootstrap script
+
+f8d9a84ee6f7150425781070f0c7b5024d1356ad | 2026-10-24T23:53:40-05:00 | Systutor Dev | feat(proxy): local ACME CA lab and domain CLI with internal HTTPS
+
+3aaeacff5e2f5d77ed2cb81d5e295b60e2b3126f | 2026-10-24T23:53:59-05:00 | Systutor Dev | fix(proxy): probe TLS on the Docker host when using SSH
+
+8e7dce14238c647af1a58604a9705ee52f5c79d9 | 2026-10-25T00:06:17-05:00 | Systutor Dev | fix(proxy): avoid network/container name clash, wait for route, pass WP env safely
+
+428d0801faedcca16358e2c274c91b7127f4f045 | 2026-10-25T01:29:12-05:00 | Systutor Dev | feat(mail): deterministic internal TLS cert for mail.lucas.spanel
+- aspecs/0028 documents the scope, T0 measurements and the live result
+- scripts/mail_cert.py issues against the local step-ca JWK provisioner and
+  delivers to docker-mailserver by rebuilding the container from docker inspect
+  instead of hand-written flags, with verification and automatic rollback
+- 20 unit tests cover the run-args reconstruction and the renewal decision
+- mail-cert.service/.timer for daily idempotent renewal
+
+6c9b0f1987e684baed7ef4bddc9e84070786aeae | 2026-10-25T01:35:32-05:00 | Systutor Dev | fix(mail): delivery must match the serial actually served, and rollback restores the cert first
+The rollback drill (T12) exposed three gaps:
+- deliver reported 'no changes' while the process still served the previous
+  certificate; it now compares the serial presented on 993 with meta.json
+- rollback restarted the container before restoring the cert files, so DMS
+  copied the new cert and disk/container disagreed; the cert is now restored
+  before docker start and issue --deliver rolls back the emission too
+- check now reports which serial is served vs. on disk, and the presented serial
+  is read with -showcerts and a short retry after restarts
+
+Also reconciles deliveries/mail.json when DMS hot-reloads a new cert, and marks
+the port verification honestly.
+
+51462206db335d77dec0819bc219911a7b6404bc | 2026-10-25T01:44:48-05:00 | Systutor Dev | test(mail): live end-to-end test for internal mail over validated TLS
+Five cases: 993/465/587 all present the same lab-CA certificate with the right
+CN/SAN, and a message sent over 587 STARTTLS is retrieved over 993 by Message-ID
+with certificate verification enabled. Runs standalone on the host (no pytest
+there) and skips cleanly when the mailbox credentials are absent.
+
+9639db32e29d71ba007dce82eb740e32143399b6 | 2026-10-25T11:42:29-05:00 | Systutor Dev | feat(domains): add domains plugin with single-owner route guard
+
+8e027a6f0792fa21c1904ddda71b66075fccecc5 | 2026-10-25T11:42:37-05:00 | Systutor Dev | docs(domains): record implementation commit
+
+b860e79b6b61a54c3545ea99e2cee9bd0f7f1d7e | 2026-10-25T11:56:57-05:00 | Systutor Dev | test(domains): let the live suite point at the mounted lab directories
+
+35a29aedaa7a068290eaa95036c9eccef8a31813 | 2026-10-25T11:57:48-05:00 | Systutor Dev | test(domains): wait for the file provider to drop the removed router
+
+8a3c82b8f0368030961e5d643fcfc32a6af49724 | 2026-10-25T11:59:06-05:00 | Systutor Dev | docs(domains): record the live lab run and its fixes
+
+3565765e8b52e235a541af03ab781562057aa4db | 2026-10-25T21:18:16-05:00 | Systutor Dev | feat(web): rebrand shell as SPANEL
+The login page, sidebar and document title still said SYSTUTOR. Use the product name shown across the hosting panel.
+
+8d8add8f84114a616b62432a11b0ff770284408a | 2026-10-25T21:18:19-05:00 | Systutor Dev | fix(boot): only auto-enable newly discovered plugins
+A plugin the admin disabled on purpose already has installed_at set. Restrict the boot-time enable step to fresh plugins and accept both validated and disabled states, so a deliberate disable survives a restart.
+
+03ad221613d04b65b35a706f00613cdf7b803785 | 2026-10-25T21:18:23-05:00 | Systutor Dev | feat(domains): add automatic Docker transport for the proxy
+Production runs the app beside Traefik without a mounted file-provider directory. Detect the Traefik container through the Docker socket, inspect its mounts and static config, and write managed spanel-*.yml files by executing inside that container. Keep the local and SSH transports, and report a clear proxy_unavailable error when nothing is reachable.
+
+Implements A.SPEC 0029. The live suite is opt-in via SPANEL_LIVE_TESTS=1.
+
+e068c5ece5cade0c72c2fa63786d9630dd657877 | 2026-10-25T21:18:26-05:00 | Systutor Dev | fix(tenant): return 409 on duplicate tenant domain
+Editing a tenant to a domain already owned by another tenant raised an unhandled IntegrityError and produced HTTP 500. Normalize the domain, pre-check ownership case-insensitively, and translate the remaining unique-constraint race into AppError 409 for both create and update. The edit dialog now clears the previous error as the user types.
+
+c7bb24c007262e7df9f94c4b09bb2ca087c8ded4 | 2026-10-25T21:18:29-05:00 | Systutor Dev | feat(scripts): add static site provisioning CLI
+Provision an nginx static site on the Docker host: dedicated volume, initial HTML/CSS/JS, Traefik route, certificate wait and cleanup on failure. This is the validated prototype that hosting will reuse for the static site kind.
+
+57f03d7fd328c720be3a9a678877df1e5f0de2a1 | 2026-10-25T21:18:32-05:00 | Systutor Dev | docs(aspecs): propose create-site types and tenant site suffix
+Draft 0030: one Crear sitio flow for WordPress and static sites with exactly three fields. Domains are validated against a per-tenant site_suffix stored separately from the mail domain, and existing domains outside that suffix are marked outside_tenant instead of being listed.
+
+94d2224d7b6b249c3159ce7a67049d9fd2b96400 | 2026-10-25T21:18:32-05:00 | Systutor Dev | docs: record Cloudflare domain, mail and certificate gap analysis
+Keep the analysis of adding a new Cloudflare-managed domain, mailboxes and certificates. The current panel can route web domains but has no Cloudflare API integration, DNS-01 or per-domain mail certificate flow.
+
+dc38191d16241b007063cd8d94f41f395b14a00c | 2026-10-25T21:45:10-05:00 | Systutor Dev | feat(tenant): add site suffix and domain namespace
+Introduce tenant_site_settings.site_suffix as a namespace separate from the mail domain. Tenants can edit it without touching tenant.domain; overlapping suffixes are rejected with 409. Domains now hide out-of-namespace entries for regular tenants, expose them to platform admins with outside_tenant=true, and offer a read-only /domains/check endpoint that validates format, suffix, hosting primaries and proxy extras.
+
+Implements A.SPEC 0030. The full create-site proposal is archived under docs/proposals.
+
+378a5c5df339846211f23c847e09db2e6ea09284 | 2026-10-25T21:45:35-05:00 | Systutor Dev | docs(aspecs): record 0030 implementation commit
+Mark the A.SPEC 0030 definition of done and point traceability at dc38191.
+
+6d2b01fa3f8b2855182330da7d12a3619abf58f6 | 2026-10-25T22:12:45-05:00 | Systutor Dev | feat(hosting): create static and WordPress sites by kind
+POST /hosting/sites now takes kind, name and domain. WordPress keeps its provisioning and derives the admin email from the authenticated user; static sites get a dedicated nginx container, volume, seeded HTML/CSS/JS and no database or password. The domain must belong to the tenant site suffix. The primary route is published through the domains file provider when available, with Traefik labels as fallback. Adds hosting_sites.kind, WordPress-only guards, static deletion and the filemanager root for /usr/share/nginx/html.
+
+Also skips proxy YAML backups on non-local transports so deleting a site over SSH cannot try to write a local path on the remote host.
+
+1b4ccf5f6c13d2345b75b36d32b7858b94f8e082 | 2026-10-25T22:13:01-05:00 | Systutor Dev | docs(aspecs): record 0031 implementation commit
+Mark A.SPEC 0031 done and point traceability at 6d2b01f.
+
+890ad970a7703be8768d9f79ffdc86f8574ba91c | 2026-10-25T22:18:19-05:00 | Systutor Dev | feat(hosting): add create-site UI with kind and domain check
+The Hosting dialog is now Crear sitio with exactly type, name and domain. The domain is checked against the tenant suffix with a debounce and shows the backend reason; create stays disabled until it is available. WordPress keeps the one-time password dialog, static sites show their URL. Cards and the detail view expose the kind, and static sites hide users, config, database, salts and phpMyAdmin while keeping logs, lifecycle, filemanager and delete.
+
+673bb544d577814b2c0b71e0bfec676371688ed7 | 2026-10-25T22:18:32-05:00 | Systutor Dev | docs(aspecs): record 0032 implementation commit
+Mark A.SPEC 0032 done and point traceability at 890ad97.
+
+e2c647fe8735286fb0425dc962a58057ea164492 | 2026-10-25T22:51:18-05:00 | Systutor Dev | fix(filemanager): browse static sites through a helper container
+Static sites run nginx:alpine, which has neither PHP nor the www-data user, so the filemanager's docker exec failed with a generic 502. FileTarget now reports whether the container has PHP; static targets run the same fixed script inside a disposable wordpress:cli container that mounts the site volume with --volumes-from. The helper image is configurable with SPANEL_FILEMANAGER_HELPER_IMAGE and defaults to wordpress:cli.
+
+b8b0f9916465a2b3aa423559634702f21891a6ed | 2026-10-25T22:51:35-05:00 | Systutor Dev | docs: document static hosting, domains and the filemanager helper
+The README still described only WordPress sites. It now covers the static kind, the domains plugin ownership model and endpoints, the helper image for static filemanager access, the new environment variables and the real test commands.
+
+b29b0bbf7561caade08b323bbece34428d44a92b | 2026-10-25T23:48:40-05:00 | Systutor Dev | feat(hosting): add operator CLI to set a site primary domain
+
+6ff0133f678d3cf5b87760813f0411f24ddd9419 | 2026-10-25T23:53:26-05:00 | Systutor Dev | feat(hosting): reconcile running sites with their primary domains
+
+4edb748ef3a600eda25ad7df97e79dd4d97916c6 | 2026-10-26T00:00:05-05:00 | Systutor Dev | feat(hosting): discover sites from docker ps instead of a fixed manifest
+
+27182b9df09488b000d6f7bc2aacc65252243908 | 2026-10-26T00:28:12-05:00 | Systutor Dev | fix(domains): do not flag a static site's own published primary as a conflict
+
+f102784da627a8fc7b7b8ca5d67fe478bf2c0b19 | 2026-10-26T01:13:08-05:00 | Systutor Dev | feat(hosting): serve every site database from one phpMyAdmin (A.SPEC 0033)
+
+3c2a6bcae4da63d498c4e219c6dae8dcf998ab7e | 2026-10-26T01:13:15-05:00 | Systutor Dev | docs(aspecs): record 0033 implementation commit
+
+e6762d1b8244a58e83626e0f5c2bc030a7b17f9d | 2026-10-26T10:13:32-05:00 | Systutor Dev | fix(hosting): resolve database host aliases to their container (A.SPEC 0034)
+
+26cd3394510ba1952fe315c43b0390fe9810061f | 2026-10-26T10:13:32-05:00 | Systutor Dev | docs(aspecs): record 0034 implementation commit
+
+e599be5ea089d2d62da3a3569ef211eddb68df73 | 2026-10-27T22:19:19-05:00 | Systutor Dev | feat(mail-cert): read-only audit base and A.SPEC 0035 draft
+
+c49d8df86f09b4c73b12f7dda6adb72257598e9d | 2026-10-27T22:39:21-05:00 | Systutor Dev | feat(domains): mail TLS certificate manager with privileged agent (A.SPEC 0035)
+
+779c65c0eafeac1600bbc781220da0ec86b88b72 | 2026-10-27T23:00:58-05:00 | Systutor Dev | feat(cert-agent): continuous verification, transactional install and alerts (A.SPEC 0036)
+
+ffb8683c7e3604b77b96c169a4e1b0e9f7289de6 | 2026-10-27T23:01:15-05:00 | Systutor Dev | docs(aspecs): record 0035 and 0036 implementation commits
+
+19f974e526ca550c8c09dae1a163bfeb73cea17a | 2026-10-27T23:24:51-05:00 | Systutor Dev | refactor(domains): manage mail TLS certificates from Domains, not Hosting
+
+902a996acfa27a0aa1d61fa21acf7ffc4f8f7b20 | 2026-10-28T00:31:25-05:00 | Systutor Dev | refactor(domains): nested certificate detail on double click and split dialog
+
+1ac0d753fb557303ea9e4ac480ec8f319066ad56 | 2026-10-28T00:35:01-05:00 | Systutor Dev | fix(domains): honor agent interval for staleness and show cf-mail health
+
+3ee22ac3da2bd0bbd258ae4ac5f03dc77c4c18fa | 2026-10-28T00:37:36-05:00 | Systutor Dev | fix(domains): scope certificate modal to the tenant's listed domains
+
+222e0a4774632413be2ed52f0f19997e09ea07ae | 2026-10-28T01:01:02-05:00 | Systutor Dev | refactor(mail): move mail TLS manager to mail plugin and add platform scope=all read views
+
+c1c98be620f549d3463aec44fbb99348997022d9 | 2026-10-28T10:53:29-05:00 | Systutor Dev | feat(tenant): explicit domain ownership and account unification (A.SPEC 0037)
+Add tenant_domains as the explicit ownership table (primary stays in tenants.domain, secondaries live here), consume it from domains, hosting and mail, and expose managed-domain CRUD in the tenant module.
+
+Include unify_tenants.py with dry-run/apply/rollback/purge and sync_tenant_domains.py to remove redundant primary rows idempotently. Restore the tenant modal primary/suffix editor and enforce that a primary cannot be added as a secondary.
+
+5fc080f091a1d2b8531c843cada7de7bc4489a07 | 2026-10-28T11:27:25-05:00 | Systutor Dev | fix(cert-agent): mount certificate state into the app container
+
+0818341f7704356a429f016f11a624fc08473348 | 2026-10-28T11:34:09-05:00 | Systutor Dev | feat(cert-agent): add server-agnostic installer and health check
+Generate systemd units from the real repo/python/config paths, discover Certbot lineages and webroot, keep the default certificate optional, and add --check/--check --json to report whether the agent is installed and publishing fresh state.
+
+d387e0b800b00db483c026b348b8943e63b7f6fb | 2026-10-28T11:41:40-05:00 | Systutor Dev | fix(cert-agent): validate fullchain intermediates with openssl -untrusted
+
+756020b7d3cb4ea53b324822c73730f4ddf7aa1b | 2026-10-28T11:44:26-05:00 | Systutor Dev | fix(cert-agent): do not attempt alert delivery without a channel
+
+8e7eb0db5d54ecc700e54edae678f4f4677acde3 | 2026-10-28T11:51:18-05:00 | Systutor Dev | fix(cert-agent): read the full SMTP banner before STARTTLS
+
+04d742b58df75c8754ccd0119b234cee2c9ca4ad | 2026-10-28T11:53:21-05:00 | Systutor Dev | fix(cert-agent): parse multiline SMTP replies across recv chunks
+
+d27942be30f581f245afbda96d2d41a29ea2b13f | 2026-10-28T11:56:10-05:00 | Systutor Dev | chore(mail): remove certificates dialog helper note
+
+ed2133a447f08d906bba338a462f41da8cf38f57 | 2026-10-28T11:56:44-05:00 | Systutor Dev | chore(ui): remove login and domains helper copy
+
+36c008088b7825972e2edf24833f40e8acdc9cfb | 2026-10-28T12:10:11-05:00 | Systutor Dev | feat(mail): serve mail accounts instantly with stale-while-revalidate
+- cache entry stores stored_at; expired entries are served while a single
+  background refresh runs (MAIL_ACCOUNTS_CACHE_SWR / _STALE_TTL)
+- creating a mailbox updates the cached list instead of dropping it
+- persist the last response per tenant in sessionStorage and use it as
+  initialData, so reloads paint before the request resolves
+- clarify extra-domain copy: the domain is published on the selected site
+
+8511cafb4979e96718a07cecffb36d99109ab0a6 | 2026-10-28T12:15:30-05:00 | Systutor Dev | perf(mail): read mailbox list from DMS accounts file
+DMS `setup email list` runs doveadm quota get and greps aliases for every
+mailbox, so listing N accounts costs O(N) subprocesses. Read
+/tmp/docker-mailserver/postfix-accounts.cf with a single cat instead and take
+only the email column.
+
+MAIL_ACCOUNTS_SOURCE=auto (default) falls back to the old command when the
+file is unavailable; use 'setup' for ACCOUNT_PROVISIONER=LDAP.
+
+5ebbba8368f27f7f6d33b298b9d4f51fe9f2a2ce | 2026-10-28T12:20:37-05:00 | Systutor Dev | docs(mail): record production listing measurement (6592 ms -> 146 ms, 73 mailboxes)
+
+79e3fe563c142b39cd594ee2b2db14fdce5fcc4e | 2026-10-29T01:12:29-05:00 | Systutor Dev | feat: dominios reservables, cert de dominio nuevo y shell sin header
+- domains: alta sin sitio (solo reservar), vínculo posterior y liberación
+  de reservas; nuevo POST /domains/{domain}/link y estado `published` (0040)
+- mail: solicitar el certificado TLS de un `mail.<dominio>` que todavía no
+  está en el inventario, con validación por tenant y aviso de allowlist (0041)
+- install_cert_agent: flag --add-allowlist idempotente que preserva el resto
+  del TOML
+- web: quitar el header de tenant/branch/usuario; el logout queda en el sidebar
+- docs y aspecs 0040/0041; tests de dominio, certificados y hosting
+
+9cc23def6116af3ccc33ea74102031cbc623d521 | 2026-11-06T18:24:04-05:00 | Systutor Dev | spec(0042): perfiles de estáticos; verificación de laboratorio 24/24
+- aspecs/0042-hosting-static-profiles.md: lab evidence (4 perfiles reales,
+  24/24 PASS) + próxima etapa de implementación (M1-M4) + campo command en
+  la tabla de perfiles (perfiles que compilen al arrancar).
+- scripts/spanel_profiles + scripts/spanel-profiles.py: CLI determinista de
+  verificación (up/verify/down/status) — plain(nginx), react(caddy),
+  boot(httpd), astro(Node 24 + Astro 7 build+preview :80); reutiliza el
+  transporte de scripts/spanel_static y delega rutas en proxy_domain.py.
+- scripts/traefik-lab.sh: heal determinista — recreate la CA del lab si su
+  --dns quedó fijo a una IP vieja del dnsmasq (bloqueaba la emisión ACME).
+
+925caffa1e37f3f5c3a799b77100a4136b78e2c3 | 2026-11-06T18:58:36-05:00 | Systutor Dev | feat(hosting): perfiles de sitios estáticos admin-managed (A.SPEC 0042 backend)
+- Tabla hosting_static_profiles + hosting_sites.profile_id (migración 003 con
+  backfill kind=static→nginx y fila builtin nginx, downgrade idempotente).
+- static.py parametrizado por perfil: imagen, web_root, puerto, env, command,
+  health marker|http_200; seed con data-spanel-profile; builtin nginx
+  reproduce el argv de 0031.
+- profiles.py puro: validación de imagen/ruta/puerto/env y resolución de perfil.
+- CRUD de superadmin /static-profiles bajo RBAC hosting.profiles.manage con
+  audit sin valores de env; guards hosting_profile_in_use/builtin/unknown.
+- Selector y gestor de perfiles documentados en la spec (UI + lab evidence).
+
+a9b5cda8bb313e8a25896c74e4f494e8e858bb9d | 2026-11-06T18:58:41-05:00 | Systutor Dev | feat(hosting frontal): selector de perfil en Crear sitio y gestor de perfiles (A.SPEC 0042)
+- Crear sitio: select de perfil llenado por GET /static-profiles cuando
+  kind=static, con detalle del perfil solo lectura; payload con profile.
+- Gestor de perfiles (ProfilesDialog): listado, alta/edición (id readonly tras
+  crear; builtin nginx sin Delete ni rename), delete con confirmación por id.
+- Visibilidad del gestor solo con core.platform.admin AND
+  hosting.profiles.manage (doble-check igual a Eliminar sitio; nunca
+  users.is_superadmin). Badge de perfil en SiteCard; dialogs extraídos para
+  mantener HostingPage <600 líneas.
+
+e013737ff1e6c724182b8e1bafffeeb9cfc9dbdd | 2026-11-06T19:08:25-05:00 | Systutor Dev | feat(hosting frontal): modales instantáneos con toast.promise (A.SPEC 0043)
+- Crear sitio, guardado/eliminación de perfil y start/stop/restart cierran
+  el diálogo en el submit; el POST corre en background dentro de
+  toast.promise (pending → éxito/error, mensaje real del backend en error).
+- CreateSiteDialog además invalida hostingKeys.sites al resolver para que
+  la lista refleje el resultado detrás del usuario.
+- Sin cambios en backend ni contratos; users/roles y Correos intactos.
+
+612fc08656ced7ca658a71cc3ba7617f9187c5bc | 2026-11-06T20:01:39-05:00 | Systutor Dev | feat(scripts): spanel-repair, auto-reparación TLS/rutas agnóstica al server (A.SPEC 0044)
+- Script stdlib-only: check (dry-run por defecto) / --fix / --json con exit
+  0/1/2. Autodetecta container traefik, dynamic config dir, resolvers y
+  dominios publicados; IP pública por socket sin curl ni APIs externas.
+- R1: routers HTTP sin exclusión de /.well-known/acme-challenge → parche
+  atómico con .bak (la causa real del 404 del challenge de core.systutor.com).
+- R2: cert default → DNS público vs IP local; solo reinicia si coincide
+  (cooldown persistido); DNS malo = PENDIENTE, nunca restart.
+- R3: websecure sin tls.certResolver → parche; R4: huérfanos → .orphans/.
+- systemd service+timer 15min (patrón mail-cert) y 23 tests offline.
+
+23fbbd3a778e3610ee8f6ea8376a0e84fa90d8ab | 2026-11-06T20:25:33-05:00 | Systutor Dev | feat(kernel): sincronía de permisos de plugins en boot (A.SPEC 0045)
+- Manifest gana platform_permissions (opcional); hosting la declara con
+  hosting.sites.delete y hosting.profiles.manage.
+- sync_plugin_registry: catálogo de permisos asegurado (ensure_permission
+  idempotente) y platform_permissions asignadas aditivamente a los roles
+  con core.platform.admin (por el JOIN, nunca por is_superadmin o nombre de
+  rol). Audit plugin.permissions.synced solo cuando se añadieron.
+- ensure_seed: la rama de despliegue existente TAMBIÉN llama a
+  sync_plugin_registry — el boot de producción migra los permisos (GAP del
+  generador: sin esto el sync solo corría en el primer boot).
+- plugin.json 'permissions' completo (hosting.profiles.manage) — corrije el
+  drift que rompía test_permission_catalog.
+- 9 tests nuevos offline; suites verdes, los 2 fallos restantes en
+  test_hosting_core_foundation son pre-existentes en HEAD (stache verificado).
+
+7feecc86f36bbfa776006c86bfc74ca3bd676997 | 2026-11-06T22:06:57-05:00 | Systutor Dev | fix(scripts): spanel-repair mapea el dynamic dir del contenedor a su Source en el host
+El dir detectado (Args/traefik.yml del contenedor) es un path INTERNO;
+si hay un mount que lo cubra se usa el Source real (caso real de prod:
+/opt/stacks/traefik/config montado como /config en el container traefik).
++1 test; suite 24 verde.
+
+f103fe08ecfea67427ef3af152647ad61bd86885 | 2026-11-06T22:18:34-05:00 | Systutor Dev | feat(hosting): catálogo default de perfiles — react, boot y astro (A.SPEC 0046)
+- Migración 004: siembra los perfiles validados en el lab de la 0042
+  (react caddy /usr/share/caddy marker, boot httpd htdocs marker,
+  astro node:24 http_200 con command wait-seed + build + preview),
+  INSERT condicional que respeta las filas editadas por el admin.
+- Downgrade con guard: nunca borra un perfil en uso ni el builtin nginx.
+- 4 tests nuevos de migración (212 passing en hosting) y tsc sin cambios.
+
+a6aca1202c336b9b0b163f615ebbca1489687f12 | 2026-11-06T22:22:27-05:00 | Systutor Dev | chore(tenant ui): quitar el informativo de Sufijo de sitios (dominios libres desde la 0040)
+
+5f33e359a3e157eed52c7fae024bc0b92768cc09 | 2026-11-06T23:00:41-05:00 | Systutor Dev | feat(scripts): site_backup — respaldo completo de sitios en .zip (A.SPEC 0047 Fase 1)
+- WP (archivos /var/www/html + mysqldump de la DB detectada del env) y
+  estáticos (solo site/, path por --path > label spanel.profile > catalogo),
+  empaquetados con manifest.json (sha256 por entrada, sin credenciales).
+- Build en tmp + os.replace atómico; self-verify pre-publicación; --verify
+  para re-chequear zips previos; --dry-run; exits 0/1/2.
+- 27 tests offline; ruff limpio. Cutover de tutorabusiness en la mira.
+
+94c2940e22655caf99e7125b662b3c144660082f | 2026-11-06T23:10:57-05:00 | Systutor Dev | fix(scripts): site_backup — tres bugs reales atrapados en el lab del ThinkPad
+- docker cp de /var/www/html se decodificaba como texto (UnicodeDecodeError
+  en WP real): el CLI ahora captura binario y expone stdout_bytes fiel;
+  el tar y el mysqldump viajan sin transcodificación.
+- mariadb:11.7 no trae mysqldump en PATH: fallback a mariadb-dump.
+- el self-verify consideraba corruptos los archivos de 0 bytes legítimos de
+  WP (wp-includes/js/swfobject.js es un stub); ahora solo exige fiel SHA256
+  y size, y no-vacío únicamente para database/backup.sql.
+- 'plain' (alias del prototipo 0042) entra al catálogo de web roots.
+- Validado end-to-end en el ThinkPad: estático (4 files) y WP completo
+  (3949 archivos + SQL 1.3KB, 31MB zip) — VERIFY OK ambos.
+
+d68a1feee0d1043cab1dfedaa0499341f971cfaa | 2026-11-06T23:33:06-05:00 | Systutor Dev | fix(scripts): site_backup respeta mariadb multi-tenant — dump SIEMPRE de una sola DB
+En una DB compartida (un mariadb global con N bases de N tenants/sitios,
+el caso del server de prod), el dump apunta única y exclusivamente a la
+base del sitio (WORDPRESS_DB_NAME); nunca --all-databases/--databases.
+Guard documentado en dump_db + test que afianza el comando emitido.
+
+8aa1393e1cd69088d417881442e1c5ce561ab9a0 | 2026-11-07T00:19:33-05:00 | Systutor Dev | feat(scripts): enlace temporal y restore de backups (A.SPEC 0048)
+
+2005fc3bab2a57593ef59ddcc59a2ffd45b8a743 | 2026-11-07T00:31:24-05:00 | Systutor Dev | feat(hosting): integrar backup import/export backend (A.SPEC 0049)
+
+0910558ce80884323781567c54dc07b5ed967f36 | 2026-11-07T00:33:05-05:00 | Systutor Dev | feat(hosting ui): añadir importar y exportar backups (A.SPEC 0049)
+
+b9df5a275304a37abda706b83347ade9eb7b4500 | 2026-11-07T00:48:21-05:00 | Systutor Dev | docs(docker): documentar transporte local de hosting
+
+e3e5ef4b7b90a9fdf0e65f99b718dca003b38683 | 2026-11-07T00:49:03-05:00 | Systutor Dev | chore(git): ignorar volcados locales de Redis
+
+1b30e7cf32ca2d365620566a4c77af08abbc17b3 | 2026-11-07T01:29:08-05:00 | Systutor Dev | fix(hosting): export backups from WordPress hosts declared as host:port
+WORDPRESS_DB_HOST often includes a port (db:3306), but docker exec needs
+the container name only, so exports failed with the generic 'No se pudo
+generar el respaldo'. Strip the port when deriving the DB container and
+log the script's return code/stdout/stderr so future UI failures are
+diagnosable in the app logs.
+
+d1df8673784b133dd21671d0a0c569e4bf3798b7 | 2026-11-07T01:32:38-05:00 | Systutor Dev | fix(hosting): include export failure details in the log message
+JsonFormatter only emits whitelisted record attributes, so extra= was
+silently dropped. Format the container, return code and script output
+into the message itself.
+
+ac367f304f5b10deb7d1c68cce12d0e6b4e3091d | 2026-11-07T01:42:09-05:00 | Systutor Dev | fix(hosting): resolve WordPress DB for backups from env, wp-config or alias
+Sites deployed outside the panel (systutor, infra) declare their DB only
+in wp-config.php, so the backup script missed it and used the nginx
+default path. Reuse the panel's resolver (environment first, wp-config
+second, network alias last) and pass kind/path/DB to the script. The
+password travels in the child environment, not in argv.
+
+fee2afa21a99c7948c7a998a170c52b13007e15a | 2026-11-07T01:48:34-05:00 | Systutor Dev | fix(hosting): stage backup zips on the output filesystem
+The zip was built under /tmp and published with os.replace into the
+hosting-backups volume. When they are different devices, os.replace
+fails with EXDEV (Invalid cross-device link). Stage inside the output
+directory so the final move stays atomic on one filesystem.
+
+b0b5f3784b5eed4294e986f9a7f5f7417bf7e77b | 2026-11-07T01:59:31-05:00 | Systutor Dev | fix(hosting): use the site's own DB credentials before the container fallback
+On a shared MariaDB the container's MARIADB_USER may be a different user
+without grants on the site database, and the old command always chose it
+first. Run SQL with the credentials from wp-config/env, and only retry
+with MARIADB_* after an authentication failure (1045), never for a
+failing statement.
+
+5daf856950b1740344b261e3527b322046874a1d | 2026-11-07T13:52:49-05:00 | Systutor Dev | feat(hosting): add safe logical and WordPress teardown scripts
+
+bb115d811cf55a28d031bb074b070635cb91c565 | 2026-11-07T14:00:22-05:00 | Systutor Dev | feat(hosting): allow logical down with retained labels
+
+1c98cc991a2ec5481e0fc8d633c1fe96ad5ce072 | 2026-11-07T14:04:41-05:00 | Systutor Dev | fix(hosting): import site operation API
+
+1feac074943f53ff6508f67d32b222df4e72fe12 | 2026-11-07T22:16:08-05:00 | Systutor Dev | feat(filemanager): add synchronous batch delete (A.SPEC 0050)
+
+1e80bc4b9c31c632fb30e21f9fe68db5a910233e | 2026-11-08T00:03:45-05:00 | Systutor Dev | docs(aspec): record batch delete benchmarks
+
+c21f4a551ddfd00d2e79760e1942d944f78354b8 | 2026-11-08T00:03:48-05:00 | Systutor Dev | fix(hosting): restore generated backup archives
+
+c1f753965aa0bff03853b7de110cf4436e5f9e15 | 2026-11-08T16:17:21-05:00 | Systutor Dev | feat(apps): add generic compose audit deployer
+
+535f612e84e31a2302c4c249f76066392238519f | 2026-11-08T19:01:05-05:00 | Systutor Dev | refactor(apps): extract shared compose runtime (A.SPEC 0052A)
+
+a4cbe082c6b1d4b63e870042538b4e96ee3a1dca | 2026-11-08T22:06:32-05:00 | Systutor Dev | feat(apps): add async oauth deployment backend (A.SPEC 0052B)
+
+66ce34f4f70f3b7116ab478faf47b8953fafe513 | 2026-11-08T22:16:34-05:00 | Systutor Dev | feat(apps ui): add async github deployment flow (A.SPEC 0052C)
+
+5a2cb85e135c816d8768ebbec9cad8ea84134778 | 2026-11-09T02:05:12-05:00 | Systutor Dev | fix(apps): stabilize plugin loading and readiness (A.SPEC 0053A)
+
+038d566417d33deb9c038626ba1c7f4778cf0ae4 | 2026-11-09T02:14:15-05:00 | Systutor Dev | feat(apps): register github app providers from manifests (A.SPEC 0053B)
+
+89e069e808fc69d52c692c1482949ff50fa127d0 | 2026-11-09T02:15:40-05:00 | Systutor Dev | feat(apps): deploy through github installations (A.SPEC 0053C)
+
+3fbc88d7464ff8d63b6897635196c4e6241d22ef | 2026-11-09T02:21:04-05:00 | Systutor Dev | feat(apps ui): add manifest setup and api cli (A.SPEC 0053D)
+
+254d166035d43473f7e352731b56b352540dd385 | 2026-11-09T02:27:29-05:00 | Systutor Dev | test(apps): retire oauth and prove manifest deployments (A.SPEC 0053E)
+
+677b65bb2a35bd3d93ae96b4bdc4884dbcc62dc1 | 2026-11-09T02:53:17-05:00 | Systutor Dev | feat(apps): add deployment configurator (A.SPEC 0054)
+
+3f60307e5545c4f08d3644674116ccd55fd81a9f | 2026-11-09T03:06:22-05:00 | Systutor Dev | fix(apps): omit invalid webhook manifest attributes
+
+c3bc215f4e3d4230db9912eee33b0479116af57d | 2026-11-09T03:11:48-05:00 | Systutor Dev | style(apps ui): remove persistent security notice
+
+fd552549458868deb1c55a6178d9b5ea41357534 | 2026-11-09T03:16:50-05:00 | Systutor Dev | style(apps ui): keep operations out of root page
+
+5222c76a523581dd4982511bc4dfc8d1ec124118 | 2026-11-09T03:21:53-05:00 | Systutor Dev | fix(apps): install git in worker image
+
+54f23e0a5c61dd770510a9f223493172c5fabcc7 | 2026-11-09T03:31:52-05:00 | Systutor Dev | fix(apps): persist and display successful inspections
+
+6b506dd8c2d85e4453b28219f68f7a6d0845ace7 | 2026-11-09T13:02:08-05:00 | Systutor Dev | feat(domains): support same-origin path routes
+
+939565b050eedc26a5c97062f4e18b99b3db4d93 | 2026-11-09T13:14:23-05:00 | Systutor Dev | fix(apps): log worker operation failures
+
+52f1bfb214376ee5f45f2648af9e38abb61cec8d | 2026-11-09T13:21:09-05:00 | Systutor Dev | fix(apps): expose safe deployment failures
+
+ea3ce66c03de127981e31126ff4e7cd524ded5b5 | 2026-11-09T14:02:55-05:00 | Systutor Dev | fix(apps): install Docker Compose in worker image
+
+d007b114824d047f1be8658807dd0baf6b536f62 | 2026-11-09T14:18:52-05:00 | Systutor Dev | feat(apps ui): accept dotenv text for deployments
+
+ce1ea436502c32c28f00691d472ab05826f24f45 | 2026-11-09T14:53:18-05:00 | Systutor Dev | feat(apps): manage universal database credentials
+
+d6e65856e30c69c29a3b595cb3e95efb2fd9df94 | 2026-11-09T14:59:05-05:00 | Systutor Dev | feat(apps ui): show operation acceptance toasts
+
+716ae259b3f4cac8076cdb4ee92bcebeb1441aeb | 2026-11-09T17:29:30-05:00 | Systutor Dev | feat(apps): add deployment diagnostics and service cards
+
+51918433f66a0c9d76cd040f524256255013e9c6 | 2026-11-09T17:36:50-05:00 | Systutor Dev | fix(apps): persist runtime releases in shared state
+
+5e2e350dc56416189a3be41ba97a64c154a0411b | 2026-11-09T17:45:36-05:00 | Systutor Dev | fix(apps): persist compose candidates from inspection
+
+4df405f2785d95d1352bc0c46a3ccfd879dd99df | 2026-11-09T17:50:59-05:00 | Systutor Dev | fix(apps): label implicit compose networks
+
+5a3bc98934633491e07b9335240a7d576a3e9db5 | 2026-11-09T18:00:30-05:00 | Systutor Dev | fix(apps): detect escaped compose env warnings
+
+375f479635a355c29133066bee17e031c97e5394 | 2026-11-09T18:08:14-05:00 | Systutor Dev | test(apps): add real editors deployment e2e
+
+f7668c152be5b0bf87452770f918ba9214ee3134 | 2026-11-09T18:12:06-05:00 | Systutor Dev | fix(apps): read container ownership labels correctly
+
+88c7a15008a084e45179f46d75a288842530c46d | 2026-11-09T18:22:02-05:00 | Systutor Dev | test(apps): add black-box API deployment e2e
+
+d57570158eb287eb8da2d955f20875ebc4e76946 | 2026-11-09T18:23:30-05:00 | Systutor Dev | fix(apps e2e): target the panel API origin
+
+258883915e75cde58d42d68d1d394fab21fa9790 | 2026-11-09T18:27:19-05:00 | Systutor Dev | test(apps): allow loopback API e2e targets
+
+2e56526e079737d2323ca42798feadf61ed21054 | 2026-11-09T18:33:55-05:00 | Systutor Dev | fix(apps): keep compose validation output private
+
+a79d1fe22728a289e395ed0e20296c909e6add76 | 2026-11-09T18:51:05-05:00 | Systutor Dev | Fix Traefik lab DNS host permissions
