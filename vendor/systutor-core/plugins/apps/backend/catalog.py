@@ -401,6 +401,18 @@ def application_detail(db: Session, tenant_id: str, application_id: str) -> dict
         sorted((active.manifest or {}).get("containers", {}).keys())
         if active else sorted(report.get("services", [])) if isinstance(report, dict) else []
     )
+    inspected = report.get("service_details", []) if isinstance(report, dict) else []
+    if not inspected and active is not None:
+        inspected = [
+            {
+                "name": item["name"],
+                "build": False,
+                "dockerfile": None,
+                "image": item.get("image"),
+                "compose_user": item.get("user"),
+            }
+            for item in _deployment_view(active)["service_details"]
+        ]
     return {
         "id": app.id, "name": app.name, "slug": app.slug,
         "repository": app.repository, "branch": app.branch,
@@ -414,6 +426,11 @@ def application_detail(db: Session, tenant_id: str, application_id: str) -> dict
         "runtime_project": app.runtime_project,
         "active_deployment": _deployment_view(active) if active else None,
         "services": services,
+        "service_details": inspected,
+        "last_inspect_at": (
+            latest_inspect.finished_at or latest_inspect.created_at
+            if latest_inspect is not None else None
+        ),
         "compose_candidates": (
             report.get("compose_candidates", []) if isinstance(report, dict) else []
         ),
@@ -447,6 +464,32 @@ def _environment_metadata(manifest: dict, service: str) -> list[dict]:
     return result
 
 
+def _release_summary(manifest: dict, deployment_id: str | None = None) -> dict | None:
+    """Safe release metadata for the UI; never environment or key material."""
+
+    release = manifest.get("hardened_release")
+    if not isinstance(release, dict):
+        return None
+    summary = {
+        "deployment_id": deployment_id,
+        "release_id": release.get("release_id"),
+        "operation_id": release.get("operation_id"),
+        "key_id": release.get("key_id"),
+        "commit": release.get("commit"),
+        "repo": release.get("repo"),
+        "branch": release.get("branch"),
+        "artifact_sha256": release.get("artifact_sha256"),
+        "source_tree_sha256": release.get("source_tree_sha256"),
+        "hardened_tree_sha256": release.get("hardened_tree_sha256"),
+        "compose_sha256": release.get("compose_sha256"),
+        "policy_sha256": release.get("policy_sha256"),
+        "gate_sha256": release.get("gate_sha256"),
+        "created_at": release.get("created_at"),
+        "expires_at": release.get("expires_at"),
+    }
+    return {key: value for key, value in summary.items() if value is not None}
+
+
 def _deployment_view(row: Deployment) -> dict:
     manifest = row.manifest or {}
     services = sorted(manifest.get("containers", {}).keys())
@@ -454,6 +497,7 @@ def _deployment_view(row: Deployment) -> dict:
     environments = manifest.get("service_environment", {})
     ports = manifest.get("service_ports", {})
     runtime = manifest.get("service_runtime", {})
+    release = _release_summary(manifest, row.id)
     details = []
     for service in services:
         state = runtime.get(service) if isinstance(runtime, dict) else {}
@@ -470,12 +514,17 @@ def _deployment_view(row: Deployment) -> dict:
             "environment_names": names,
             "environment": _environment_metadata(manifest, service),
             "created_at": state.get("created_at") or row.created_at,
+            **({"user": state["user"]} if state.get("user") else {}),
         })
+    probes = manifest.get("probes")
     return {
         "id": row.id, "status": row.status, "commit": row.commit,
         "tree_hash": row.tree_hash, "compose_file": row.compose_file,
         "ingress_service": row.ingress_service, "ingress_port": row.ingress_port,
         "release": row.release, "public_error": row.public_error,
+        "release_id": release.get("release_id") if release else None,
+        "release_summary": release,
+        "probes": probes if isinstance(probes, dict) else None,
         "services": services,
         "service_details": details,
         "created_at": row.created_at, "finished_at": row.finished_at,

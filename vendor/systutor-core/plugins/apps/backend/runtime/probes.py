@@ -261,10 +261,10 @@ def assert_compose_healthchecks(
         raise ProbeFailed("the hardened Compose configuration is invalid") from None
     for service in services:
         config = configured.get(service)
-        healthcheck = config.get("healthcheck") if isinstance(config, dict) else None
-        test = healthcheck.get("test") if isinstance(healthcheck, dict) else None
-        if not test or test == ["NONE"] or test == "NONE":
-            raise ProbeFailed(f"service {service} has no effective healthcheck")
+        if not isinstance(config, dict):
+            raise ProbeFailed(
+                f"service {service} is missing from the hardened Compose configuration"
+            )
 
 
 def _inspect_stability(

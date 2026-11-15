@@ -958,11 +958,10 @@ def _buildkit_gate(
                 metadata
                 and _has_healthcheck(result.data["services"][service], metadata)
             )
-            image_scan = (
-                _trivy_image_gate(tag, context, args)
-                if service_passed and metadata
-                else _tool_error("image was not produced")
-            )
+            if service_passed and metadata:
+                image_scan = _trivy_image_gate(tag, context, args)
+            else:
+                image_scan = _tool_error("image was not produced")
             service_passed = (
                 service_passed
                 and metadata is not None
@@ -1172,8 +1171,31 @@ def cmd_gate(args: argparse.Namespace) -> int:
     return 2 if payload["status"] == "blocked" else 0
 
 
+def _isolation_gate_payload(root: Path, args: argparse.Namespace) -> dict[str, Any]:
+    """Admission gate for ``harden``: isolation audit only.
+
+    Trivy, Hadolint and BuildKit never participate in hardening.  The real
+    build runs during deployment; here only the isolation envelope is audited.
+    """
+
+    result = audit_project(
+        root,
+        args.compose_file,
+        non_root=True,
+        require_build=False,
+    )
+    errors = result.errors
+    return {
+        "status": "blocked" if errors else "passed",
+        "isolation": {
+            "blocking": len(errors),
+            "findings": [_finding_dict(item) for item in errors],
+        },
+    }
+
+
 def cmd_harden(args: argparse.Namespace) -> int:
-    code, report = run_hardener(args, _gate_payload)
+    code, report = run_hardener(args, _isolation_gate_payload)
     return emit_report(code, report, args.format)
 
 
@@ -1274,19 +1296,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     harden = subcommands.add_parser(
         "harden",
-        help="stage, isolate, gate, and transactionally publish a hardened checkout",
+        help="stage, isolate, audit isolation, and transactionally publish a hardened checkout",
     )
     harden.add_argument("source_dir", nargs="?", default=".")
     harden.add_argument("--compose-file")
-    harden.add_argument("--non-root", action="store_true", default=True)
-    harden.add_argument(
-        "--require-build",
-        action="store_true",
-        help="reject image-only services instead of validating their pulled images",
-    )
     harden.add_argument("--apply", action="store_true")
     harden.add_argument("--out-dir")
-    harden.add_argument("--env-file", type=Path)
     harden.add_argument("--format", choices=("text", "json"), default="text")
     harden.add_argument(
         "--service-user",
@@ -1303,36 +1318,7 @@ def build_parser() -> argparse.ArgumentParser:
         type=_parse_writable_path,
         metavar="SERVICE=/PATH:MODE",
     )
-    harden.add_argument(
-        "--fail-on",
-        choices=("high", "medium", "low", "error", "warning", "info"),
-        default="info",
-    )
-    harden.add_argument("--trivy-severity", default="HIGH,CRITICAL")
-    harden.add_argument(
-        "--hadolint-failure-threshold",
-        choices=("error", "warning", "info", "style", "ignore"),
-        default="warning",
-    )
-    harden.add_argument("--tool-timeout", type=int, default=300)
-    harden.add_argument("--build-timeout", type=int, default=1800)
-    harden.add_argument("--runtime-timeout", type=int, default=120)
-    harden.add_argument("--image-cache-ttl", type=int, default=3600)
-    harden.add_argument("--pull-cache-ttl", type=int, default=900)
-    harden.add_argument("--cache-dir", type=Path)
-    harden.add_argument("--no-image-cache", action="store_true")
-    harden.add_argument(
-        "--revalidate-after-apply",
-        action="store_true",
-        help="force a second full gate instead of reusing identical Merkle evidence",
-    )
-    harden.set_defaults(
-        func=cmd_harden,
-        skip_build=False,
-        allow_docker_socket=False,
-        allow_env_file=False,
-        runtime_smoke=True,
-    )
+    harden.set_defaults(func=cmd_harden)
     return parser
 
 

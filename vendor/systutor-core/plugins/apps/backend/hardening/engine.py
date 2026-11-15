@@ -13,6 +13,18 @@ from typing import Any
 from .contracts import HardenedCandidate, HardeningPolicy, HardeningRejected
 
 MAX_STDOUT = 8 * 1024 * 1024
+_SAFE_HARDENER_ERRORS = frozenset(
+    {
+        "skipped because static checks are blocking",
+        "required executable is unavailable",
+        "image build failed",
+        "image was not produced",
+        "image build could not execute",
+        "external image pull or inspection failed",
+        "external image validation could not execute",
+        "build, image, or runtime validation failed",
+    }
+)
 
 
 def _tree_digest(root: Path) -> str:
@@ -114,7 +126,32 @@ class CommandHardeningEngine:
         if not isinstance(stdout, bytes) or len(stdout) > MAX_STDOUT:
             raise HardeningRejected("Hardener response exceeded the size limit")
         if completed.returncode != 0:
-            raise HardeningRejected("Hardener rejected the application")
+            detail = ""
+            if stdout:
+                try:
+                    payload = json.loads(stdout)
+                except (UnicodeError, json.JSONDecodeError):
+                    payload = None
+                if isinstance(payload, dict):
+                    gate = payload.get("gate")
+                    gate = gate if isinstance(gate, dict) else {}
+                    buildkit = gate.get("buildkit")
+                    buildkit = buildkit if isinstance(buildkit, dict) else {}
+                    candidates = [buildkit.get("error")]
+                    services = buildkit.get("services")
+                    for service in services if isinstance(services, list) else []:
+                        scan = service.get("image_scan") if isinstance(service, dict) else None
+                        if isinstance(scan, dict):
+                            candidates.append(scan.get("error"))
+                    candidates.append(payload.get("error"))
+                    for value in candidates:
+                        if isinstance(value, str) and value in _SAFE_HARDENER_ERRORS:
+                            detail = value
+                            break
+            message = "Hardener rejected the application"
+            if detail:
+                message = f"{message}: {detail}"
+            raise HardeningRejected(message)
         try:
             response = json.loads(stdout)
         except (UnicodeError, json.JSONDecodeError):

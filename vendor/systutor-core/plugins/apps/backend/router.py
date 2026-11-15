@@ -395,7 +395,20 @@ def list_application_releases(
     _user: User = Depends(require_permission("apps.applications.read")),
 ) -> list[dict]:
     app = catalog.get_application(db, context.current_tenant_id, application_id)
-    return list_releases(release_store_root(os.environ), app.tenant_id, app.id)
+    root = release_store_root(os.environ)
+    items = list_releases(root, app.tenant_id, app.id)
+    result = []
+    for item in items:
+        try:
+            release = find_release(root, app.tenant_id, app.id, str(item["release_id"]))
+        except ReleaseRejected:
+            continue
+        result.append({
+            **item,
+            **release_result(release),
+            "policy": release.to_dict()["policy"],
+        })
+    return result
 
 
 def _release(app: Application, operation_id: str):

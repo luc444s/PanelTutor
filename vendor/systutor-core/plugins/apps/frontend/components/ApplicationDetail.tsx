@@ -13,21 +13,71 @@ import {
   appsKeys, getApplication, inspectApplication, listOperations, newIdempotencyKey,
   runApplicationAction, runServiceAction,
 } from "../api";
-import { actionAllowed, hasBlockingFindings } from "../logic";
-import type { AppAction, Application, AuditReport, Finding, OperationSummary } from "../types";
+import { actionAllowed, probeChecksPassed } from "../logic";
+import type {
+  AppAction, Application, AuditReport, DeploymentDetail, Finding,
+  OperationSummary, ProbeEvidence,
+} from "../types";
 import { DeleteDialog } from "./DeleteDialog";
 import { DeployDialog } from "./DeployDialog";
 import { FindingsReport } from "./FindingsReport";
+import { ReleasesPanel } from "./ReleasesPanel";
 import { ServiceCard } from "./ServiceCard";
 import { ServiceDialog } from "./ServiceDialog";
 import { ServiceOperations } from "./ServiceOperations";
 import { SourceDialog } from "./SourceDialog";
 import { StatusIndicator } from "./StatusIndicator";
 
-type Tab = "overview" | "audit" | "deployments" | "operations";
+type Tab = "overview" | "audit" | "deployments" | "releases" | "operations";
 const ACTIONS: Array<[AppAction, string]> = [
   ["refresh", "Refresh all"], ["down", "Down"],
 ];
+
+function ProbesSummary({ probes }: { probes: ProbeEvidence | null }) {
+  const t = useT();
+  if (!probes) return null;
+  const functional = probes.functional?.checks ?? [];
+  const restartCounts = Object.entries(probes.stability?.restart_counts ?? {});
+  const green = probeChecksPassed(probes);
+  return <div className="text-xs text-muted-foreground">
+    <span className={green ? "text-green-600" : "text-destructive"}>
+      {green ? t("Probes green") : t("Probes not green")}
+    </span>
+    {" · "}
+    {t("Functional checks: {value}", { value: String(functional.length) })}
+    {" · "}
+    {t("Restarts: {value}", {
+      value: restartCounts.map(([name, count]) => `${name}=${count}`).join(", ") || "—",
+    })}
+  </div>;
+}
+
+function DeploymentCard({ deployment }: { deployment: DeploymentDetail }) {
+  const t = useT();
+  const summary = deployment.release_summary;
+  return <div className="space-y-2 rounded border border-border p-3 text-sm">
+    <div className="flex flex-wrap items-center gap-2">
+      <strong>{deployment.status}</strong>
+      <span>{t("commit")} <code>{deployment.commit ?? "—"}</code></span>
+      {deployment.release_id ? <span className="font-mono text-xs">{deployment.release_id}</span> : null}
+    </div>
+    <div className="text-muted-foreground">
+      {t("Services: {value}", { value: deployment.services.join(", ") || "—" })}
+    </div>
+    {summary ? <>
+      <dl className="grid gap-1 text-xs sm:grid-cols-2">
+        <div><dt className="text-muted-foreground">{t("Key")}</dt><dd className="font-mono">{summary.key_id ?? "—"}</dd></div>
+        <div><dt className="text-muted-foreground">{t("Expires")}</dt><dd>{summary.expires_at ? new Date(summary.expires_at).toLocaleString() : "—"}</dd></div>
+        <div className="sm:col-span-2"><dt className="text-muted-foreground">{t("Artifact hash")}</dt><dd className="break-all font-mono">{summary.artifact_sha256 ?? "—"}</dd></div>
+        <div className="sm:col-span-2"><dt className="text-muted-foreground">{t("Compose hash")}</dt><dd className="break-all font-mono">{summary.compose_sha256 ?? "—"}</dd></div>
+        <div className="sm:col-span-2"><dt className="text-muted-foreground">{t("Tree hash")}</dt><dd className="break-all font-mono">{summary.hardened_tree_sha256 ?? "—"}</dd></div>
+        <div className="sm:col-span-2"><dt className="text-muted-foreground">{t("Gate hash")}</dt><dd className="break-all font-mono">{summary.gate_sha256 ?? "—"}</dd></div>
+      </dl>
+      <ProbesSummary probes={deployment.probes} />
+    </> : <p className="text-xs text-muted-foreground">{t("This deployment has no signed release metadata.")}</p>}
+    {deployment.public_error ? <p className="text-xs text-destructive">{deployment.public_error}</p> : null}
+  </div>;
+}
 
 export function ApplicationDetail({ application, canCreate, canManage, canManageDomains,
   canReadDomains, canReveal, canDeploy, canDelete, onClose, onAccepted }: {
@@ -84,9 +134,12 @@ export function ApplicationDetail({ application, canCreate, canManage, canManage
   const operationFindings = Array.isArray(report.findings) ? report.findings : null;
   const findings = (operationFindings ?? detail.data?.findings ?? []) as Finding[];
   const hasAuditReport = Boolean(auditOperation);
-  const blocked = Boolean(report.blocking) || hasBlockingFindings(findings);
   const sourceConnected = (current?.source_status ?? "source_reconnect_required") === "connected";
+  // The hardening gate is the admission authority. A previous audit with
+  // errors is informational and never blocks an otherwise valid deploy.
+  const blocked = !sourceConnected;
   const activeDeployment = detail.data?.active_deployment ?? null;
+  const inspectedServices = detail.data?.service_details ?? [];
   const services = activeDeployment?.service_details ?? [];
   const selectedService = services.find((service) => service.name === serviceName) ?? null;
   const routes = routesQuery.data?.items ?? [];
@@ -158,9 +211,24 @@ export function ApplicationDetail({ application, canCreate, canManage, canManage
       value: "deployments" as const,
       label: t("Deployments"),
       content: <div className="space-y-2">
-        {(detail.data?.deployments ?? []).map((deployment) => <div key={deployment.id} className="rounded border border-border p-3 text-sm"><strong>{deployment.status}</strong> · {t("commit")} <code>{deployment.commit ?? "—"}</code><br /><span className="text-muted-foreground">{t("Services: {value}", { value: deployment.services.join(", ") || "—" })}</span>{deployment.public_error ? <p>{deployment.public_error}</p> : null}</div>)}
+        <Alert title={t("Isolation-only admission")}>
+          {t("The app's internal security is the app owner's responsibility; the platform guarantees isolation, signature and probes.")}
+        </Alert>
+        {(detail.data?.deployments ?? []).map((deployment) =>
+          <DeploymentCard key={deployment.id} deployment={deployment} />)}
         {(detail.data?.deployments ?? []).length === 0 ? <p className="text-sm text-muted-foreground">{t("No deployments.")}</p> : null}
       </div>,
+    },
+    {
+      value: "releases" as const,
+      label: t("Releases"),
+      content: <ReleasesPanel
+        applicationId={application.id}
+        canDeploy={canDeploy}
+        pending={pending || busy}
+        deployments={detail.data?.deployments ?? []}
+        activeDeploymentId={activeDeployment?.id ?? null}
+        onAccepted={onAccepted} />,
     },
     {
       value: "operations" as const,
@@ -203,7 +271,7 @@ export function ApplicationDetail({ application, canCreate, canManage, canManage
       onClose={() => setServiceName(null)}
       onAction={(action) => void accept(() =>
         runServiceAction(application.id, selectedService.name, action, newIdempotencyKey()))} /> : null}
-    <DeployDialog application={current} open={deployOpen} blocked={blocked} onClose={() => setDeployOpen(false)} onAccepted={(operation) => { setDeployOpen(false); onAccepted(operation); }} />
+    <DeployDialog application={current} services={inspectedServices} open={deployOpen} blocked={blocked} onClose={() => setDeployOpen(false)} onAccepted={(operation) => { setDeployOpen(false); onAccepted(operation); }} />
     <DeleteDialog application={current} open={deleteOpen} onClose={() => setDeleteOpen(false)} onAccepted={(operation) => { setDeleteOpen(false); onAccepted(operation); }} />
     <SourceDialog application={current} open={sourceOpen} onClose={() => setSourceOpen(false)} />
   </>;

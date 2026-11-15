@@ -325,3 +325,80 @@ def test_gate_skips_build_when_hadolint_blocks(tmp_path: Path) -> None:
     assert payload["hadolint"]["blocking"] == 1
     assert payload["buildkit"]["attempted"] is False
     assert not calls.exists()
+
+
+def test_harden_is_isolation_only_and_never_runs_trivy_hadolint_or_buildkit(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "checkout"
+    root.mkdir()
+    (root / "Dockerfile").write_text(
+        "FROM python:3.12-slim\nUSER 10001:10001\n"
+        "HEALTHCHECK CMD python -V || exit 1\nCMD [\"python\", \"-V\"]\n",
+        encoding="utf-8",
+    )
+    (root / "compose.yml").write_text(
+        "services:\n"
+        "  web:\n"
+        "    build: .\n"
+        '    user: "10001:10001"\n',
+        encoding="utf-8",
+    )
+    tools = tmp_path / "bin"
+    tools.mkdir()
+    markers = tmp_path / "invoked"
+    for name in ("trivy", "hadolint", "docker"):
+        fake_tool(tools, name, f"echo {name} >> {markers}; exit 1")
+    env = {**os.environ, "PATH": f"{tools}:{os.environ.get('PATH', '')}"}
+    result = run(
+        "harden",
+        root,
+        "--apply",
+        "--compose-file",
+        "compose.yml",
+        "--format",
+        "json",
+        "--service-user",
+        "web=10001:10001",
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "applied"
+    assert payload["gate"]["isolation"]["blocking"] == 0
+    assert "trivy" not in payload["gate"]
+    assert "hadolint" not in payload["gate"]
+    assert "buildkit" not in payload["gate"]
+    assert not markers.exists(), "harden must not invoke external scanners or Docker"
+
+
+def test_ephemeral_writable_paths_use_tmpfs_instead_of_volumes() -> None:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from dangerous_build.compose import ServicePolicy, harden_compose
+    from dangerous_build.dockerfile import WritablePath
+
+    data = yaml.safe_load(
+        "services:\n"
+        "  database:\n"
+        "    image: postgres:16-alpine\n"
+        "    volumes:\n"
+        "      - database-data:/var/lib/postgresql/data\n"
+        "volumes:\n"
+        "  database-data:\n"
+    )
+    hardened = yaml.safe_load(
+        harden_compose(
+            yaml.safe_dump(data),
+            {
+                "database": ServicePolicy(
+                    70,
+                    70,
+                    (WritablePath("/var/run/postgresql", "0775"),),
+                )
+            },
+        )
+    )
+    service = hardened["services"]["database"]
+    assert service["volumes"] == ["database-data:/var/lib/postgresql/data"]
+    assert "/var/run/postgresql:rw,noexec,nosuid,nodev,mode=0775,uid=70,gid=70" in service["tmpfs"]
+    assert not any("postgresql" in name for name in hardened.get("volumes", {}))

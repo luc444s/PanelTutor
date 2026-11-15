@@ -1,10 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 
 import {
-  canDeploy, canPlatformMutate, groupedFindings, hasBlockingFindings,
-  isOwnedByTenant, isTerminalOperation, parseDotenv,
+  buildHardeningPolicy, canDeploy, canPlatformMutate, groupedFindings,
+  hasBlockingFindings, isOwnedByTenant, isTerminalOperation, parseDotenv,
+  parseNumericId, policyCoversServices, probeChecksPassed,
+  releaseUsable, serviceUserDrafts, validateWritablePath,
 } from "./logic";
-import type { Finding } from "./types";
+import type { Finding, ProbeEvidence, Release } from "./types";
 
 const finding = (severity: Finding["severity"]): Finding => ({
   severity, code: `test.${severity}`, service: "web", path: "Dockerfile", line: 1,
@@ -65,6 +67,68 @@ EMPTY=
     expect(() => parseDotenv("APP_DB_PASSWORD=manual")).toThrow(
       "Apps manages APP_DB_PASSWORD automatically",
     );
+  });
+
+  it("builds a complete hardening policy with numeric users and safe paths", () => {
+    const drafts = serviceUserDrafts([
+      { name: "web", compose_user: "10001:10002" },
+      { name: "database", compose_user: null },
+    ]);
+    expect(drafts.web).toEqual({ uid: "10001", gid: "10002" });
+    expect(drafts.database).toEqual({ uid: "", gid: "" });
+    const policy = buildHardeningPolicy(
+      ["web", "database"],
+      { ...drafts, database: { uid: "70", gid: "70" } },
+      [{ service: "database", path: "/var/lib/postgresql/data", mode: "0700" }],
+    );
+    expect(policy.service_users).toEqual({
+      web: { uid: 10001, gid: 10002 },
+      database: { uid: 70, gid: 70 },
+    });
+    expect(policyCoversServices(policy, ["web", "database"])).toBe(true);
+    expect(policyCoversServices(policy, ["web"])).toBe(false);
+  });
+
+  it("requires a policy for every inspected service before deploy", () => {
+    expect(() => buildHardeningPolicy([], {}, [])).toThrow("inspection");
+    expect(() => buildHardeningPolicy(
+      ["web"], { web: { uid: "10001", gid: "" } }, [],
+    )).toThrow("UID and GID");
+  });
+
+  it("rejects root ids, non-normalized paths and insecure modes", () => {
+    expect(() => parseNumericId("0")).toThrow("positive numeric");
+    expect(parseNumericId("10001")).toBe(10001);
+    expect(() => validateWritablePath("app/data", "0700")).toThrow("absolute");
+    expect(() => validateWritablePath("/app/../root", "0700")).toThrow("normalized");
+    expect(() => validateWritablePath("/app/data", "777")).toThrow("four octal");
+    expect(() => validateWritablePath("/app/data", "0777")).toThrow("world-writable");
+    expect(validateWritablePath("/app/data", "0750")).toEqual({
+      path: "/app/data", mode: "0750",
+    });
+  });
+
+  it("never treats an expired release as usable", () => {
+    const release = {
+      expires_at: "2026-01-01T00:00:00+00:00",
+    } as Release;
+    expect(releaseUsable(release, Date.parse("2025-12-31T23:59:59Z"))).toBe(true);
+    expect(releaseUsable(release, Date.parse("2026-01-02T00:00:00Z"))).toBe(false);
+  });
+
+  it("requires every probe family to be green", () => {
+    const probes: ProbeEvidence = {
+      isolation: { web: { processes: 2, user: "10001:10002" } },
+      functional: { checks: [{ returncode: 0, bytes: 42 }] },
+      stability: { checks: 3, restart_counts: { web: 0 } },
+    };
+    expect(probeChecksPassed(probes)).toBe(true);
+    expect(probeChecksPassed({ ...probes, stability: { checks: 3, restart_counts: { web: 1 } } }))
+      .toBe(false);
+    expect(probeChecksPassed({ ...probes, isolation: { web: { processes: 0 } } }))
+      .toBe(false);
+    expect(probeChecksPassed({ ...probes, functional: { checks: [] } })).toBe(false);
+    expect(probeChecksPassed(null)).toBe(false);
   });
 
 

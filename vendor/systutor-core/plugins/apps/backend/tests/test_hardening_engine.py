@@ -66,6 +66,38 @@ def test_request_schema_is_bounded_and_builds_the_immutable_policy() -> None:
         })
 
 
+def test_policy_is_isolation_only_and_rejects_gate_fields() -> None:
+    legacy = policy().as_dict()
+    assert set(legacy) == {"service_users", "writable_paths"}
+    assert HardeningPolicy.from_dict(legacy).as_dict() == legacy
+    with pytest.raises(ValueError, match="policy is invalid"):
+        HardeningPolicy.from_dict({**legacy, "gate": {"skip_trivy": True}})
+    with pytest.raises(ValueError):
+        HardeningRequest.model_validate({
+            "service_users": {"web": {"uid": 10001, "gid": 10002}},
+            "writable_paths": [],
+            "gate": {"skip_trivy": True},
+        })
+
+
+def test_command_engine_never_adds_gate_flags(tmp_path: Path) -> None:
+    checkout = tmp_path / "checkout"
+    checkout.mkdir()
+    (checkout / "compose.yml").write_text("services: {web: {}}", encoding="utf-8")
+    captured: dict[str, list[str]] = {}
+
+    def runner(argv, **kwargs):
+        captured["argv"] = argv
+        return SimpleNamespace(
+            returncode=0, stdout=json.dumps(applied()).encode(), stderr=b""
+        )
+
+    CommandHardeningEngine("/opt/hardener", runner=runner).prepare(
+        checkout, "compose.yml", policy()
+    )
+    assert not [item for item in captured["argv"] if item.startswith("--skip")]
+
+
 def test_command_engine_uses_argv_scrubs_credentials_and_sanitizes_result(tmp_path: Path) -> None:
     checkout = tmp_path / "checkout"
     checkout.mkdir()

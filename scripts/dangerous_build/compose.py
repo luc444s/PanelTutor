@@ -131,7 +131,8 @@ def harden_compose(text: str, policies: dict[str, ServicePolicy]) -> str:
         config["cap_drop"] = ["ALL"]
         config["security_opt"] = ["no-new-privileges:true"]
         config["read_only"] = True
-        config["tmpfs"] = ["/tmp:rw,noexec,nosuid,nodev"]
+        tmpfs = ["/tmp:rw,noexec,nosuid,nodev"]
+        config["tmpfs"] = tmpfs
         config["init"] = True
         config["pids_limit"] = 256
         config["mem_limit"] = "512m"
@@ -154,6 +155,14 @@ def harden_compose(text: str, policies: dict[str, ServicePolicy]) -> str:
             if not bind:
                 kept.append(volume)
         for item in policy.writable_paths:
+            if item.path == "/tmp":
+                continue
+            if item.path.startswith(("/run/", "/var/run/")):
+                tmpfs.append(
+                    f"{item.path}:rw,noexec,nosuid,nodev,"
+                    f"mode={item.mode},uid={policy.uid},gid={policy.gid}"
+                )
+                continue
             name = _managed_volume(str(service), item.path)
             generated_volumes[name] = {}
             kept.append(f"{name}:{item.path}")

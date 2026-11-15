@@ -124,20 +124,20 @@ def test_functional_probe_is_bounded_and_never_returns_output() -> None:
     assert "--network" in argv and argv[argv.index("--network") + 1] == "proj_default"
 
 
-def test_run_probes_requires_an_effective_healthcheck(tmp_path) -> None:
+def test_run_probes_accepts_image_healthcheck_by_default(tmp_path) -> None:
     runner = FakeRunner(healthcheck=False)
-    with pytest.raises(ProbeFailed, match="healthcheck"):
-        run_probes(
-            runner,
-            release=tmp_path,
-            compose_rel="compose.yml",
-            project="proj",
-            services=["web"],
-            containers={"web": "cid1"},
-            environ=env(),
-            sleep=lambda _seconds: None,
-        )
-    assert not any(call[:2] == ["docker", "run"] for call in runner.calls)
+    evidence = run_probes(
+        runner,
+        release=tmp_path,
+        compose_rel="compose.yml",
+        project="proj",
+        services=["web"],
+        containers={"web": "cid1"},
+        environ=env(),
+        sleep=lambda _seconds: None,
+    )
+    assert evidence["stability"]["restart_counts"] == {"web": 0}
+    assert any(call[:2] == ["docker", "run"] for call in runner.calls)
 
 
 def test_run_probes_requires_zero_restarts(tmp_path) -> None:
@@ -197,3 +197,18 @@ def test_missing_probe_configuration_fails_closed(tmp_path) -> None:
             environ={"SPANEL_APPS_PROBE_IMAGE": IMAGE},
             sleep=lambda _seconds: None,
         )
+
+
+def test_run_probes_accepts_image_healthcheck_without_a_lab_flag(tmp_path) -> None:
+    runner = FakeRunner(healthcheck=False)
+    run_probes(
+        runner,
+        release=tmp_path,
+        compose_rel="compose.yml",
+        project="proj",
+        services=["web"],
+        containers={"web": "cid1"},
+        environ=env(),
+        sleep=lambda _seconds: None,
+    )
+    assert any(call[:2] == ["docker", "run"] for call in runner.calls)

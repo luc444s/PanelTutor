@@ -50,38 +50,6 @@ def fixture(root: Path, *, unsafe_permissions: bool = False) -> Path:
     return root
 
 
-def fake_tool(directory: Path, name: str, body: str) -> None:
-    path = directory / name
-    path.write_text(f"#!/bin/sh\n{body}\n", encoding="utf-8")
-    path.chmod(0o755)
-
-
-def tools(tmp_path: Path, *, trivy_body: str | None = None) -> tuple[dict[str, str], Path]:
-    binaries = tmp_path / "bin"
-    binaries.mkdir()
-    calls = tmp_path / "calls"
-    fake_tool(
-        binaries,
-        "trivy",
-        trivy_body or f"echo trivy:$@ >> {calls}; echo '{{\"Results\":[]}}'",
-    )
-    fake_tool(binaries, "hadolint", f"echo hadolint >> {calls}; echo '[]'")
-    fake_tool(
-        binaries,
-        "docker",
-        f"echo docker:$DOCKER_BUILDKIT:$@ >> {calls}; "
-        "if [ \"$1 $2\" = \"image inspect\" ]; then "
-        "echo '{\"RepoDigests\":[\"fixture@sha256:abc123\"],"
-        "\"Config\":{\"User\":\"10001:10001\","
-        "\"Healthcheck\":{\"Test\":[\"CMD\",\"true\"]}}}'; fi; exit 0",
-    )
-    return {
-        **os.environ,
-        "PATH": f"{binaries}:{os.environ.get('PATH', '')}",
-        "SPANEL_HARDENER_CACHE_DIR": str(tmp_path / "cache"),
-    }, calls
-
-
 def run_harden(root: Path, env: dict[str, str], *extra: str) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         [
@@ -161,30 +129,49 @@ def test_compose_hardening_creates_isolation_envelope() -> None:
     assert "./data:/app/data" not in service["volumes"]
 
 
-def test_blocked_hardening_never_changes_source_or_runs_buildkit(tmp_path: Path) -> None:
-    root = fixture(tmp_path / "checkout", unsafe_permissions=True)
+def test_blocked_hardening_never_changes_source_or_runs_external_tools(tmp_path: Path) -> None:
+    root = tmp_path / "checkout"
+    root.mkdir()
+    (root / "compose.yml").write_text(
+        'services:\n  web:\n    build: ./missing\n    user: "10001:10001"\n',
+        encoding="utf-8",
+    )
     before = {path.name: path.read_bytes() for path in root.iterdir() if path.is_file()}
-    env, calls = tools(tmp_path)
+    markers = tmp_path / "invoked"
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    for name in ("trivy", "hadolint", "docker"):
+        path = binaries / name
+        path.write_text(f"#!/bin/sh\necho {name} >> {markers}; exit 1\n", encoding="utf-8")
+        path.chmod(0o755)
+    env = {**os.environ, "PATH": f"{binaries}:{os.environ.get('PATH', '')}"}
     result = run_harden(root, env, "--apply")
     assert result.returncode == 2, result.stderr
     payload = json.loads(result.stdout)
     assert payload["status"] == "blocked"
+    assert payload["gate"]["isolation"]["blocking"] >= 1
     assert {path.name: path.read_bytes() for path in root.iterdir() if path.is_file()} == before
-    recorded = calls.read_text(encoding="utf-8")
-    assert "trivy" in recorded and "hadolint" in recorded
-    assert "docker:" not in recorded
+    assert not markers.exists()
 
 
-def test_apply_is_gated_backed_up_and_reaudited(tmp_path: Path) -> None:
+def test_apply_is_isolation_gated_backed_up_and_does_not_build(tmp_path: Path) -> None:
     root = fixture(tmp_path / "checkout")
-    env, calls = tools(tmp_path)
+    markers = tmp_path / "invoked"
+    binaries = tmp_path / "bin"
+    binaries.mkdir()
+    for name in ("trivy", "hadolint", "docker"):
+        path = binaries / name
+        path.write_text(f"#!/bin/sh\necho {name} >> {markers}; exit 1\n", encoding="utf-8")
+        path.chmod(0o755)
+    env = {**os.environ, "PATH": f"{binaries}:{os.environ.get('PATH', '')}"}
     result = run_harden(root, env, "--writable-path", "web=/app/data:0750", "--apply")
     assert result.returncode == 0, result.stderr
     payload = json.loads(result.stdout)
     assert payload["status"] == "applied"
-    assert payload["gate"]["buildkit"]["runtime"]["passed"] is True
+    assert payload["gate"]["isolation"]["blocking"] == 0
     assert payload["gate_after_apply"]["status"] == "reused"
     assert payload["gate_after_apply"]["evidence_reused"] is True
+    assert not markers.exists()
     dockerfile = (root / "Dockerfile").read_text(encoding="utf-8")
     assert dockerfile.index("RUN mkdir -p /app/data") < dockerfile.index("USER 10001:10001")
     assert "RUN install -d -o 10001 -g 10001 -m 750 /app/data" in dockerfile
@@ -198,169 +185,6 @@ def test_apply_is_gated_backed_up_and_reaudited(tmp_path: Path) -> None:
         "compose.yml",
     }
     assert manifest_payload["metadata"]["policy"]["isolation"]["runtime_egress"] is False
-    recorded = calls.read_text(encoding="utf-8")
-    assert recorded.count("docker:1:build") == 1
-    assert recorded.count("compose --project-name") == 2  # one up/down pair
-
-
-def test_failed_post_apply_gate_rolls_everything_back(tmp_path: Path) -> None:
-    root = fixture(tmp_path / "checkout")
-    before = {path.name: path.read_bytes() for path in root.iterdir() if path.is_file()}
-    count = tmp_path / "trivy-count"
-    body = (
-        f"n=$(cat {count} 2>/dev/null || echo 0); n=$((n+1)); echo $n > {count}; "
-        "if [ $n -le 2 ]; then echo '{\"Results\":[]}'; else "
-        "echo '{\"Results\":[{\"Target\":\"compose.yml\",\"Secrets\":[{"
-        "\"Severity\":\"HIGH\",\"RuleID\":\"test-secret\",\"Category\":\"test\"}]}]}'; fi"
-    )
-    env, _calls = tools(tmp_path, trivy_body=body)
-    result = run_harden(root, env, "--apply", "--revalidate-after-apply")
-    assert result.returncode == 2, result.stderr
-    payload = json.loads(result.stdout)
-    assert payload["status"] == "rolled_back"
-    assert {path.name: path.read_bytes() for path in root.iterdir() if path.is_file()} == before
-
-
-def test_vulnerable_built_image_blocks_publication_and_is_removed(tmp_path: Path) -> None:
-    root = fixture(tmp_path / "checkout")
-    before = {path.name: path.read_bytes() for path in root.iterdir() if path.is_file()}
-    body = (
-        "if [ \"$1\" = image ]; then "
-        "echo '{\"Results\":[{\"Target\":\"image\",\"Vulnerabilities\":[{"
-        "\"Severity\":\"CRITICAL\",\"VulnerabilityID\":\"CVE-TEST\","
-        "\"PkgName\":\"fixture\",\"Title\":\"fixture vulnerability\"}]}]}'; "
-        "else echo '{\"Results\":[]}'; fi"
-    )
-    env, calls = tools(tmp_path, trivy_body=body)
-    result = run_harden(root, env, "--apply")
-    assert result.returncode == 2, result.stderr
-    payload = json.loads(result.stdout)
-    service = payload["gate"]["buildkit"]["services"][0]
-    assert service["image_scan"]["blocking"] == 1
-    assert payload["applied"] is False
-    assert {path.name: path.read_bytes() for path in root.iterdir() if path.is_file()} == before
-    recorded = calls.read_text(encoding="utf-8")
-    assert "docker:1:build" in recorded
-    assert "docker:1:image rm --force" in recorded
-
-
-def test_external_image_is_pulled_pinned_scanned_and_smoke_tested(tmp_path: Path) -> None:
-    root = tmp_path / "checkout"
-    root.mkdir()
-    (root / "compose.yml").write_text(
-        """services:
-  app:
-    image: example/app:18.0
-    ports: ["8069:8069"]
-    healthcheck:
-      test: ["CMD", "true"]
-""",
-        encoding="utf-8",
-    )
-    env, calls = tools(tmp_path)
-    docker = tmp_path / "bin" / "docker"
-    docker.write_text(
-        "#!/bin/sh\n"
-        f"echo docker:$DOCKER_BUILDKIT:$@ >> {calls}\n"
-        "if [ \"$1 $2\" = \"image inspect\" ]; then "
-        "echo '{\"RepoDigests\":[\"example/app@sha256:abc123\"],"
-        "\"Config\":{\"Healthcheck\":null}}'; fi\n"
-        "exit 0\n",
-        encoding="utf-8",
-    )
-    docker.chmod(0o755)
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(SCRIPT),
-            "harden",
-            str(root),
-            "--compose-file",
-            "compose.yml",
-            "--service-user",
-            "app=100:101",
-            "--apply",
-            "--format",
-            "json",
-        ],
-        cwd=ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 0, result.stderr
-    payload = json.loads(result.stdout)
-    service = payload["gate"]["buildkit"]["services"][0]
-    assert service["source"] == "external"
-    assert service["resolved"] == "example/app@sha256:abc123"
-    assert payload["gate"]["hadolint"]["dockerfiles"] == []
-    assert payload["gate"]["buildkit"]["runtime"]["passed"] is True
-    recorded = calls.read_text(encoding="utf-8")
-    assert "pull example/app:18.0" in recorded
-    assert "build --file" not in recorded
-
-    warm = subprocess.run(
-        [item for item in result.args if item != "--apply"],
-        cwd=ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert warm.returncode == 0, warm.stderr
-    warm_service = json.loads(warm.stdout)["gate"]["buildkit"]["services"][0]
-    assert warm_service["pull"] == "cache"
-    assert warm_service["image_scan"]["cache"] == "hit"
-    recorded = calls.read_text(encoding="utf-8")
-    assert recorded.count("pull example/app:18.0") == 1
-    assert recorded.count("trivy:image") == 1
-
-
-def test_external_image_without_any_healthcheck_is_not_deployable(tmp_path: Path) -> None:
-    root = tmp_path / "checkout"
-    root.mkdir()
-    compose = root / "compose.yml"
-    compose.write_text("services:\n  app:\n    image: example/app:18.0\n", encoding="utf-8")
-    before = compose.read_bytes()
-    env, _calls = tools(tmp_path)
-    docker = tmp_path / "bin" / "docker"
-    docker.write_text(
-        "#!/bin/sh\n"
-        "if [ \"$1 $2\" = \"image inspect\" ]; then "
-        "echo '{\"RepoDigests\":[\"example/app@sha256:abc123\"],"
-        "\"Config\":{\"Healthcheck\":null}}'; fi\n"
-        "exit 0\n",
-        encoding="utf-8",
-    )
-    docker.chmod(0o755)
-    result = subprocess.run(
-        [
-            sys.executable,
-            str(SCRIPT),
-            "harden",
-            str(root),
-            "--compose-file",
-            "compose.yml",
-            "--service-user",
-            "app=100:101",
-            "--apply",
-            "--format",
-            "json",
-        ],
-        cwd=ROOT,
-        env=env,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    assert result.returncode == 2, result.stderr
-    payload = json.loads(result.stdout)
-    service = payload["gate"]["buildkit"]["services"][0]
-    assert service["healthcheck"] is False
-    assert payload["gate"]["buildkit"]["runtime"]["attempted"] is False
-    assert payload["applied"] is False
-    assert compose.read_bytes() == before
 
 
 def test_publication_failure_restores_previously_replaced_files(

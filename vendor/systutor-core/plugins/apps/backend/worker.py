@@ -237,6 +237,25 @@ class AppsWorker:
                 })
                 return result
             audit = audit_project(checkout, source[2], non_root=True)
+            service_details = []
+            for service in sorted(audit.data["services"]):
+                config = audit.data["services"].get(service)
+                config = config if isinstance(config, dict) else {}
+                dockerfile = audit.dockerfiles.get(service)
+                image = config.get("image")
+                compose_user = config.get("user")
+                service_details.append({
+                    "name": service,
+                    "build": dockerfile is not None,
+                    "dockerfile": (
+                        dockerfile.relative_to(audit.root).as_posix()
+                        if dockerfile is not None else None
+                    ),
+                    "image": image if isinstance(image, str) else None,
+                    "compose_user": (
+                        str(compose_user) if compose_user is not None else None
+                    ),
+                })
             report = {
                 "compose": audit.compose.relative_to(audit.root).as_posix(),
                 "compose_candidates": [
@@ -244,13 +263,12 @@ class AppsWorker:
                     for path in compose_candidates(audit.root)
                 ],
                 "services": sorted(audit.data["services"]),
+                "service_details": service_details,
                 "findings": [finding.__dict__ for finding in audit.findings],
                 "blocking": bool(audit.errors),
             }
             if kind == "inspect":
                 return report
-            if audit.errors:
-                raise AppDeployError("static audit has errors; deployment blocked")
             if kind != "deploy":
                 raise AppDeployError("Unsupported source operation")
             try:

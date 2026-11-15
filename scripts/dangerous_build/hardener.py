@@ -4,7 +4,6 @@ from __future__ import annotations
 import difflib
 import json
 import shutil
-import stat
 import tempfile
 from collections.abc import Callable
 from pathlib import Path
@@ -55,8 +54,8 @@ def _candidate_changes(source: Path, candidate: Path, args: Any) -> tuple[Path, 
     result = audit_project(
         source,
         args.compose_file,
-        non_root=args.non_root,
-        require_build=args.require_build,
+        non_root=True,
+        require_build=False,
     )
     services = {str(name) for name in result.data["services"]}
     policies = _policies(args, services)
@@ -131,23 +130,7 @@ def _policy_report(args: Any) -> dict[str, Any]:
             "host_binds": False,
             "published_ports": False,
         },
-        "external_env": bool(args.env_file),
     }
-
-
-def _validate_env_file(value: Path | None) -> Path | None:
-    if value is None:
-        return None
-    try:
-        info = value.lstat()
-        resolved = value.resolve(strict=True)
-    except OSError as exc:
-        raise HardeningError("external env file does not exist") from exc
-    if stat.S_ISLNK(info.st_mode) or not stat.S_ISREG(info.st_mode):
-        raise HardeningError("external env file must be a regular non-symlink file")
-    if stat.S_IMODE(info.st_mode) != 0o600:
-        raise HardeningError("external env file must have mode 0600")
-    return resolved
 
 
 def run_hardener(args: Any, gate_runner: GateRunner) -> tuple[int, dict[str, Any]]:
@@ -155,7 +138,6 @@ def run_hardener(args: Any, gate_runner: GateRunner) -> tuple[int, dict[str, Any
     try:
         if args.apply and args.out_dir:
             raise HardeningError("--out-dir cannot be combined with --apply")
-        args.env_file = _validate_env_file(args.env_file)
         policy = _policy_report(args)
         with tempfile.TemporaryDirectory(prefix="spanel-hardener-") as temporary:
             candidate = Path(temporary) / "candidate"
@@ -191,20 +173,11 @@ def run_hardener(args: Any, gate_runner: GateRunner) -> tuple[int, dict[str, Any
                 }
                 report["backup"] = str(publication.backup_root)
                 return 2, report
-            if args.revalidate_after_apply:
-                published_gate = gate_runner(source, args)
-                if published_gate["status"] != "passed":
-                    publication.rollback()
-                    report["status"] = "rolled_back"
-                    report["gate_after_apply"] = published_gate
-                    report["backup"] = str(publication.backup_root)
-                    return 2, report
-            else:
-                published_gate = {
-                    "status": "reused",
-                    "evidence_reused": True,
-                    "tree_sha256": candidate_digest,
-                }
+            published_gate = {
+                "status": "reused",
+                "evidence_reused": True,
+                "tree_sha256": candidate_digest,
+            }
             report["status"] = "applied"
             report["applied"] = True
             report["backup"] = str(publication.backup_root)

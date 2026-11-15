@@ -1,7 +1,8 @@
 import { t } from "@/i18n";
 
 import type {
-  Application, EnvironmentEntry, Finding, GithubStatus, Operation,
+  Application, EnvironmentEntry, Finding, GithubStatus, HardeningPolicy,
+  HardeningWritablePath, Operation, ProbeEvidence, Release,
 } from "./types";
 
 export const GITHUB_CARD_STATES = [
@@ -149,6 +150,122 @@ export function actionAllowed(application: Application, action: string, busy: bo
   if (action === "start") return application.status !== "running";
   if (action === "stop") return application.status === "running";
   return true;
+}
+
+const NUMERIC_ID = /^[1-9][0-9]{0,9}$/;
+const OCTAL_MODE = /^0[0-7]{3}$/;
+const MANAGED_SERVICE = /^[A-Za-z0-9_.-]{1,128}$/;
+
+export function parseNumericId(value: string): number {
+  const text = value.trim();
+  if (!NUMERIC_ID.test(text)) {
+    throw new Error(t("UID and GID must be positive numeric identifiers"));
+  }
+  const number = Number(text);
+  if (!Number.isSafeInteger(number) || number > 2 ** 31 - 1) {
+    throw new Error(t("UID and GID must be positive numeric identifiers"));
+  }
+  return number;
+}
+
+export function validateWritablePath(path: string, mode: string): { path: string; mode: string } {
+  const value = path.trim();
+  if (!value.startsWith("/") || value === "/" || value.includes("\0") || value.length > 1024) {
+    throw new Error(t("Writable paths must be absolute and normalized"));
+  }
+  const segments = value.split("/");
+  if (segments.some((segment) => segment === ".." || segment === ".") || value.includes("//")) {
+    throw new Error(t("Writable paths must be absolute and normalized"));
+  }
+  const normalized = value.replace(/\/+$/, "") || "/";
+  if (normalized !== value) {
+    throw new Error(t("Writable paths must be absolute and normalized"));
+  }
+  if (!OCTAL_MODE.test(mode)) {
+    throw new Error(t("Mode must be four octal digits"));
+  }
+  if (Number.parseInt(mode, 8) & 0o002) {
+    throw new Error(t("Writable paths cannot be world-writable"));
+  }
+  return { path: value, mode };
+}
+
+export type ServiceUserDraft = { uid: string; gid: string };
+
+export function serviceUserDrafts(
+  services: Array<{ name: string; compose_user: string | null }>,
+): Record<string, ServiceUserDraft> {
+  const result: Record<string, ServiceUserDraft> = {};
+  for (const service of services) {
+    const match = /^([1-9][0-9]{0,9})(?::([1-9][0-9]{0,9}))?$/.exec(service.compose_user ?? "");
+    result[service.name] = match
+      ? { uid: match[1], gid: match[2] ?? match[1] }
+      : { uid: "", gid: "" };
+  }
+  return result;
+}
+
+export function buildHardeningPolicy(
+  services: string[],
+  drafts: Record<string, ServiceUserDraft>,
+  writablePaths: HardeningWritablePath[],
+): HardeningPolicy {
+  if (services.length === 0) {
+    throw new Error(t("Run an inspection before deploying"));
+  }
+  const serviceUsers: HardeningPolicy["service_users"] = {};
+  for (const service of services) {
+    if (!MANAGED_SERVICE.test(service)) {
+      throw new Error(t("Service name is invalid"));
+    }
+    const draft = drafts[service];
+    if (!draft || !draft.uid.trim() || !draft.gid.trim()) {
+      throw new Error(t("Every service requires a UID and GID"));
+    }
+    serviceUsers[service] = {
+      uid: parseNumericId(draft.uid),
+      gid: parseNumericId(draft.gid),
+    };
+  }
+  const known = new Set(services);
+  const paths = writablePaths.map((item) => {
+    if (!known.has(item.service)) {
+      throw new Error(t("Writable path references an unknown service"));
+    }
+    return { service: item.service, ...validateWritablePath(item.path, item.mode) };
+  });
+  return { service_users: serviceUsers, writable_paths: paths };
+}
+
+export function policyCoversServices(policy: HardeningPolicy, services: string[]) {
+  const declared = Object.keys(policy.service_users);
+  if (declared.length !== services.length) return false;
+  return services.every((service) => service in policy.service_users);
+}
+
+export function releaseUsable(release: Pick<Release, "expires_at">, now = Date.now()) {
+  const expires = Date.parse(release.expires_at);
+  return Number.isFinite(expires) && expires > now;
+}
+
+export function probeChecksPassed(probes?: ProbeEvidence | null) {
+  if (!probes) return false;
+  const isolation = Object.values(probes.isolation ?? {});
+  if (isolation.length === 0) return false;
+  if (isolation.some((item) => !(typeof item.processes === "number" && item.processes > 0))) {
+    return false;
+  }
+  const checks = probes.functional?.checks ?? [];
+  if (checks.length === 0) return false;
+  if (checks.some((item) => item.returncode !== 0 || !(typeof item.bytes === "number" && item.bytes > 0))) {
+    return false;
+  }
+  const stability = probes.stability;
+  if (!stability || !(typeof stability.checks === "number" && stability.checks >= 1)) {
+    return false;
+  }
+  const restarts = Object.values(stability.restart_counts ?? {});
+  return restarts.length > 0 && restarts.every((value) => value === 0);
 }
 
 export function canDeploy(permissions: string[]) {

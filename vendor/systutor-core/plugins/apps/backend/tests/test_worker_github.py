@@ -253,6 +253,13 @@ def test_source_operation_requests_a_single_repository_token(
     report = worker._source_operation("op2", "a1", "inspect")
     assert report["blocking"] is False
     assert report["services"] == ["web"]
+    assert report["service_details"] == [{
+        "name": "web",
+        "build": False,
+        "dockerfile": None,
+        "image": None,
+        "compose_user": None,
+    }]
     assert report["compose_candidates"] == ["compose.yaml"]
     assert captured == {
         "repo": "acme/repo", "branch": "main",

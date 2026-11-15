@@ -218,7 +218,7 @@ def test_hardening_is_tenant_scoped_idempotent_and_persists_only_policy(
     assert dispatcher.calls == [first.operation_id]
     stored = db.get(Operation, first.operation_id)
     assert stored.kind == "harden"
-    assert stored.report == {"policy": body.model_dump()}
+    assert stored.report == {"policy": body.to_policy().as_dict()}
     with pytest.raises(AppError) as error:
         router_module.harden_application(
             "a1", body, request, "other-key", db, context("t2"), db.get(User, "u2"),

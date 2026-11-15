@@ -89,9 +89,38 @@ export type ApplicationDetail = Application & {
   runtime_project: string;
   active_deployment: DeploymentDetail | null;
   services: string[];
+  service_details: InspectedService[];
+  last_inspect_at: string | null;
   compose_candidates: string[];
   findings: Finding[];
   deployments: DeploymentDetail[];
+};
+
+export type InspectedService = {
+  name: string;
+  build: boolean;
+  dockerfile: string | null;
+  image: string | null;
+  compose_user: string | null;
+};
+
+export type HardeningRuntimeUser = { uid: number; gid: number };
+
+export type HardeningWritablePath = {
+  service: string;
+  path: string;
+  mode: string;
+};
+
+export type HardeningPolicy = {
+  service_users: Record<string, HardeningRuntimeUser>;
+  writable_paths: HardeningWritablePath[];
+};
+
+export type DeployPayload = {
+  environment: Array<[string, string]>;
+  hardening?: HardeningPolicy;
+  hardened_operation_id?: string;
 };
 
 export type OperationSummary = {
@@ -149,12 +178,16 @@ export type DeploymentDetail = Deployment & {
   ingress_service: string | null;
   ingress_port: number | null;
   release: string | null;
+  release_id: string | null;
+  release_summary: ReleaseSummary | null;
+  probes: ProbeEvidence | null;
   services: string[];
   service_details: Array<{
     name: string;
     image: string | null;
     status: string;
     health: string;
+    user?: string | null;
     ports: number[];
     restart_count: number;
     environment_names: string[];
@@ -163,6 +196,71 @@ export type DeploymentDetail = Deployment & {
   }>;
   created_at: string | null;
   finished_at: string | null;
+};
+
+export type ReleaseSummary = {
+  deployment_id?: string;
+  release_id?: string;
+  operation_id?: string;
+  key_id?: string;
+  commit?: string;
+  repo?: string;
+  branch?: string;
+  artifact_sha256?: string;
+  source_tree_sha256?: string;
+  hardened_tree_sha256?: string;
+  compose_sha256?: string;
+  policy_sha256?: string;
+  gate_sha256?: string;
+  created_at?: string;
+  expires_at?: string;
+};
+
+export type ProbeCheck = {
+  returncode?: number;
+  sha256?: string;
+  bytes?: number;
+};
+
+export type ProbeEvidence = {
+  isolation?: Record<string, { user?: string; networks?: string[]; processes?: number }>;
+  functional?: { image?: string; checks?: ProbeCheck[] };
+  stability?: {
+    checks?: number;
+    window_seconds?: number;
+    restart_counts?: Record<string, number>;
+  };
+};
+
+export type Release = {
+  release_id: string;
+  operation_id: string;
+  key_id: string;
+  repo: string;
+  branch: string;
+  commit: string;
+  artifact_sha256: string;
+  source_tree_sha256: string;
+  hardened_tree_sha256: string;
+  compose_path: string;
+  compose_sha256: string;
+  policy_sha256: string;
+  gate_sha256: string;
+  tool_versions: Record<string, unknown>;
+  policy: HardeningPolicy;
+  created_at: string;
+  expires_at: string;
+};
+
+export type ReleaseVerification = {
+  status: string;
+  release: Release;
+  checks: Record<string, boolean>;
+};
+
+export type ReleaseEvidence = {
+  release: Release;
+  operation_result: Record<string, unknown> | null;
 };
 
 export type ServiceEnvironmentVariable = {
