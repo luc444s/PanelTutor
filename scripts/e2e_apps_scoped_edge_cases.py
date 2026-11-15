@@ -20,6 +20,7 @@ import argparse
 import importlib.util
 import os
 import secrets
+import shutil
 import sys
 import tempfile
 import time
@@ -80,6 +81,7 @@ def _break_title(checkout: Path, token: str) -> str:
 
 
 def _restore_branch(checkout: Path, initial_commit: str, token: str) -> None:
+    scoped._run_git(checkout, ["fetch", "--depth", "1", "origin", initial_commit])
     scoped._run_git(checkout, ["checkout", initial_commit, "--", TITLE_FILE])
     if (checkout / CANARY_FILE).exists():
         scoped._run_git(checkout, ["rm", "--quiet", "--", CANARY_FILE])
@@ -211,6 +213,7 @@ def run(args: argparse.Namespace) -> int:
     client = ApiClient(base_url)
     password = api.read_password(Path(password_path))
     checkout: Path | None = None
+    cleanup_root: Path | None = None
     initial_commit = ""
     started = time.monotonic()
     try:
@@ -269,7 +272,8 @@ def run(args: argparse.Namespace) -> int:
                 "runtime_project": project,
             })
             baseline = _deploy(
-                client, root, {"environment": []}, args.deploy_timeout, "baseline"
+                client, root, {"environment": api.environment()},
+                args.deploy_timeout, "baseline",
             )
             baseline_result = baseline.get("result") or {}
             baseline_release = baseline_result.get("release_id")
@@ -349,8 +353,8 @@ def run(args: argparse.Namespace) -> int:
                 "service rollback",
             )
             active = _active(detail, "service rollback")
-            if active.get("overrides") != []:
-                raise E2EError("service rollback did not clear the override")
+            if active.get("overrides") != ["frontend"]:
+                raise E2EError("service rollback did not retain its explicit override")
             if (active.get("service_releases") or {}).get("frontend") != baseline_release:
                 raise E2EError("service rollback did not restore the baseline release")
             evidence["service_rollback"] = {
@@ -505,9 +509,18 @@ def run(args: argparse.Namespace) -> int:
     finally:
         if checkout is not None and initial_commit and token:
             try:
+                if not checkout.exists():
+                    cleanup_root = Path(tempfile.mkdtemp(prefix="spanel-edge-cleanup-"))
+                    checkout = cleanup_root / "checkout"
+                    scoped.clone_branch(
+                        args.repository, args.branch, token, args.git_remote, checkout
+                    )
                 _restore_branch(checkout, initial_commit, token)
             except Exception as cleanup_exc:  # noqa: BLE001
                 evidence["cleanup_error"] = str(cleanup_exc)
+            finally:
+                if cleanup_root is not None:
+                    shutil.rmtree(cleanup_root, ignore_errors=True)
         client.token = None
         token = ""
         evidence_path = Path(args.evidence) if args.evidence else None
