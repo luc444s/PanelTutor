@@ -43,8 +43,10 @@ Corolarios:
    probes.
 5. **Build**: el build real del deployment debe producir imagen. El gate de
    `harden` no construye; no necesita `skip_build`.
-6. **Healthcheck**: se acepta el `HEALTHCHECK` de la imagen. La estabilidad
-   sigue exigiendo `healthy` y `RestartCount == 0`.
+6. **Healthcheck opcional**: si Compose o la imagen declaran uno, debe reportar
+   `healthy`. Sin healthcheck, la estabilidad exige `running` y siempre
+   `RestartCount == 0`; el probe funcional independiente sigue siendo
+   obligatorio.
 7. Lo que ocurra dentro del contenedor —CVEs, auth, uploads, PHP obsoleto— es
    riesgo del tenant. La plataforma solo garantiza contención.
 
@@ -171,10 +173,11 @@ Se mantienen los tres niveles:
 1. **Aislamiento**: non-root, `cap_drop`, `no-new-privileges`, read-only, sin
    privileged/devices/host namespaces, sin binds, sin puertos, red interna.
 2. **Funcional**: HTTP/TCP/command independiente, imagen fijada por digest.
-3. **Estabilidad**: ventana con N chequeos y `RestartCount == 0`.
+3. **Estabilidad**: ventana con N chequeos, servicio `running`, healthcheck
+   `healthy` cuando exista y `RestartCount == 0`.
 
 El probe de aislamiento es la autoridad final. El healthcheck puede venir de la
-imagen; no se exige declararlo en Compose.
+imagen y es opcional; si existe no se ignora un estado fallido.
 
 ### 5. Release
 
@@ -287,6 +290,8 @@ Casos obligatorios:
 - App con `docker.sock`, root, privileged o host network → **bloqueada**.
 - App con build real roto → **bloqueada**.
 - Probes de aislamiento fallidos → **rollback**.
+- App sin healthcheck pero estable y con probe funcional verde → **deploy**.
+- App con healthcheck declarado en estado `unhealthy` → **rollback**.
 - `harden` no ejecuta Trivy/Hadolint (test que verifica que no se invocan).
 - Release no contiene `advisories`/`insecure`.
 

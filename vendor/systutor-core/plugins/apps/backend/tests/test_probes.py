@@ -140,6 +140,37 @@ def test_run_probes_accepts_image_healthcheck_by_default(tmp_path) -> None:
     assert any(call[:2] == ["docker", "run"] for call in runner.calls)
 
 
+def test_run_probes_accepts_running_service_without_healthcheck(tmp_path) -> None:
+    payload = container()
+    payload["State"].pop("Health")
+    evidence = run_probes(
+        FakeRunner(payload, healthcheck=False),
+        release=tmp_path,
+        compose_rel="compose.yml",
+        project="proj",
+        services=["web"],
+        containers={"web": "cid1"},
+        environ=env(),
+        sleep=lambda _seconds: None,
+    )
+    assert evidence["stability"]["restart_counts"] == {"web": 0}
+
+
+def test_run_probes_rejects_declared_unhealthy_service(tmp_path) -> None:
+    runner = FakeRunner(container(State={"Health": {"Status": "unhealthy"}}))
+    with pytest.raises(ProbeFailed, match="not healthy"):
+        run_probes(
+            runner,
+            release=tmp_path,
+            compose_rel="compose.yml",
+            project="proj",
+            services=["web"],
+            containers={"web": "cid1"},
+            environ=env(),
+            sleep=lambda _seconds: None,
+        )
+
+
 def test_run_probes_requires_zero_restarts(tmp_path) -> None:
     runner = FakeRunner(restart_count=1)
     with pytest.raises(ProbeFailed, match="restarted"):

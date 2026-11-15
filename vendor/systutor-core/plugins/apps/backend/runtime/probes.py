@@ -274,10 +274,15 @@ def _inspect_stability(
     for service, container_id in containers.items():
         values = _inspect_container(runner, container_id)
         state = values["state"]
-        health = state.get("Health") or {}
-        status = str(health.get("Status", "")).lower()
-        if status != "healthy":
-            raise ProbeFailed(f"service {service} is not healthy during the probe window")
+        if str(state.get("Status", "")).lower() != "running":
+            raise ProbeFailed(f"service {service} stopped during the probe window")
+        health = state.get("Health")
+        if isinstance(health, dict):
+            status = str(health.get("Status", "")).lower()
+            if status != "healthy":
+                raise ProbeFailed(
+                    f"service {service} is not healthy during the probe window"
+                )
         restart_count = state.get("RestartCount", 0)
         if not isinstance(restart_count, int) or restart_count != 0:
             raise ProbeFailed(f"service {service} restarted during the probe window")
