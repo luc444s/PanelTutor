@@ -442,8 +442,8 @@ structural_constraints:
 - Requirement: gestión global y por servicio con deploy global incremental
 - owner: PanelTutor Apps
 - approver: Lucas (platform owner)
-- Commit: pending
-- Deployment: pending
+- Commit: 2ec1acb
+- Deployment: pendiente — E2E real en lab con Docker y `SPANEL_E2E_*`.
 
 ## Verificación ejecutada
 
