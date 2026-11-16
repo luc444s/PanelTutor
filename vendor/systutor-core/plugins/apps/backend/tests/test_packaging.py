@@ -24,3 +24,8 @@ def test_worker_image_installs_and_verifies_docker_compose_v2() -> None:
     assert "docker-compose-linux-x86_64" in dockerfile
     assert "/usr/local/lib/docker/cli-plugins/docker-compose" in dockerfile
     assert "docker compose version" in dockerfile
+    version = re.search(r"ARG DOCKER_COMPOSE_VERSION=(\d+)\.(\d+)\.(\d+)", dockerfile)
+    assert version is not None
+    # Compose 2.x resolves labelled seccomp profiles as checkout-relative
+    # files and breaks the isolation envelope at container creation.
+    assert (int(version.group(1)), int(version.group(2))) >= (5, 0)

@@ -1,0 +1,34 @@
+{
+  "admission": "isolation+probes+signature+real-build",
+  "application_id": "6700f4a6-7437-4212-9be6-8ad7e81feac0",
+  "application_slug": "trusted-e2e-e6d49f58fe",
+  "base_url": "http://127.0.0.1:3000",
+  "branch": "main",
+  "cleanup": "application deleted (404 verified)",
+  "commit": "e4f7fc516cd8da1b4b4d571169cf6937b500bb30",
+  "compose_file": ".spanel-compose.yaml",
+  "duration_seconds": 100.55,
+  "hashes": {
+    "artifact_sha256": "d3331bdaa976d6c74ba70c459139f06afeb0c0bcbfb697f71e8915ba5c3c649c",
+    "compose_sha256": "625c648d30f0481f4f41a741917900fad07580861d5ac334bc657a7bb0c68f39",
+    "gate_sha256": "3adab95f4c760026c10f319bf750547ffd0ff1b029d6d2cb13ef2d955b5405c9",
+    "hardened_tree_sha256": "1ad5c31430cb88144e17bc2d2459d5ab27d8618a02493c4e193e0a08819ab93c",
+    "policy_sha256": "bcd43f449da68cd6a92b9bffbfd027e014c503aa0c037394ce739f3ab148f7df"
+  },
+  "release_id": "a307bb63-4e14-4785-a727-6c170ec5a084",
+  "repository": "luc444s/node-red",
+  "runtime": {
+    "probes": {
+      "functional_checks": 2,
+      "restart_counts": {
+        "node-red": 0
+      },
+      "services": [
+        "node-red"
+      ]
+    },
+    "users": {
+      "node-red": "1000:1000"
+    }
+  }
+}

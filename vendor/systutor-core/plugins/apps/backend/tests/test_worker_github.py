@@ -232,6 +232,8 @@ def test_source_operation_requests_a_single_repository_token(
         captured["branch"] = branch
         captured["token"] = runner.environ["GH_TOKEN"]
         captured["prompt"] = runner.environ["GH_PROMPT_DISABLED"]
+        destination.mkdir(parents=True)
+        destination.joinpath("compose.yaml").write_text("services: {web: {}}")
 
     def fake_audit(root, compose, non_root=True):
         root_path = Path(root)

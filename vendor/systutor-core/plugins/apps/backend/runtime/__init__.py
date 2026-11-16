@@ -23,6 +23,7 @@ from .source import (
     dockerfile_base_images,
     dockerfile_runtime_user,
 )
+from .source_adapter import SourceAdaptation, materialize_source_adapter
 from .transport import Runner
 from .types import (
     MANIFEST,
@@ -47,6 +48,7 @@ __all__ = [
     "MANIFEST",
     "OWNER_LABEL",
     "Runner",
+    "SourceAdaptation",
     "_ensure_owned",
     "_image_users",
     "_is_root_user",
@@ -65,6 +67,7 @@ __all__ = [
     "dockerfile_base_images",
     "dockerfile_runtime_user",
     "lifecycle",
+    "materialize_source_adapter",
     "purge_orphaned_project",
     "render_report",
     "runtime_snapshot",

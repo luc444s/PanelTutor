@@ -50,6 +50,7 @@ from .runtime import (
     dockerfile_base_images,
     dockerfile_runtime_user,
     lifecycle,
+    materialize_source_adapter,
     purge_orphaned_project,
     runtime_snapshot,
 )
@@ -228,7 +229,13 @@ class AppsWorker:
             token = ""
             clone_env["GH_TOKEN"] = ""
             del clone_env
-            audit = audit_project(checkout, source[2], non_root=True)
+            adaptation = materialize_source_adapter(checkout, source[2])
+            effective_compose = adaptation.compose_file or source[2]
+            source = (
+                source[0], source[1], effective_compose, source[3],
+                source[4], source[5], source[6],
+            )
+            audit = audit_project(checkout, effective_compose, non_root=True)
             service_details = []
             dockerfile_users: dict[str, str | None] = {}
             dockerfile_images: dict[str, tuple[str, ...]] = {}
@@ -270,6 +277,7 @@ class AppsWorker:
                 "service_details": service_details,
                 "findings": [finding.__dict__ for finding in audit.findings],
                 "blocking": bool(audit.errors),
+                "source_adapter": adaptation.as_dict(),
             }
             if kind == "inspect":
                 return report

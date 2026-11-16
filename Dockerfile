@@ -15,7 +15,7 @@ RUN npm run build
 # ── Stage 2: Python backend + static frontend ──
 FROM python:3.12-slim
 
-ARG DOCKER_COMPOSE_VERSION=2.32.4
+ARG DOCKER_COMPOSE_VERSION=5.7.1
 ARG DOCKER_BUILDX_VERSION=0.37.1
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
