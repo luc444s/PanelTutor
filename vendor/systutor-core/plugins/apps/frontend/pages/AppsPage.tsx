@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 import { Alert } from "@systutor/shell/ui/alert";
 import { Button } from "@systutor/shell/ui/button";
@@ -15,6 +15,8 @@ import type { Application, OperationSummary } from "../types";
 import { ApplicationDetail } from "../components/ApplicationDetail";
 import { CreateApplicationDialog } from "../components/CreateApplicationDialog";
 import { GithubConnectionCard } from "../components/GithubConnectionCard";
+import { OperationWatcher } from "../components/OperationWatcher";
+import { StatusBadge } from "../components/StatusIndicator";
 import { useGithubStatus } from "../useGithubStatus";
 
 export default function AppsPage() {
@@ -33,6 +35,7 @@ export default function AppsPage() {
   const canDelete = canPlatformMutate(permissions, "apps.applications.delete");
   const [createOpen, setCreateOpen] = useState(false);
   const [selected, setSelected] = useState<Application | null>(null);
+  const [tracked, setTracked] = useState<OperationSummary[]>([]);
   const [page, setPage] = useState(1);
   const APPS_PAGE_SIZE = 9;
   const applications = useQuery({
@@ -67,14 +70,33 @@ export default function AppsPage() {
     void queryClient.invalidateQueries({ queryKey: appsKeys.applications });
   }
   function operationAccepted(operation: OperationSummary) {
+    setTracked((current) => current.some((item) => item.operation_id === operation.operation_id)
+      ? current
+      : [...current, operation]);
     void queryClient.invalidateQueries({ queryKey: appsKeys.applications });
     if (operation.application_id) {
       void queryClient.invalidateQueries({ queryKey: appsKeys.detail(operation.application_id) });
       void queryClient.invalidateQueries({ queryKey: appsKeys.operations(operation.application_id) });
     }
   }
+  const operationFinalized = useCallback((operationId: string) => {
+    setTracked((current) => current.filter((item) => item.operation_id !== operationId));
+  }, []);
+
+  useEffect(() => {
+    if (!selected || !applications.data) return;
+    if (!applications.data.some((application) => application.id === selected.id)) {
+      setSelected(null);
+    }
+  }, [applications.data, selected]);
 
   const apps = applications.data ?? [];
+  const deployingApplications = new Set(
+    tracked
+      .filter((operation) => ["deploy", "rollback"].includes(operation.kind))
+      .map((operation) => operation.application_id)
+      .filter((id): id is string => Boolean(id)),
+  );
   const totalPages = Math.max(1, Math.ceil(apps.length / APPS_PAGE_SIZE));
   const currentPage = Math.min(page, totalPages);
   const pagedApps = apps.slice(
@@ -100,6 +122,8 @@ export default function AppsPage() {
           <div className="grid grid-cols-1 gap-3 md:grid-cols-2 lg:grid-cols-3">
             {pagedApps.map((application) => {
               const owned = isOwnedByTenant(application.tenant_id, currentTenant?.id);
+              const deploying = deployingApplications.has(application.id);
+              const status = deploying ? "deploying" : application.status;
               const appRoutes = routes.filter((route) =>
                 route.site_id.startsWith(`${application.id}:`));
               const domainLabel = !canReadDomains
@@ -115,7 +139,7 @@ export default function AppsPage() {
                 aria-disabled={!owned}
                 className={`rounded-md border border-border bg-card p-4 text-left ${owned ? "hover:bg-muted" : "cursor-default"}`}
                 onClick={() => { if (owned) setSelected(application); }}>
-                <div className="flex items-center justify-between gap-2"><strong>{application.name}</strong><span className="rounded bg-muted px-2 py-0.5 text-xs">{application.status}</span></div>
+                <div className="flex items-center justify-between gap-2"><strong>{application.name}</strong><StatusBadge status={status} spinner={deploying} /></div>
                 <p className="mt-2 text-sm text-muted-foreground">{application.repository} · {application.branch}</p>
                 <p className="mt-1 text-xs text-muted-foreground">{domainLabel}</p>
                 {application.tenant_name ? <p className="mt-1 text-xs text-muted-foreground">{t("Tenant")}: {application.tenant_name}</p> : null}
@@ -128,8 +152,14 @@ export default function AppsPage() {
       </div>
     )}
 
-    <CreateApplicationDialog open={createOpen} platform={platform} onClose={() => setCreateOpen(false)} onAccepted={accepted} />
-    <ApplicationDetail key={selected?.id ?? "no-application"} application={selected} canCreate={canCreate} canManage={canManage}
+    <CreateApplicationDialog open={createOpen} onClose={() => setCreateOpen(false)} onAccepted={accepted} />
+    {tracked.map((operation) => <OperationWatcher key={operation.operation_id}
+      operationId={operation.operation_id}
+      applicationId={operation.application_id ?? undefined}
+      onFinalized={operationFinalized} />)}
+    <ApplicationDetail key={selected?.id ?? "no-application"} application={selected}
+      deploying={selected ? deployingApplications.has(selected.id) : false}
+      canCreate={canCreate} canManage={canManage}
       canManageDomains={canManageDomains} canReadDomains={canReadDomains}
       canReveal={canReveal} canDeploy={canDeployApp} canDelete={canDelete}
       onClose={() => setSelected(null)} onAccepted={operationAccepted} />

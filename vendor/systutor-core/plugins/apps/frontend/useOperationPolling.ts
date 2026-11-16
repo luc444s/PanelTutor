@@ -4,7 +4,11 @@ import { useEffect, useRef } from "react";
 import { appsKeys, getOperation } from "./api";
 import { isTerminalOperation } from "./logic";
 
-export function useOperationPolling(operationId: string | null, applicationId?: string) {
+export function useOperationPolling(
+  operationId: string | null,
+  applicationId?: string,
+  onFinalized?: (operationId: string) => void,
+) {
   const queryClient = useQueryClient();
   const finalized = useRef<string | null>(null);
   const query = useQuery({
@@ -22,8 +26,11 @@ export function useOperationPolling(operationId: string | null, applicationId?: 
     if (applicationId) {
       void queryClient.invalidateQueries({ queryKey: appsKeys.application(applicationId) });
       void queryClient.invalidateQueries({ queryKey: appsKeys.deployments(applicationId) });
+      void queryClient.invalidateQueries({ queryKey: appsKeys.operations(applicationId) });
+      void queryClient.invalidateQueries({ queryKey: appsKeys.releases(applicationId) });
     }
-  }, [applicationId, operationId, query.data, queryClient]);
+    onFinalized?.(operationId);
+  }, [applicationId, onFinalized, operationId, query.data, queryClient]);
 
   return query;
 }

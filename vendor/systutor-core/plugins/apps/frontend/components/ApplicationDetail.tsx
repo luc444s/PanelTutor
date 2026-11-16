@@ -32,9 +32,10 @@ const ACTIONS: Array<[AppAction, string]> = [
   ["refresh", "Refresh all"], ["down", "Down"],
 ];
 
-export function ApplicationDetail({ application, canCreate, canManage, canManageDomains,
+export function ApplicationDetail({ application, deploying, canCreate, canManage, canManageDomains,
   canReadDomains, canReveal, canDeploy, canDelete, onClose, onAccepted }: {
   application: Application | null;
+  deploying: boolean;
   canCreate: boolean;
   canManage: boolean;
   canManageDomains: boolean;
@@ -79,6 +80,10 @@ export function ApplicationDetail({ application, canCreate, canManage, canManage
   }, [operationsQuery.data]);
   const current = detail.data ? { ...detail.data } : application;
   const busy = appOperations.some((item) => !["succeeded", "failed", "interrupted"].includes(item.status));
+  const deployingOperation = appOperations.some((item) =>
+    !["succeeded", "failed", "interrupted"].includes(item.status)
+    && ["deploy", "rollback"].includes(item.kind));
+  const isDeploying = deploying || deployingOperation;
   const auditOperation = appOperations.find((item) => {
     const candidate = (item.result ?? item.report) as AuditReport | null;
     return item.kind === "inspect" && Array.isArray(candidate?.findings);
@@ -132,7 +137,7 @@ export function ApplicationDetail({ application, canCreate, canManage, canManage
       label: t("Overview"),
       content: <div className="space-y-4">
         <dl className="grid gap-3 text-sm sm:grid-cols-2">
-          <div><dt className="text-muted-foreground">{t("Status")}</dt><dd><StatusIndicator status={current.status} /></dd></div>
+          <div><dt className="text-muted-foreground">{t("Status")}</dt><dd><StatusIndicator status={isDeploying ? "deploying" : current.status} /></dd></div>
           <div><dt className="text-muted-foreground">{t("Source")}</dt><dd>GitHub · {sourceConnected ? t("connected") : t("requires reconnection")}</dd></div>
           <div><dt className="text-muted-foreground">{t("Compose")}</dt><dd>{current.compose_file ?? report.compose ?? t("Autodetect")}</dd></div>
           <div><dt className="text-muted-foreground">{t("Active commit")}</dt><dd><code>{activeDeployment?.commit ?? "—"}</code></dd></div>

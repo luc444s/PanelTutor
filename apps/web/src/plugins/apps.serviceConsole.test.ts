@@ -8,7 +8,7 @@ import { routePayload, serviceRoutePreview, type RouteForm } from "../../../../v
 import {
   canRevealVariable, remainingSeconds, revealExpiry, sourceLabel,
 } from "../../../../vendor/systutor-core/plugins/apps/frontend/components/ServiceEnvironment";
-import { statusDotTone } from "../../../../vendor/systutor-core/plugins/apps/frontend/components/StatusIndicator";
+import { statusDotTone, statusBadgeTone } from "../../../../vendor/systutor-core/plugins/apps/frontend/components/StatusIndicator";
 
 const service = {
   name: "api", image: "api:latest", status: "running", health: "healthy",
@@ -28,6 +28,10 @@ describe("Apps service console", () => {
     expect(statusDotTone("failed")).toBe("text-red-500");
     expect(statusDotTone("deploying")).toBe("text-amber-500");
     expect(statusDotTone("unknown")).toBe("text-zinc-400");
+    expect(statusBadgeTone("running")).toContain("emerald");
+    expect(statusBadgeTone("deploying")).toContain("amber");
+    expect(statusBadgeTone("failed")).toContain("red");
+    expect(statusBadgeTone("unknown")).toContain("muted");
   });
 
   it("labels environment sources exactly as the API declares them", () => {
