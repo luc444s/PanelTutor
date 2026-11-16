@@ -284,7 +284,7 @@ def run(args: argparse.Namespace) -> int:
     password_path = os.environ.get("SPANEL_E2E_PASSWORD_FILE", "").strip()
     if not email or not password_path:
         raise E2EError("SPANEL_E2E_EMAIL and SPANEL_E2E_PASSWORD_FILE are required")
-    parse_policy(args.policy_json)  # Backward-compatible CLI validation; engine owns policy.
+    requested_policy = parse_policy(args.policy_json) if args.policy_json else None
     deploy_environment = environment_pairs(args.env_json)
     canary = f"canary-{secrets.token_hex(8)}"
     deploy_environment.append(["E2E_LOG_CANARY", canary])
@@ -343,14 +343,22 @@ def run(args: argparse.Namespace) -> int:
         services = detail.get("services")
         if not isinstance(services, list) or not services:
             raise E2EError("inspection did not expose any services")
+        explicit_policy = (
+            policy_for(services, requested_policy)
+            if requested_policy is not None
+            else None
+        )
         print(f"inspect: succeeded ({len(services)} services)")
 
         print("[4/10] Deploy with the engine-owned runtime policy")
+        deploy_body: dict[str, Any] = {"environment": deploy_environment}
+        if explicit_policy is not None:
+            deploy_body["hardening"] = explicit_policy
         operation = api.queue(
             client,
             "POST",
             f"{root}/deployments",
-            {"environment": deploy_environment},
+            deploy_body,
             args.deploy_timeout,
             "deploy",
         )

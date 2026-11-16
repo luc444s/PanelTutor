@@ -100,10 +100,17 @@ def harden_compose(text: str, policies: dict[str, ServicePolicy]) -> str:
         for key in ("network_mode", "pid", "ipc", "uts", "userns", "cgroup"):
             config.pop(key, None)
         config.pop("extra_hosts", None)
+        config.pop("deploy", None)
+        config.pop("networks", None)
         config["user"] = f"{policy.uid}:{policy.gid}"
         config["cap_drop"] = ["ALL"]
-        config["security_opt"] = ["no-new-privileges:true"]
-        config["read_only"] = True
+        config["security_opt"] = [
+            "no-new-privileges:true",
+            "apparmor=docker-default",
+            "seccomp=builtin",
+        ]
+        config["runtime"] = "runc"
+        config["read_only"] = False
         tmpfs = ["/tmp:rw,noexec,nosuid,nodev"]
         config["tmpfs"] = tmpfs
         config["init"] = True
@@ -147,17 +154,7 @@ def harden_compose(text: str, policies: dict[str, ServicePolicy]) -> str:
                 f"service {service} uses Compose secrets; migrate them to the managed external env interface"
             )
 
-    networks = data.get("networks")
-    if not isinstance(networks, dict):
-        networks = {}
-    networks.setdefault("default", {})
-    for config in networks.values():
-        if not isinstance(config, dict):
-            raise ComposeHardeningError("network configuration must be a mapping")
-        config.pop("external", None)
-        config.pop("name", None)
-        config["internal"] = True
-    data["networks"] = networks
+    data["networks"] = {"default": {"internal": True}}
 
     volumes = data.get("volumes")
     if not isinstance(volumes, dict):

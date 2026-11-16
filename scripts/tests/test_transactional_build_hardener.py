@@ -105,9 +105,17 @@ def test_compose_hardening_creates_isolation_envelope() -> None:
   web:
     build: .
     privileged: true
+    deploy: {replicas: 3}
+    networks: [frontend, backend]
+    runtime: runsc
+    read_only: true
+    security_opt: [apparmor=unconfined, seccomp=unconfined]
     ports: ["8080:8080"]
     environment: {API_TOKEN: literal}
     volumes: ["./data:/app/data"]
+networks:
+  frontend: {external: true}
+  backend: {}
 """
     fixed = yaml.safe_load(
         harden_compose(
@@ -121,10 +129,17 @@ def test_compose_hardening_creates_isolation_envelope() -> None:
     assert service["expose"] == ["8080"]
     assert service["user"] == "10001:10001"
     assert service["cap_drop"] == ["ALL"]
-    assert service["security_opt"] == ["no-new-privileges:true"]
-    assert service["read_only"] is True
+    assert service["security_opt"] == [
+        "no-new-privileges:true",
+        "apparmor=docker-default",
+        "seccomp=builtin",
+    ]
+    assert service["runtime"] == "runc"
+    assert service["read_only"] is False
+    assert "deploy" not in service
+    assert "networks" not in service
     assert service["environment"]["API_TOKEN"] == "literal"
-    assert fixed["networks"]["default"]["internal"] is True
+    assert fixed["networks"] == {"default": {"internal": True}}
     assert service["volumes"][0].endswith(":/app/data")
     assert "./data:/app/data" not in service["volumes"]
 
@@ -176,7 +191,16 @@ def test_apply_is_isolation_gated_backed_up_and_does_not_build(tmp_path: Path) -
     assert dockerfile.index("RUN mkdir -p /app/data") < dockerfile.index("USER 10001:10001")
     assert "RUN install -d -o 10001 -g 10001 -m 750 /app/data" in dockerfile
     compose = yaml.safe_load((root / "compose.yml").read_text(encoding="utf-8"))
-    assert compose["services"]["web"]["read_only"] is True
+    assert compose["services"]["web"]["read_only"] is False
+    assert payload["policy"]["isolation"]["read_only_root"] is False
+    assert payload["policy"]["isolation"]["runtime"] == "runc"
+    assert payload["policy"]["isolation"]["apparmor"] == "docker-default"
+    assert payload["policy"]["isolation"]["seccomp"] == "builtin"
+    assert payload["policy"]["isolation"]["limits"] == {
+        "pids": 256,
+        "memory": "512m",
+        "cpus": 1.0,
+    }
     manifest = Path(payload["backup"]) / "manifest.json"
     assert manifest.stat().st_mode & 0o777 == 0o600
     manifest_payload = json.loads(manifest.read_text())

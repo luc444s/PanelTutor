@@ -203,7 +203,9 @@ def _restore(
     return restored, failed, containers, composes
 
 
-_PROBE_PREFERRED_SERVICES = ("frontend", "web", "app", "nginx", "ingress")
+_PROBE_PREFERRED_SERVICES = (
+    "frontend", "web", "app", "vote", "result", "nginx", "ingress"
+)
 _PROBE_DENIED_SERVICES = frozenset({
     "database", "db", "postgres", "postgresql", "mysql", "mariadb",
     "mongo", "mongodb", "redis", "cache", "queue", "rabbitmq",

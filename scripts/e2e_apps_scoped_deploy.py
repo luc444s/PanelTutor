@@ -50,8 +50,8 @@ REQUIRED_PERMISSIONS = frozenset({
     "apps.applications.create",
     "apps.deployments.create",
 })
-# The fixture database image runs as postgres (uid/gid 70) and needs its
-# runtime socket directory writable even with a read-only root filesystem.
+# The fixture database image runs as postgres (uid/gid 70); keep its runtime
+# socket directory on a bounded tmpfs instead of the ephemeral writable layer.
 HARDENING_POLICY = {
     "service_users": {
         "backend": {"uid": 10001, "gid": 10001},

@@ -123,9 +123,13 @@ def _policy_report(args: Any) -> dict[str, Any]:
             for service, item in args.writable_path
         ],
         "isolation": {
+            "runtime": "runc",
             "cap_drop": ["ALL"],
             "no_new_privileges": True,
-            "read_only_root": True,
+            "apparmor": "docker-default",
+            "seccomp": "builtin",
+            "read_only_root": False,
+            "limits": {"pids": 256, "memory": "512m", "cpus": 1.0},
             "runtime_egress": False,
             "host_binds": False,
             "published_ports": False,

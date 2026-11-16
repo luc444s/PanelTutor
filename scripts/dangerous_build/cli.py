@@ -794,14 +794,29 @@ def _runtime_isolation_errors(result: AuditResult) -> list[str]:
         options = [options] if isinstance(options, str) else options
         drops = config.get("cap_drop") or []
         drops = [drops] if isinstance(drops, str) else drops
-        if config.get("read_only") is not True:
-            errors.append(f"{service}: root filesystem is not read-only")
+        if config.get("read_only") is not False:
+            errors.append(f"{service}: root filesystem is not explicitly writable")
         if "ALL" not in {str(item).upper() for item in drops}:
             errors.append(f"{service}: capabilities are not fully dropped")
         if "no-new-privileges:true" not in {
             str(item).lower().replace("=", ":") for item in options
         }:
             errors.append(f"{service}: no-new-privileges is absent")
+        normalized_options = {
+            str(item).lower().replace(":", "=") for item in options
+        }
+        if "apparmor=docker-default" not in normalized_options:
+            errors.append(f"{service}: docker-default AppArmor profile is absent")
+        if "seccomp=builtin" not in normalized_options:
+            errors.append(f"{service}: default seccomp profile is absent")
+        if config.get("runtime") != "runc":
+            errors.append(f"{service}: runtime is not explicitly runc")
+        if config.get("pids_limit") != 256:
+            errors.append(f"{service}: PID limit is invalid")
+        if config.get("mem_limit") != "512m":
+            errors.append(f"{service}: memory limit is invalid")
+        if config.get("cpus") != 1.0:
+            errors.append(f"{service}: CPU limit is invalid")
         if "user" not in config or _is_root_user(config.get("user")):
             errors.append(f"{service}: runtime user is not explicitly non-root")
         if config.get("ports") or config.get("privileged"):

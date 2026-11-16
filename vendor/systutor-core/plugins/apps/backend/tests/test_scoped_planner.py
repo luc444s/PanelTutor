@@ -266,6 +266,10 @@ def test_fallback_probe_target_prefers_ingress_and_skips_datastores() -> None:
         "alpha": {"expose": ["8080"]},
         "beta": {"expose": ["8081"]},
     }) is None
+    assert fallback_probe_target({
+        "vote": {"expose": ["80"]},
+        "result": {"expose": ["80"]},
+    }) == ("vote", 80)
     assert fallback_probe_target({"database": {"expose": ["5432"]}}) is None
 
 

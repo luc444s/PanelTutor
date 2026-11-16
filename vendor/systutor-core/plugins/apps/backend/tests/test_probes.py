@@ -31,14 +31,26 @@ def container(**overrides):
             "PidMode": "",
             "NetworkMode": "proj_default",
             "CapDrop": ["ALL"],
-            "SecurityOpt": ["no-new-privileges:true"],
-            "ReadonlyRootfs": True,
+            "SecurityOpt": [
+                "no-new-privileges:true",
+                "apparmor=docker-default",
+                "seccomp=builtin",
+            ],
+            "Runtime": "runc",
+            "PidsLimit": 256,
+            "Memory": 512 * 1024 * 1024,
+            "NanoCpus": 1_000_000_000,
+            "ReadonlyRootfs": False,
         },
+        "AppArmorProfile": "docker-default",
         "Config": {"User": "10001:10002"},
         "NetworkSettings": {"Networks": {"proj_default": {}}},
     }
     for key, changes in overrides.items():
-        value[key].update(changes)
+        if isinstance(value.get(key), dict) and isinstance(changes, dict):
+            value[key].update(changes)
+        else:
+            value[key] = changes
     return value
 
 
@@ -113,12 +125,43 @@ def test_isolation_rejects_a_container_without_a_declared_user() -> None:
         )
 
 
-def test_isolation_rejects_published_ports_and_writable_rootfs() -> None:
+def test_isolation_rejects_published_ports_and_read_only_rootfs() -> None:
     runner = FakeRunner(container(HostConfig={"PortBindings": {"80/tcp": [{}]}}))
     with pytest.raises(ProbeFailed, match="publishes"):
         check_isolation(runner, {"web": "cid1"})
-    runner = FakeRunner(container(HostConfig={"ReadonlyRootfs": False}))
-    with pytest.raises(ProbeFailed, match="writable"):
+    runner = FakeRunner(container(HostConfig={"ReadonlyRootfs": True}))
+    with pytest.raises(ProbeFailed, match="not writable"):
+        check_isolation(runner, {"web": "cid1"})
+
+
+def test_isolation_rejects_missing_runtime_security_profiles() -> None:
+    runner = FakeRunner(container(AppArmorProfile="unconfined"))
+    with pytest.raises(ProbeFailed, match="AppArmor"):
+        check_isolation(runner, {"web": "cid1"})
+
+    runner = FakeRunner(container(HostConfig={"SecurityOpt": [
+        "no-new-privileges:true",
+        "apparmor=docker-default",
+    ]}))
+    with pytest.raises(ProbeFailed, match="seccomp"):
+        check_isolation(runner, {"web": "cid1"})
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("Runtime", "runsc", "runc"),
+        ("PidsLimit", 0, "PID"),
+        ("PidsLimit", 257, "PID"),
+        ("Memory", 0, "memory"),
+        ("Memory", 512 * 1024 * 1024 + 1, "memory"),
+        ("NanoCpus", 0, "CPU"),
+        ("NanoCpus", 1_000_000_001, "CPU"),
+    ],
+)
+def test_isolation_rejects_invalid_runtime_or_limits(field, value, message) -> None:
+    runner = FakeRunner(container(HostConfig={field: value}))
+    with pytest.raises(ProbeFailed, match=message):
         check_isolation(runner, {"web": "cid1"})
 
 

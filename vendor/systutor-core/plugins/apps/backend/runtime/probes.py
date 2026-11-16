@@ -24,6 +24,9 @@ from .types import AppDeployError
 
 PROBE_USER = "65534:65534"
 MAX_OUTPUT_BYTES = 64 * 1024
+MAX_APP_PIDS = 256
+MAX_APP_MEMORY = 512 * 1024 * 1024
+MAX_APP_NANO_CPUS = 1_000_000_000
 _SERVICE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _DIGEST_IMAGE = re.compile(r".+@sha256:[0-9a-f]{64}\Z")
 
@@ -94,7 +97,12 @@ def _container(container: dict[str, Any]) -> dict[str, Any]:
     state = container.get("State") or {}
     host = container.get("HostConfig") or {}
     config = container.get("Config") or {}
-    return {"state": state, "host": host, "config": config}
+    return {
+        "state": state,
+        "host": host,
+        "config": config,
+        "apparmor": container.get("AppArmorProfile"),
+    }
 
 
 def _process_users(runner: Runner, container_id: str) -> list[str]:
@@ -139,8 +147,37 @@ def check_isolation(
         )
         if "no-new-privileges" not in options:
             raise ProbeFailed(f"service {service} allows privilege escalation")
-        if host.get("ReadonlyRootfs") is not True:
-            raise ProbeFailed(f"service {service} has a writable root filesystem")
+        if "apparmor=docker-default" not in options:
+            raise ProbeFailed(f"service {service} does not use docker-default AppArmor")
+        if "seccomp=builtin" not in options:
+            raise ProbeFailed(f"service {service} does not use the default seccomp profile")
+        if values.get("apparmor") != "docker-default":
+            raise ProbeFailed(f"service {service} effective AppArmor profile is invalid")
+        if host.get("Runtime") != "runc":
+            raise ProbeFailed(f"service {service} does not use runc")
+        pids = host.get("PidsLimit")
+        if (
+            isinstance(pids, bool)
+            or not isinstance(pids, int)
+            or not 0 < pids <= MAX_APP_PIDS
+        ):
+            raise ProbeFailed(f"service {service} PID limit is invalid")
+        memory = host.get("Memory")
+        if (
+            isinstance(memory, bool)
+            or not isinstance(memory, int)
+            or not 0 < memory <= MAX_APP_MEMORY
+        ):
+            raise ProbeFailed(f"service {service} memory limit is invalid")
+        nano_cpus = host.get("NanoCpus")
+        if (
+            isinstance(nano_cpus, bool)
+            or not isinstance(nano_cpus, int)
+            or not 0 < nano_cpus <= MAX_APP_NANO_CPUS
+        ):
+            raise ProbeFailed(f"service {service} CPU limit is invalid")
+        if host.get("ReadonlyRootfs") is not False:
+            raise ProbeFailed(f"service {service} root filesystem is not writable")
         if str(state.get("Status", "")) != "running":
             raise ProbeFailed(f"service {service} is not running")
         users = _process_users(runner, container_id)
@@ -169,6 +206,11 @@ def check_isolation(
             "user": str(config.get("User")),
             "networks": networks,
             "processes": len(users),
+            "runtime": "runc",
+            "writable_rootfs": True,
+            "apparmor": "docker-default",
+            "seccomp": "builtin",
+            "limits": {"pids": pids, "memory": memory, "nano_cpus": nano_cpus},
         }
     return evidence
 
