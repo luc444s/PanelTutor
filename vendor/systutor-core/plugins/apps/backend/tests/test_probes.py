@@ -89,6 +89,7 @@ def test_isolation_accepts_hardened_containers_and_rejects_root_processes() -> N
     runner = FakeRunner()
     evidence = check_isolation(runner, {"web": "cid1"})
     assert evidence["web"]["networks"] == ["proj_default"]
+    assert evidence["web"]["user"] == "10001:10002"
 
     def root_top(argv, **_kwargs):
         if argv[:2] == ["docker", "top"]:
@@ -98,6 +99,18 @@ def test_isolation_accepts_hardened_containers_and_rejects_root_processes() -> N
     runner.run = root_top
     with pytest.raises(ProbeFailed, match="root"):
         check_isolation(runner, {"web": "cid1"})
+
+
+def test_isolation_rejects_a_container_without_a_declared_user() -> None:
+    from plugins.apps.backend.runtime.docker_audit import _is_definitely_non_root_user
+
+    assert not _is_definitely_non_root_user(None)
+    assert not _is_definitely_non_root_user("")
+    assert _is_definitely_non_root_user("33:0")
+    with pytest.raises(ProbeFailed, match="non-root user"):
+        check_isolation(
+            FakeRunner(container(Config={"User": ""})), {"web": "cid1"}
+        )
 
 
 def test_isolation_rejects_published_ports_and_writable_rootfs() -> None:

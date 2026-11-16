@@ -31,8 +31,10 @@ def _is_root_user(value: Any) -> bool:
 
 
 def _is_definitely_non_root_user(value: Any) -> bool:
-    text = str(value).strip()
-    if _is_root_user(text) or "$" in text:
+    if not isinstance(value, str):
+        return False
+    text = value.strip()
+    if not text or _is_root_user(text) or "$" in text:
         return False
     user = text.split(":", 1)[0]
     if user.isdigit():

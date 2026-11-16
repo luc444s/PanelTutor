@@ -116,7 +116,7 @@ def check_isolation(
     for service, container_id in containers.items():
         values = _inspect_container(runner, container_id)
         state, host, config = values["state"], values["host"], values["config"]
-        if not _is_definitely_non_root_user(config.get("user")):
+        if not _is_definitely_non_root_user(config.get("User")):
             raise ProbeFailed(f"service {service} does not declare a non-root user")
         if host.get("Privileged") is True:
             raise ProbeFailed(f"service {service} is privileged")
@@ -166,7 +166,7 @@ def check_isolation(
             if internal.returncode or internal.stdout.strip().lower() != "true":
                 raise ProbeFailed(f"service {service} network is not internal")
         evidence[service] = {
-            "user": str(config.get("user")),
+            "user": str(config.get("User")),
             "networks": networks,
             "processes": len(users),
         }
