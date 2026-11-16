@@ -449,9 +449,19 @@ def run(args: argparse.Namespace) -> int:
         }
 
         print("[10/10] Cleanup the temporary application")
-        _cleanup(client, application_id, str(application.get("slug")), args.operation_timeout)
-        result["cleanup"] = "application deleted (404 verified)"
-        print("cleanup: application deleted")
+        if args.keep:
+            print(
+                "application preserved: "
+                f"{application.get('slug')} ({application_id})"
+            )
+            result["cleanup"] = "preserved"
+        else:
+            _cleanup(
+                client, application_id, str(application.get("slug")),
+                args.operation_timeout,
+            )
+            result["cleanup"] = "application deleted (404 verified)"
+            print("cleanup: application deleted")
     except Exception as exc:  # noqa: BLE001 -- cleanup must always run
         primary_error = exc
     finally:

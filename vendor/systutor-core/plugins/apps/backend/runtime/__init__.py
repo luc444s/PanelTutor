@@ -15,7 +15,7 @@ from .deployment import (
     validate_env_file,
 )
 from .docker_audit import _is_root_user
-from .lifecycle import _redact, _redaction_values, lifecycle
+from .lifecycle import _redact, _redaction_values, lifecycle, purge_orphaned_project
 from .source import (
     clone_repo,
     compose_candidates,
@@ -65,6 +65,7 @@ __all__ = [
     "dockerfile_base_images",
     "dockerfile_runtime_user",
     "lifecycle",
+    "purge_orphaned_project",
     "render_report",
     "runtime_snapshot",
     "validate_env_file",

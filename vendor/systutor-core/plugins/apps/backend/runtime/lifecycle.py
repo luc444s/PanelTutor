@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
@@ -16,6 +17,42 @@ from .types import (
     LifecycleOptions,
     LifecycleResult,
 )
+
+_RESOURCE_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,254}\Z")
+
+
+def purge_orphaned_project(
+    runner: Runner, project: str, *, volumes: bool
+) -> None:
+    """Remove runtime resources left by a deployment that never published.
+
+    A failed initial deployment has no active release, so ``compose down``
+    cannot be used.  Containers and networks are always removed on delete;
+    owner-labelled volumes are removed only when the caller asked to purge
+    data.
+    """
+    if not PROJECT_RE.fullmatch(project):
+        raise AppDeployError("invalid project")
+    selector = f"label={OWNER_LABEL}={project}"
+    targets = [
+        (["docker", "ps", "-aq", "--filter", selector], ["docker", "rm", "-f"]),
+        (
+            ["docker", "network", "ls", "-q", "--filter", selector],
+            ["docker", "network", "rm"],
+        ),
+    ]
+    if volumes:
+        targets.append((
+            ["docker", "volume", "ls", "-q", "--filter", selector],
+            ["docker", "volume", "rm"],
+        ))
+    for listing, removal in targets:
+        result = runner.run(listing, check=False)
+        if result.returncode:
+            raise AppDeployError("orphaned project resources could not be listed")
+        for resource in result.stdout.split():
+            if _RESOURCE_ID.fullmatch(resource):
+                runner.run([*removal, resource], check=False)
 
 
 def _read_manifest(

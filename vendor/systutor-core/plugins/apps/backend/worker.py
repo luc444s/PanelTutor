@@ -39,6 +39,7 @@ from .models import (
 from .operations import claim_operation
 from .releases import ReleaseRejected, release_result
 from .releases.execution import ReleaseExecution, pending_env_path
+from .releases.store import release_store_root
 from .runtime import (
     AppDeployError,
     LifecycleOptions,
@@ -49,6 +50,7 @@ from .runtime import (
     dockerfile_base_images,
     dockerfile_runtime_user,
     lifecycle,
+    purge_orphaned_project,
     runtime_snapshot,
 )
 from .runtime.volumes import resolve_runtime_volumes
@@ -505,8 +507,17 @@ class AppsWorker:
                 if kind in {"down", "delete"}:
                     raise RuntimeError("down and delete always affect the whole application")
         if deployment is None:
-            # Un borrador (o una inspección fallida) no tiene runtime que
-            # detener: solo hay que retirar rutas y metadatos.
+            # Un borrador (o una inspección/deploy fallido) no tiene runtime
+            # publicado: se retiran los recursos etiquetados que sí existan y
+            # los metadatos. Los volúmenes solo se eliminan al purgar datos.
+            runner = self.runner_factory(self._transport())
+            purge_orphaned_project(runner, project, volumes=purge_data)
+            project_root = release_store_root(runner.environ) / project
+            if project_root.name == project:
+                if runner.transport == "ssh":
+                    runner.run(["rm", "-rf", "--", str(project_root)])
+                elif project_root.exists():
+                    shutil.rmtree(project_root)
             if self.route_cleanup is not None:
                 with self.session_factory() as db:
                     self.route_cleanup(db, tenant_id, application_id)

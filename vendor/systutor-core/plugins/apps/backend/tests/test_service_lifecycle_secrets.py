@@ -46,6 +46,38 @@ class Dispatcher:
         return "message"
 
 
+class ResourceRunner:
+    """Records Docker calls and returns owner-labelled fake resources."""
+
+    transport = "local"
+    environ: dict[str, str] = {}
+
+    def __init__(
+        self,
+        *,
+        containers: list[str] | None = None,
+        networks: list[str] | None = None,
+        volumes: list[str] | None = None,
+    ) -> None:
+        self.calls: list[list[str]] = []
+        self.resources = {
+            "containers": containers or [],
+            "networks": networks or [],
+            "volumes": volumes or [],
+        }
+
+    def run(self, argv, check=True, **_kwargs):
+        self.calls.append(list(argv))
+        stdout = ""
+        if argv[:3] == ["docker", "ps", "-aq"]:
+            stdout = "\n".join(self.resources["containers"])
+        elif argv[:3] == ["docker", "network", "ls"]:
+            stdout = "\n".join(self.resources["networks"])
+        elif argv[:3] == ["docker", "volume", "ls"]:
+            stdout = "\n".join(self.resources["volumes"])
+        return SimpleNamespace(returncode=0, stdout=stdout, stderr="")
+
+
 def database(tmp_path: Path):
     engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'apps.db'}")
     Base.metadata.create_all(engine)
@@ -213,13 +245,49 @@ def test_worker_deletes_draft_even_without_active_deployment(tmp_path: Path) -> 
             request_hash="h", report={"purge_data": False},
         ))
         db.commit()
-    worker = AppsWorker(lambda: Session(engine), TokenCipher(b"k" * 32))
+    runner = ResourceRunner()
+    worker = AppsWorker(
+        lambda: Session(engine), TokenCipher(b"k" * 32),
+        runner_factory=lambda *_args, **_kwargs: runner,
+    )
     result = worker._lifecycle_operation("op-draft", "a2", "delete")
     assert result["action"] == "delete"
+    assert [
+        "docker", "ps", "-aq", "--filter",
+        "label=io.spanel.app.owner=app-other",
+    ] in runner.calls
+    assert not any(call[:3] == ["docker", "volume", "ls"] for call in runner.calls)
     with Session(engine) as db:
         app = db.get(Application, "a2")
         assert app is not None and app.deleted_at is not None
         assert app.status == "deleted"
+
+
+def test_worker_purges_owner_labelled_resources_without_active_deployment(
+    tmp_path: Path,
+) -> None:
+    engine = database(tmp_path)
+    with Session(engine) as db:
+        db.add(Operation(
+            id="op-purge", application_id="a2", tenant_id="t2",
+            actor_user_id="u2", subject_type="application", subject_id="a2",
+            kind="delete", status="running", idempotency_key="purge",
+            request_hash="h", report={"purge_data": True},
+        ))
+        db.commit()
+    runner = ResourceRunner(
+        containers=["container-old"],
+        networks=["app-other_default"],
+        volumes=["app-other_data"],
+    )
+    worker = AppsWorker(
+        lambda: Session(engine), TokenCipher(b"k" * 32),
+        runner_factory=lambda *_args, **_kwargs: runner,
+    )
+    worker._lifecycle_operation("op-purge", "a2", "delete")
+    assert ["docker", "rm", "-f", "container-old"] in runner.calls
+    assert ["docker", "network", "rm", "app-other_default"] in runner.calls
+    assert ["docker", "volume", "rm", "app-other_data"] in runner.calls
 
 
 def test_worker_reconciles_routes_for_active_apps(tmp_path: Path) -> None:
