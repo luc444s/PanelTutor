@@ -239,6 +239,23 @@ def compose_failure_reason(payload: object) -> str | None:
     return "; ".join(sorted(set(reasons))[:4])
 
 
+def parse_compose_ps_json(value: str) -> object:
+    """Accept both Compose JSON arrays and its newline-delimited JSON output."""
+    text = value.strip()
+    if not text:
+        return []
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        entries: list[object] = []
+        for line in text.splitlines():
+            try:
+                entries.append(json.loads(line))
+            except json.JSONDecodeError:
+                return []
+        return entries
+
+
 def _exposed_port(config: Mapping[str, Any]) -> int | None:
     for entry in config.get("expose") or []:
         text = str(entry).split("/", 1)[0].strip()
@@ -305,10 +322,7 @@ def _start_failure(
         check=False,
     )
     if result.returncode == 0:
-        try:
-            payload = json.loads(result.stdout)
-        except (json.JSONDecodeError, TypeError):
-            payload = None
+        payload = parse_compose_ps_json(result.stdout)
         reason = compose_failure_reason(payload)
         if reason:
             return f"{prefix}: {reason}"

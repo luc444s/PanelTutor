@@ -225,7 +225,10 @@ def test_release_override_uses_immutable_build_image_tags() -> None:
 
 
 def test_compose_failure_reason_reports_unhealthy_and_exited() -> None:
-    from plugins.apps.backend.releases.scoped_execution import compose_failure_reason
+    from plugins.apps.backend.releases.scoped_execution import (
+        compose_failure_reason,
+        parse_compose_ps_json,
+    )
 
     assert compose_failure_reason([
         {"Service": "database", "State": "running", "Health": "unhealthy"},
@@ -234,6 +237,11 @@ def test_compose_failure_reason_reports_unhealthy_and_exited() -> None:
     ]) == "backend exited with code 1; database is unhealthy"
     assert compose_failure_reason([]) is None
     assert compose_failure_reason({"services": {"db": {"State": "dead"}}}) is not None
+    payload = parse_compose_ps_json(
+        '{"Service":"database","State":"running","Health":"unhealthy"}\n'
+        '{"Service":"backend","State":"created","Health":""}\n'
+    )
+    assert compose_failure_reason(payload) == "database is unhealthy"
 
 
 def test_fallback_probe_target_prefers_ingress_and_skips_datastores() -> None:
