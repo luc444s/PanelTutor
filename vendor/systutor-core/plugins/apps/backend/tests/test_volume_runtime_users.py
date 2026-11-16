@@ -164,6 +164,21 @@ def test_existing_root_volume_fails_closed() -> None:
         )
 
 
+def test_existing_non_root_uid_with_root_group_is_adopted() -> None:
+    runner = VolumeRunner({"app-demo_data": "33:0"})
+    data = {"services": {"db": {"volumes": ["data:/data"]}}, "volumes": {"data": {}}}
+    resolved = resolve_runtime_volumes(
+        runner, data, "app-demo", policy(("db", 1000, 1000, "policy"))
+    )
+    assert resolved.as_dict()["service_users"]["db"] == {"uid": 33, "gid": 0}
+    assert resolved.as_dict()["runtime_users"]["db"] == {
+        "requested": "1000:1000", "effective": "33:0",
+        "source": "volume-owner", "volume": "app-demo_data",
+    }
+    prepare_runtime_volumes(runner, "app-demo", resolved, ["db"])
+    assert not any("chown" in call for call in runner.calls)
+
+
 def test_external_volume_is_inspected_but_never_initialized() -> None:
     runner = VolumeRunner({"shared-data": "70:70"})
     data = {

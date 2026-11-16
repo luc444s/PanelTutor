@@ -140,8 +140,9 @@ def _volume_owner(runner: Runner, name: str, services: Sequence[str] = ()) -> st
         raise AppDeployError(
             f"volume {name} is owned by root; refusing to run {affected} as root"
         )
-    if int(match.group(2)) == 0:
-        raise AppDeployError(f"volume {name} has a root group; refusing to use it")
+    # Only the UID decides whether the service runs as root.  A non-root UID
+    # with GID 0 is common in upstream images (for example Nextcloud's
+    # www-data:root html tree) and remains a non-root runtime.
     return f"{int(match.group(1))}:{int(match.group(2))}"
 
 

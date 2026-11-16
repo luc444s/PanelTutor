@@ -262,7 +262,9 @@ def run_functional_probe(
         "bytes": min(len(output), MAX_OUTPUT_BYTES),
     }
     if result.returncode:
-        raise ProbeFailed("the independent functional probe failed")
+        raise ProbeFailed(
+            f"the independent functional probe failed (exit {result.returncode})"
+        )
     return evidence
 
 

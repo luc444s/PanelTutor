@@ -13,7 +13,7 @@ _SERVICE = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_SERVICES = 64
 _MAX_WRITABLE_PATHS = 256
-_RUNTIME_USER = re.compile(r"([1-9][0-9]{0,9})(?::([1-9][0-9]{0,9}))?\Z")
+_RUNTIME_USER = re.compile(r"([1-9][0-9]{0,9})(?::([0-9]{1,10}))?\Z")
 _DEFAULT_RUNTIME_ID = 1000
 
 
@@ -35,9 +35,18 @@ class RuntimeUserPolicy:
 
     def __post_init__(self) -> None:
         _service_name(self.service)
-        for name, value in (("uid", self.uid), ("gid", self.gid)):
-            if isinstance(value, bool) or not isinstance(value, int) or not 0 < value <= 2**31 - 1:
-                raise ValueError(f"{name} must be a positive non-root integer")
+        if (
+            isinstance(self.uid, bool)
+            or not isinstance(self.uid, int)
+            or not 0 < self.uid <= 2**31 - 1
+        ):
+            raise ValueError("uid must be a positive non-root integer")
+        if (
+            isinstance(self.gid, bool)
+            or not isinstance(self.gid, int)
+            or not 0 <= self.gid <= 2**31 - 1
+        ):
+            raise ValueError("gid must be a non-negative integer")
 
 
 @dataclass(frozen=True, slots=True)
@@ -277,7 +286,7 @@ def _declared_runtime_user(
             continue
         uid = int(match.group(1))
         gid = int(match.group(2) or match.group(1))
-        if 0 < uid <= 2**31 - 1 and 0 < gid <= 2**31 - 1:
+        if 0 < uid <= 2**31 - 1 and 0 <= gid <= 2**31 - 1:
             return uid, gid, source
     return None
 

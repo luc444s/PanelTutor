@@ -80,7 +80,10 @@ Orden, sin excepciones:
 3. `USER` final numérico del Dockerfile.
 4. Si ninguno es un entero no-root: fail-closed con el servicio afectado.
 
-Cualquier UID/GID `> 0` es válido. `70:70` es tan aceptable como `1000:1000`.
+El UID debe ser `> 0`; el GID puede ser `0`. Un proceso con UID no-root y GID
+`0` sigue siendo no-root, y algunas imágenes upstream (por ejemplo Nextcloud con
+`www-data:root`) copian esa pertenencia al volumen. `70:70` es tan aceptable
+como `1000:1000` o `33:0`.
 
 ### Descubrimiento de volúmenes
 
@@ -103,6 +106,12 @@ Antes de `docker compose up`:
 3. Verificar el dueño resultante; si no coincide, abortar antes de arrancar.
 
 Solo se inicializan volúmenes que PanelTutor acaba de crear y que están vacíos.
+
+Docker copia el contenido de la ruta de montaje de la imagen dentro de un
+volumen vacío en el primer arranque. Si esa ruta existe en la imagen, el dueño
+raíz del volumen pasa a ser el de la imagen (por ejemplo `33:0` en Nextcloud),
+aunque la inicialización lo hubiera fijado antes en `33:33`. El siguiente
+deploy adopta ese dueño no-root; el grupo `0` no se considera root.
 
 ### Volumen existente
 

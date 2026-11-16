@@ -101,6 +101,16 @@ def test_automatic_policy_adds_mariadb_runtime_tmpfs() -> None:
     }]
 
 
+def test_automatic_policy_accepts_non_root_uid_with_root_group() -> None:
+    generated = automatic_hardening_policy(
+        {"app": {"user": "33:0", "image": "nextcloud:35-apache"}},
+        {"app": "33:0"},
+    )
+    assert generated.as_dict()["service_users"]["app"] == {"uid": 33, "gid": 0}
+    with pytest.raises(ValueError, match="uid"):
+        RuntimeUserPolicy("app", 0, 0)
+
+
 def test_resolve_policy_fills_omitted_services_from_dockerfile() -> None:
     base = HardeningPolicy((RuntimeUserPolicy("web", 1000, 1000),))
     resolved = resolve_hardening_policy(
