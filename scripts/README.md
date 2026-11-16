@@ -51,6 +51,7 @@ English | [Español](README.es.md)
 | Fully delete a managed WordPress | [`hosting_delete_wordpress.py`](#hosting_delete_wordpresspy) |
 | Back up or restore a site | [`site_backup.py`](#site_backuppy) / [`site_restore.py`](#site_restorepy) |
 | Operate Apps over HTTP | [`spanel_apps.py`](#spanel_appspy) |
+| Provision or rotate Apps release signing | [`configure_apps_release_key.py`](#configure_apps_release_keypy) |
 | Audit or deploy Compose directly | [`app_deploy.py`](#app_deploypy) |
 | Publish or remove a domain in Traefik | [`proxy_domain.py`](#proxy_domainpy) |
 | Refresh/adopt the observed domain inventory | [`domains_sync.py`](#domains_syncpy) / [`domains_adopt.py`](#domains_adoptpy) |
@@ -290,6 +291,32 @@ down` or prints the key.
 python3 scripts/configure_apps.py --public-url https://panel.example.com --dry-run
 python3 scripts/configure_apps.py --public-url https://panel.example.com --restart
 ```
+
+### `configure_apps_release_key.py`
+
+**Read-only with `status`/`plan`/`verify`; writes with `apply`/`rotate`.**
+Provisions `SPANEL_APPS_RELEASE_SIGNING_KEY` (minimum 32 bytes) and the optional
+`SPANEL_APPS_RELEASE_VERIFY_KEYS` rotation map in the host environment file,
+then recreates `app` and `apps-worker`. `apply` is idempotent and never replaces
+a valid key; `rotate` generates a new key and keeps the previous one for
+verification. Key material is never printed unless `--print-key` is passed.
+
+Without an active key, Apps deploy/rollback fail closed with
+`apps.release_signing_unavailable` before creating a release or touching
+containers. Legacy applications get their first signed release on the next
+deploy; their unsigned deployments cannot be rollback targets.
+
+```bash
+python3 scripts/configure_apps_release_key.py status
+python3 scripts/configure_apps_release_key.py plan
+python3 scripts/configure_apps_release_key.py apply --dry-run
+python3 scripts/configure_apps_release_key.py apply
+python3 scripts/configure_apps_release_key.py verify
+python3 scripts/configure_apps_release_key.py rotate --print-key
+```
+
+Options such as `--env-file`, `--compose-file` and `--service` go **after** the
+subcommand. Use `--no-restart` to update the file without recreating services.
 
 ### `migrate_env.py`
 

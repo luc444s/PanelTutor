@@ -51,6 +51,7 @@ python3 scripts/<script>.py --help
 | Eliminar completamente un WordPress gestionado | [`hosting_delete_wordpress.py`](#hosting_delete_wordpresspy) |
 | Respaldar o restaurar un sitio | [`site_backup.py`](#site_backuppy) / [`site_restore.py`](#site_restorepy) |
 | Operar Apps por HTTP | [`spanel_apps.py`](#spanel_appspy) |
+| Provisionar o rotar la firma de releases de Apps | [`configure_apps_release_key.py`](#configure_apps_release_keypy) |
 | Auditar o desplegar Compose directamente | [`app_deploy.py`](#app_deploypy) |
 | Publicar o retirar un dominio en Traefik | [`proxy_domain.py`](#proxy_domainpy) |
 | Refrescar/adoptar el inventario observado | [`domains_sync.py`](#domains_syncpy) / [`domains_adopt.py`](#domains_adoptpy) |
@@ -291,6 +292,32 @@ down` ni imprime la clave.
 python3 scripts/configure_apps.py --public-url https://panel.example.com --dry-run
 python3 scripts/configure_apps.py --public-url https://panel.example.com --restart
 ```
+
+### `configure_apps_release_key.py`
+
+**Solo lectura con `status`/`plan`/`verify`; escritura con `apply`/`rotate`.**
+Provisiona `SPANEL_APPS_RELEASE_SIGNING_KEY` (mínimo 32 bytes) y el mapa
+opcional `SPANEL_APPS_RELEASE_VERIFY_KEYS` para rotación en el fichero de
+entorno del host, y recrea `app` y `apps-worker`. `apply` es idempotente y
+nunca reemplaza una clave válida; `rotate` genera una nueva y conserva la
+anterior para verificar. Nunca imprime la clave salvo con `--print-key`.
+
+Sin clave activa, el deploy/rollback de Apps falla cerrado con
+`apps.release_signing_unavailable` antes de crear el release o tocar
+contenedores. Las aplicaciones legacy reciben su primer release firmado en el
+siguiente deploy; sus deployments sin firma no pueden ser destino de rollback.
+
+```bash
+python3 scripts/configure_apps_release_key.py status
+python3 scripts/configure_apps_release_key.py plan
+python3 scripts/configure_apps_release_key.py apply --dry-run
+python3 scripts/configure_apps_release_key.py apply
+python3 scripts/configure_apps_release_key.py verify
+python3 scripts/configure_apps_release_key.py rotate --print-key
+```
+
+Las opciones `--env-file`, `--compose-file` y `--service` van **después** del
+subcomando. Usa `--no-restart` para actualizar el fichero sin recrear servicios.
 
 ### `migrate_env.py`
 

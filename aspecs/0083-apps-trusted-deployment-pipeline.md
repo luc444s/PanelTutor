@@ -136,6 +136,9 @@ Reglas:
 - La clave no aparece en argv, JSON, logs, manifiestos ni operaciones.
 - `key_id = sha256(key)[:8]`; permite rotación sin invalidar releases previas.
 - Releases con `key_id` desconocido o firma inválida se rechazan.
+- `scripts/configure_apps_release_key.py` provisiona, audita y rota las claves
+  sin exponerlas; `apply` es idempotente y `rotate` conserva la anterior en
+  `SPANEL_APPS_RELEASE_VERIFY_KEYS`.
 
 ### 3. Almacén
 
