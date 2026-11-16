@@ -89,6 +89,18 @@ def test_automatic_policy_adds_postgres_runtime_tmpfs() -> None:
     }]
 
 
+def test_automatic_policy_adds_mariadb_runtime_tmpfs() -> None:
+    generated = automatic_hardening_policy(
+        {"db": {"image": "mariadb:11.4"}},
+        {"db": "999:999"},
+    )
+    assert generated.as_dict()["writable_paths"] == [{
+        "service": "db",
+        "path": "/run/mysqld",
+        "mode": "0775",
+    }]
+
+
 def test_resolve_policy_fills_omitted_services_from_dockerfile() -> None:
     base = HardeningPolicy((RuntimeUserPolicy("web", 1000, 1000),))
     resolved = resolve_hardening_policy(

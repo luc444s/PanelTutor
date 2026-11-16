@@ -350,10 +350,13 @@ def _automatic_writable_paths(
         config = services[raw_service]
         config = config if isinstance(config, Mapping) else {}
         images = (config.get("image"), *dockerfile_images.get(service, ()))
-        if any(_image_repository(image) == "postgres" for image in images):
+        repositories = {_image_repository(image) for image in images}
+        if "postgres" in repositories:
             paths.append(
                 WritablePathPolicy(service, "/var/run/postgresql", "0775")
             )
+        if repositories.intersection({"mariadb", "mysql"}):
+            paths.append(WritablePathPolicy(service, "/run/mysqld", "0775"))
     return tuple(paths)
 
 
