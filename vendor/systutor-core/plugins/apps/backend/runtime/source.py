@@ -13,6 +13,9 @@ from .transport import Runner
 from .types import COMPOSE_NAMES, AppDeployError
 
 _USER_INSTRUCTION = re.compile(r"^\s*USER\s+(\S+)\s*$", re.IGNORECASE)
+_FROM_INSTRUCTION = re.compile(
+    r"^\s*FROM\s+(?:--platform=\S+\s+)?(\S+)", re.IGNORECASE
+)
 
 
 def dockerfile_runtime_user(path: Path) -> str | None:
@@ -30,6 +33,32 @@ def dockerfile_runtime_user(path: Path) -> str | None:
         if match:
             value = match.group(1).strip("\"'")
     return value
+
+
+def dockerfile_base_images(path: Path) -> tuple[str, ...]:
+    """Return external image references declared by Dockerfile FROM lines."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return ()
+    images: list[str] = []
+    stages: set[str] = set()
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _FROM_INSTRUCTION.match(line)
+        if match is None:
+            continue
+        image = match.group(1).strip("\"'")
+        if image.lower() not in stages:
+            images.append(image)
+        parts = line.split()
+        for index, value in enumerate(parts[:-1]):
+            if value.lower() == "as":
+                stages.add(parts[index + 1].lower())
+                break
+    return tuple(images)
 
 
 def _inside(path: Path, root: Path) -> bool:

@@ -46,6 +46,7 @@ from .runtime import (
     audit_project,
     clone_repo,
     compose_candidates,
+    dockerfile_base_images,
     dockerfile_runtime_user,
     lifecycle,
     runtime_snapshot,
@@ -228,6 +229,7 @@ class AppsWorker:
             audit = audit_project(checkout, source[2], non_root=True)
             service_details = []
             dockerfile_users: dict[str, str | None] = {}
+            dockerfile_images: dict[str, tuple[str, ...]] = {}
             for service in sorted(audit.data["services"]):
                 config = audit.data["services"].get(service)
                 config = config if isinstance(config, dict) else {}
@@ -239,6 +241,10 @@ class AppsWorker:
                     if dockerfile is not None else None
                 )
                 dockerfile_users[service] = user_declared
+                dockerfile_images[service] = (
+                    dockerfile_base_images(dockerfile)
+                    if dockerfile is not None else ()
+                )
                 service_details.append({
                     "name": service,
                     "build": dockerfile is not None,
@@ -276,6 +282,7 @@ class AppsWorker:
                         HardeningPolicy.from_dict(raw_policy),
                         audit.data["services"],
                         dockerfile_users,
+                        dockerfile_images,
                     )
                 except (TypeError, ValueError):
                     raise HardeningRejected(
@@ -305,10 +312,11 @@ class AppsWorker:
                         HardeningPolicy.from_dict(raw_policy),
                         audit.data["services"],
                         dockerfile_users,
+                        dockerfile_images,
                     )
                 else:
                     policy = automatic_hardening_policy(
-                        audit.data["services"], dockerfile_users
+                        audit.data["services"], dockerfile_users, dockerfile_images
                     )
             except (TypeError, ValueError) as exc:
                 raise AppDeployError(f"Runtime policy could not be generated: {exc}") from None

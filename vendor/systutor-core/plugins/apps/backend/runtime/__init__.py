@@ -20,6 +20,7 @@ from .source import (
     clone_repo,
     compose_candidates,
     discover_compose,
+    dockerfile_base_images,
     dockerfile_runtime_user,
 )
 from .transport import Runner
@@ -61,6 +62,7 @@ __all__ = [
     "compose_candidates",
     "deploy",
     "discover_compose",
+    "dockerfile_base_images",
     "dockerfile_runtime_user",
     "lifecycle",
     "render_report",

@@ -17,7 +17,10 @@ from plugins.apps.backend.hardening import (
     automatic_hardening_policy,
     resolve_hardening_policy,
 )
-from plugins.apps.backend.runtime.source import dockerfile_runtime_user
+from plugins.apps.backend.runtime.source import (
+    dockerfile_base_images,
+    dockerfile_runtime_user,
+)
 from plugins.apps.backend.schemas import HardeningRequest
 
 
@@ -40,7 +43,11 @@ def test_automatic_policy_uses_inspected_users_or_safe_default() -> None:
             "web": {"uid": 1200, "gid": 1300},
             "worker": {"uid": 1400, "gid": 1400},
         },
-        "writable_paths": [],
+        "writable_paths": [{
+            "service": "database",
+            "path": "/var/run/postgresql",
+            "mode": "0775",
+        }],
         "runtime_users": {
             "database": {"requested": "70:70", "effective": "70:70", "source": "compose"},
             "web": {"requested": "1200:1300", "effective": "1200:1300", "source": "compose"},
@@ -67,6 +74,19 @@ def test_automatic_policy_uses_dockerfile_user_when_compose_has_none() -> None:
         "database": {"uid": 70, "gid": 70},
         "web": {"uid": 1200, "gid": 1300},
     }
+
+
+def test_automatic_policy_adds_postgres_runtime_tmpfs() -> None:
+    generated = automatic_hardening_policy(
+        {"database": {"build": "."}, "web": {"image": "acme/web:latest"}},
+        {"database": "postgres", "web": "1000"},
+        {"database": ("postgres:16-alpine",), "web": ("python:3.12",)},
+    )
+    assert generated.as_dict()["writable_paths"] == [{
+        "service": "database",
+        "path": "/var/run/postgresql",
+        "mode": "0775",
+    }]
 
 
 def test_resolve_policy_fills_omitted_services_from_dockerfile() -> None:
@@ -98,6 +118,16 @@ def test_dockerfile_runtime_user_uses_the_final_instruction(tmp_path: Path) -> N
     assert dockerfile_runtime_user(path) == "1000:1000"
     path.write_text("FROM scratch\n# USER 0\n", encoding="utf-8")
     assert dockerfile_runtime_user(path) is None
+
+
+def test_dockerfile_base_images_ignore_internal_stages(tmp_path: Path) -> None:
+    path = tmp_path / "Dockerfile"
+    path.write_text(
+        "FROM --platform=linux/amd64 postgres:16-alpine AS database\n"
+        "FROM database AS final\nUSER postgres\n",
+        encoding="utf-8",
+    )
+    assert dockerfile_base_images(path) == ("postgres:16-alpine",)
 
 
 def applied() -> dict:
