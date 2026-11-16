@@ -75,7 +75,9 @@ def deploy_trusted(
             raise AppDeployError("cannot verify remote project release availability")
     _ensure_owned(runner, project)
     compose_rel = release.compose_path
-    override = _override(result.data, project, True, _env_path(staged))
+    override = _override(
+        result.data, project, True, _env_path(staged), release_id
+    )
     _stage_release(runner, result.root, staged, compose_rel, override, env_file)
     services = sorted(result.data["services"])
     _validate_compose_environment(runner, staged, compose_rel, project)

@@ -122,7 +122,10 @@ def _override(
     project: str,
     non_root: bool,
     external_env: Path | None = None,
+    image_tag: str = "latest",
 ) -> str:
+    if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", image_tag):
+        raise AppDeployError("release image tag is invalid")
     services: dict[str, Any] = {}
     for service, source_config in data["services"].items():
         config: dict[str, Any] = {"labels": {OWNER_LABEL: project}}
@@ -136,7 +139,7 @@ def _override(
             image_key = hashlib.sha256(
                 f"{project}\0{service}".encode()
             ).hexdigest()[:20]
-            config["image"] = f"spanel-app-{image_key}:latest"
+            config["image"] = f"spanel-app-{image_key}:{image_tag}"
         if non_root:
             source_caps = (
                 source_config.get("cap_drop")
@@ -737,6 +740,7 @@ def deploy(
         project,
         options.non_root,
         _env_path(release),
+        options.release_id or "latest",
     )
     _stage_release(runner, result.root, release, compose_rel, override, env_file)
     services = sorted(result.data["services"])

@@ -240,7 +240,9 @@ def deploy_scoped(
                     "cannot verify remote project release availability"
                 )
         _ensure_owned(runner, project)
-        override = _override(result.data, project, True, _env_path(staged))
+        override = _override(
+            result.data, project, True, _env_path(staged), staging_id
+        )
         _stage_release(runner, result.root, staged, release.compose_path, override, env_file)
     compose_rel = release.compose_path
     all_services = sorted(result.data["services"])

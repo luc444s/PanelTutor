@@ -21,6 +21,7 @@ from plugins.apps.backend.releases.trusted import (
     TrustedRelease,
 )
 from plugins.apps.backend.runtime.audit import audit_project
+from plugins.apps.backend.runtime.deployment import _override
 
 COMPOSE = """services:
   frontend:
@@ -204,6 +205,23 @@ def test_dockerignore_excludes_context_noise(tmp_path: Path) -> None:
     assert build_context_digest(context, context / "Dockerfile") == first
     context.joinpath("app.js").write_text("y", encoding="utf-8")
     assert build_context_digest(context, context / "Dockerfile") != first
+
+
+def test_release_override_uses_immutable_build_image_tags() -> None:
+    rendered = _override(
+        {
+            "services": {
+                "frontend": {"build": {"context": "."}},
+                "database": {"image": "postgres:16-alpine"},
+            }
+        },
+        "app-demo",
+        True,
+        image_tag="release-123",
+    )
+    assert "spanel-app-" in rendered
+    assert ":release-123" in rendered
+    assert "postgres:16-alpine" not in rendered
 
 
 def test_restoration_uses_up_no_deps_and_never_global_down(tmp_path: Path, monkeypatch) -> None:
