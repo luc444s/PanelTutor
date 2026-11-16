@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +46,7 @@ class AuditResult:
     data: dict[str, Any]
     dockerfiles: dict[str, Path]
     findings: list[Finding]
+    warnings: list[str] = field(default_factory=list)
 
     @property
     def errors(self) -> list[Finding]:

@@ -27,7 +27,8 @@ def audit_project(
     non_root: bool = False,
     require_build: bool = False,
 ) -> AuditResult:
-    root = validate_checkout(root)
+    warnings: list[str] = []
+    root = validate_checkout(root, warnings)
     compose = discover_compose(root, compose_file)
     data, lines = _load_compose(compose)
     compose_rel = compose.relative_to(root).as_posix()
@@ -319,4 +320,4 @@ def audit_project(
     findings.sort(
         key=lambda item: (item.path, item.line, item.service or "", item.code)
     )
-    return AuditResult(root, compose, data, dockerfiles, findings)
+    return AuditResult(root, compose, data, dockerfiles, findings, warnings)

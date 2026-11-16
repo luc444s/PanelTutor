@@ -276,9 +276,19 @@ class AppsWorker:
                 "services": sorted(audit.data["services"]),
                 "service_details": service_details,
                 "findings": [finding.__dict__ for finding in audit.findings],
+                "warnings": list(audit.warnings),
                 "blocking": bool(audit.errors),
                 "source_adapter": adaptation.as_dict(),
             }
+            if audit.warnings:
+                report["output"] = "\n".join(
+                    f"WARNING: {warning}" for warning in audit.warnings
+                )
+                for warning in audit.warnings:
+                    logger.warning(
+                        "apps_checkout_warning: %s", warning,
+                        extra={"application_id": application_id},
+                    )
             if kind == "inspect":
                 return report
             if kind == "harden":

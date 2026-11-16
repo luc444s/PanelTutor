@@ -56,6 +56,7 @@ def render_report(result: AuditResult, output_format: str = "human") -> str:
             {
                 "compose": result.compose.relative_to(result.root).as_posix(),
                 "findings": [asdict(item) for item in result.findings],
+                "warnings": list(result.warnings),
                 "errors": len(result.errors),
                 "warning": (
                     "Static heuristics do not prove safety; Docker builds execute "
@@ -69,6 +70,7 @@ def render_report(result: AuditResult, output_format: str = "human") -> str:
         f"Compose: {result.compose.relative_to(result.root).as_posix()}",
         "WARNING: static heuristics do not prove safety; Docker builds execute untrusted code.",
     ]
+    rows.extend(f"WARNING: {warning}" for warning in result.warnings)
     for item in result.findings:
         owner = f" service={item.service}" if item.service else ""
         rows.append(

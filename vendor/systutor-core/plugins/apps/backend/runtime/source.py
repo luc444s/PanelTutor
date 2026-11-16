@@ -69,9 +69,9 @@ def _inside(path: Path, root: Path) -> bool:
         return False
 
 
-def _resolve_inside(path: Path, root: Path, what: str) -> Path:
+def _resolve_inside(path: Path, root: Path, what: str, *, strict: bool = True) -> Path:
     try:
-        resolved = path.resolve(strict=True)
+        resolved = path.resolve(strict=strict)
     except (OSError, RuntimeError) as exc:
         raise AppDeployError(f"{what} does not exist or cannot be resolved") from exc
     if not _inside(resolved, root):
@@ -79,7 +79,14 @@ def _resolve_inside(path: Path, root: Path, what: str) -> Path:
     return resolved
 
 
-def validate_checkout(root: Path) -> Path:
+def _broken_symlink_warning(relative: Path) -> str:
+    return (
+        f"Broken symlink in {relative.as_posix()}. "
+        "Not used by deployment. Continuing."
+    )
+
+
+def validate_checkout(root: Path, warnings: list[str] | None = None) -> Path:
     root = root.expanduser().resolve(strict=True)
     if not root.is_dir():
         raise AppDeployError("source directory is not a directory")
@@ -89,7 +96,23 @@ def validate_checkout(root: Path) -> Path:
         except OSError as exc:
             raise AppDeployError("checkout contains an unreadable path") from exc
         if stat.S_ISLNK(mode):
-            _resolve_inside(path, root, f"symlink {path.relative_to(root)}")
+            relative = path.relative_to(root)
+            try:
+                _resolve_inside(path, root, f"symlink {relative}")
+            except AppDeployError:
+                # A broken symlink is harmless while its target stays inside the
+                # checkout: Docker copies the link itself and only fails if a
+                # build step dereferences it. Symlinks whose target escapes the
+                # checkout (or loop) are rejected again by the non-strict check.
+                resolved = _resolve_inside(
+                    path, root, f"symlink {relative}", strict=False
+                )
+                if resolved == path:
+                    raise AppDeployError(
+                        f"symlink {relative} does not exist or cannot be resolved"
+                    ) from None
+                if warnings is not None:
+                    warnings.append(_broken_symlink_warning(relative))
         elif not (stat.S_ISREG(mode) or stat.S_ISDIR(mode)):
             raise AppDeployError(
                 f"checkout contains special file: {path.relative_to(root)}"

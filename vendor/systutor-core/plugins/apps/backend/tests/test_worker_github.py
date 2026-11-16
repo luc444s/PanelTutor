@@ -241,7 +241,8 @@ def test_source_operation_requests_a_single_repository_token(
         root_path.joinpath("compose.yaml").write_text("services: {web: {}}")
         return SimpleNamespace(
             root=root_path, compose=root_path / "compose.yaml",
-            findings=[], errors=[], data={"services": {"web": {}}}, dockerfiles={},
+            findings=[], errors=[], warnings=[],
+            data={"services": {"web": {}}}, dockerfiles={},
         )
 
     monkeypatch.setattr(worker_module, "clone_repo", fake_clone)
