@@ -63,7 +63,7 @@ def policy(*users: tuple[str, int, int, str]) -> HardeningPolicy:
     )
 
 
-def test_desired_user_precedence_policy_compose_dockerfile_then_error() -> None:
+def test_desired_user_precedence_policy_compose_dockerfile_then_default() -> None:
     explicit = policy(("web", 2000, 2001, "policy"))
     resolved = resolve_hardening_policy(
         explicit, {"web": {"user": "3000:3001"}}, {"web": "4000:4001"}
@@ -75,8 +75,24 @@ def test_desired_user_precedence_policy_compose_dockerfile_then_error() -> None:
     assert compose.as_dict()["runtime_users"]["web"]["source"] == "compose"
     dockerfile = automatic_hardening_policy({"web": {}}, {"web": "4000:4001"})
     assert dockerfile.as_dict()["runtime_users"]["web"]["source"] == "dockerfile"
-    with pytest.raises(ValueError, match="explicit runtime user required"):
-        automatic_hardening_policy({"web": {}}, {})
+    fallback = automatic_hardening_policy({"web": {}}, {})
+    assert fallback.as_dict()["runtime_users"]["web"] == {
+        "requested": "1000:1000",
+        "effective": "1000:1000",
+        "source": "policy",
+    }
+
+
+def test_named_dockerfile_users_fall_back_before_volume_owner_resolution() -> None:
+    generated = automatic_hardening_policy(
+        {"backend": {}, "database": {}, "frontend": {}},
+        {"backend": "app", "database": "postgres", "frontend": "101"},
+    )
+    assert generated.as_dict()["service_users"] == {
+        "backend": {"uid": 1000, "gid": 1000},
+        "database": {"uid": 1000, "gid": 1000},
+        "frontend": {"uid": 101, "gid": 101},
+    }
 
 
 def test_compose_volume_names_with_and_without_explicit_name() -> None:

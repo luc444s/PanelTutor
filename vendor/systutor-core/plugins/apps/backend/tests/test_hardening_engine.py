@@ -28,7 +28,7 @@ def policy() -> HardeningPolicy:
     )
 
 
-def test_automatic_policy_requires_and_uses_inspected_users() -> None:
+def test_automatic_policy_uses_inspected_users_or_safe_default() -> None:
     generated = automatic_hardening_policy({
         "database": {"image": "postgres:16", "user": "70:70"},
         "web": {"build": ".", "user": "1200:1300"},
@@ -47,8 +47,12 @@ def test_automatic_policy_requires_and_uses_inspected_users() -> None:
             "worker": {"requested": "1400:1400", "effective": "1400:1400", "source": "compose"},
         },
     }
-    with pytest.raises(ValueError, match="explicit runtime user required for: database"):
-        automatic_hardening_policy({"database": {"image": "postgres:16"}})
+    fallback = automatic_hardening_policy({"database": {"image": "postgres:16"}})
+    assert fallback.as_dict()["service_users"]["database"] == {
+        "uid": 1000,
+        "gid": 1000,
+    }
+    assert fallback.as_dict()["runtime_users"]["database"]["source"] == "policy"
 
 
 def test_automatic_policy_uses_dockerfile_user_when_compose_has_none() -> None:
@@ -76,8 +80,11 @@ def test_resolve_policy_fills_omitted_services_from_dockerfile() -> None:
         "database": {"uid": 70, "gid": 70},
         "web": {"uid": 1000, "gid": 1000},
     }
-    with pytest.raises(ValueError, match="explicit runtime user required"):
-        resolve_hardening_policy(base, {"web": {}, "cache": {}}, {})
+    fallback = resolve_hardening_policy(base, {"web": {}, "cache": {}}, {})
+    assert fallback.as_dict()["service_users"]["cache"] == {
+        "uid": 1000,
+        "gid": 1000,
+    }
     with pytest.raises(ValueError, match="unknown service"):
         resolve_hardening_policy(base, {"database": {}}, {})
 

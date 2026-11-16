@@ -14,6 +14,7 @@ _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_SERVICES = 64
 _MAX_WRITABLE_PATHS = 256
 _RUNTIME_USER = re.compile(r"([1-9][0-9]{0,9})(?::([1-9][0-9]{0,9}))?\Z")
+_DEFAULT_RUNTIME_ID = 1000
 
 
 class HardeningRejected(RuntimeError):
@@ -235,8 +236,8 @@ def automatic_hardening_policy(
     """Build the server-owned runtime policy from inspected Compose services.
 
     Explicit Compose ``user:`` declarations win. When a service has no numeric
-    user there, fall back to the final ``USER`` instruction of its Dockerfile.
-    Missing or non-numeric declarations fail closed.
+    user there, fall back to the final ``USER`` instruction of its Dockerfile,
+    then to the server-owned non-root policy default.
     """
     if not isinstance(services, Mapping):
         raise ValueError("inspected services are invalid")
@@ -250,9 +251,11 @@ def automatic_hardening_policy(
         resolved = _declared_runtime_user(
             config.get("user"), dockerfile_users.get(name)
         )
-        if resolved is None:
-            raise ValueError(f"explicit runtime user required for: {name}")
-        uid, gid, source = resolved
+        uid, gid, source = resolved or (
+            _DEFAULT_RUNTIME_ID,
+            _DEFAULT_RUNTIME_ID,
+            "policy",
+        )
         users.append(RuntimeUserPolicy(name, uid, gid))
         value = f"{uid}:{gid}"
         evidence.append(RuntimeUserEvidence(name, value, value, source))
@@ -289,7 +292,6 @@ def resolve_hardening_policy(
         raise ValueError(
             "runtime user references unknown service: " + ", ".join(unknown)
         )
-    missing: list[str] = []
     for service in sorted(services):
         if service in declared:
             continue
@@ -299,15 +301,12 @@ def resolve_hardening_policy(
             config.get("user"), dockerfile_users.get(service)
         )
         if resolved is None:
-            missing.append(service)
+            declared[service] = (_DEFAULT_RUNTIME_ID, _DEFAULT_RUNTIME_ID)
+            sources[service] = "policy"
             continue
         uid, gid, source = resolved
         declared[service] = (uid, gid)
         sources[service] = source
-    if missing:
-        raise ValueError(
-            "explicit runtime user required for: " + ", ".join(missing)
-        )
     return HardeningPolicy(
         tuple(
             RuntimeUserPolicy(service, uid, gid)
