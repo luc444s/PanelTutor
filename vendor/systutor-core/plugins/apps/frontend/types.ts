@@ -102,6 +102,7 @@ export type InspectedService = {
   dockerfile: string | null;
   image: string | null;
   compose_user: string | null;
+  dockerfile_user?: string | null;
 };
 
 export type HardeningRuntimeUser = { uid: number; gid: number };

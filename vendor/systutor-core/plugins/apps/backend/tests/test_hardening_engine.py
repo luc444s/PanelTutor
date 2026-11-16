@@ -15,7 +15,9 @@ from plugins.apps.backend.hardening import (
     RuntimeUserPolicy,
     WritablePathPolicy,
     automatic_hardening_policy,
+    resolve_hardening_policy,
 )
+from plugins.apps.backend.runtime.source import dockerfile_runtime_user
 from plugins.apps.backend.schemas import HardeningRequest
 
 
@@ -40,6 +42,48 @@ def test_automatic_policy_uses_inspected_user_or_safe_default() -> None:
         },
         "writable_paths": [],
     }
+
+
+def test_automatic_policy_uses_dockerfile_user_when_compose_has_none() -> None:
+    generated = automatic_hardening_policy(
+        {
+            "database": {"build": "."},
+            "web": {"build": ".", "user": "1200:1300"},
+        },
+        {"database": "70:70", "web": "1000:1000"},
+    )
+    assert generated.as_dict()["service_users"] == {
+        "database": {"uid": 70, "gid": 70},
+        "web": {"uid": 1200, "gid": 1300},
+    }
+
+
+def test_resolve_policy_fills_omitted_services_from_dockerfile() -> None:
+    base = HardeningPolicy((RuntimeUserPolicy("web", 1000, 1000),))
+    resolved = resolve_hardening_policy(
+        base,
+        {"database": {"build": "."}, "web": {"build": "."}},
+        {"database": "70:70"},
+    )
+    assert resolved.as_dict()["service_users"] == {
+        "database": {"uid": 70, "gid": 70},
+        "web": {"uid": 1000, "gid": 1000},
+    }
+    with pytest.raises(ValueError, match="explicit runtime user required"):
+        resolve_hardening_policy(base, {"web": {}, "cache": {}}, {})
+    with pytest.raises(ValueError, match="unknown service"):
+        resolve_hardening_policy(base, {"database": {}}, {})
+
+
+def test_dockerfile_runtime_user_uses_the_final_instruction(tmp_path: Path) -> None:
+    path = tmp_path / "Dockerfile"
+    path.write_text(
+        "FROM postgres:16-alpine\nUSER postgres\nUSER 1000:1000\n",
+        encoding="utf-8",
+    )
+    assert dockerfile_runtime_user(path) == "1000:1000"
+    path.write_text("FROM scratch\n# USER 0\n", encoding="utf-8")
+    assert dockerfile_runtime_user(path) is None
 
 
 def applied() -> dict:

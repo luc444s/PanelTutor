@@ -259,6 +259,7 @@ def test_source_operation_requests_a_single_repository_token(
         "dockerfile": None,
         "image": None,
         "compose_user": None,
+        "dockerfile_user": None,
     }]
     assert report["compose_candidates"] == ["compose.yaml"]
     assert captured == {

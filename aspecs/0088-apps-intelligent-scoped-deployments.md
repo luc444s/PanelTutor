@@ -193,6 +193,21 @@ todos los contenedores antes de reconciliar la red del proyecto. Hacerlo
 servicio a servicio con `--no-deps` deja los demás contenedores conectados y
 `up` falla al intentar eliminar la red (`network ... has active endpoints`).
 
+La política de usuarios se completa por servicio antes de endurecer: valor
+explícito del deploy, luego `user:` numérico del compose, luego el `USER` final
+del Dockerfile. Cualquier UID/GID no-root es válido (por ejemplo `70:70` para
+Postgres); si ningún origen declara un usuario no-root, el deploy falla cerrado.
+
+El target del probe se resuelve con el ingress de la app. Si no está definido,
+se usa el único servicio con puerto declarado (excluyendo datastores) o un
+nombre de ingress habitual (`frontend`, `web`, `app`, `nginx`, `ingress`); si
+es ambiguo, el probe falla cerrado y exige `SPANEL_APPS_PROBE_COMMAND`. El
+target queda registrado en el manifest como `probe_target`.
+
+Si Compose falla al arrancar, el error incluye el estado efectivo de los
+servicios (`database is unhealthy`, `backend exited with code 1`) sin volcar
+stderr ni variables de entorno.
+
 Los servicios fuera del plan deben conservar container ID, StartedAt y
 RestartCount. Esta condición se captura antes y se verifica después.
 

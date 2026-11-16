@@ -12,6 +12,25 @@ from yaml.nodes import MappingNode, Node, SequenceNode
 from .transport import Runner
 from .types import COMPOSE_NAMES, AppDeployError
 
+_USER_INSTRUCTION = re.compile(r"^\s*USER\s+(\S+)\s*$", re.IGNORECASE)
+
+
+def dockerfile_runtime_user(path: Path) -> str | None:
+    """Return the final ``USER`` instruction declared by a Dockerfile."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return None
+    value: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        match = _USER_INSTRUCTION.match(line)
+        if match:
+            value = match.group(1).strip("\"'")
+    return value
+
 
 def _inside(path: Path, root: Path) -> bool:
     try:

@@ -224,6 +224,38 @@ def test_release_override_uses_immutable_build_image_tags() -> None:
     assert "postgres:16-alpine" not in rendered
 
 
+def test_compose_failure_reason_reports_unhealthy_and_exited() -> None:
+    from plugins.apps.backend.releases.scoped_execution import compose_failure_reason
+
+    assert compose_failure_reason([
+        {"Service": "database", "State": "running", "Health": "unhealthy"},
+        {"Service": "backend", "State": "exited", "ExitCode": 1},
+        {"Service": "frontend", "State": "running", "Health": "healthy"},
+    ]) == "backend exited with code 1; database is unhealthy"
+    assert compose_failure_reason([]) is None
+    assert compose_failure_reason({"services": {"db": {"State": "dead"}}}) is not None
+
+
+def test_fallback_probe_target_prefers_ingress_and_skips_datastores() -> None:
+    from plugins.apps.backend.releases.scoped_execution import fallback_probe_target
+
+    assert fallback_probe_target({
+        "database": {"expose": ["5432"]},
+        "backend": {"expose": ["8000"]},
+        "frontend": {"expose": ["8080"]},
+    }) == ("frontend", 8080)
+    assert fallback_probe_target({
+        "database": {"expose": ["5432"]},
+        "api": {"ports": [{"target": 9000}]},
+    }) == ("api", 9000)
+    assert fallback_probe_target({
+        "database": {"expose": ["5432"]},
+        "alpha": {"expose": ["8080"]},
+        "beta": {"expose": ["8081"]},
+    }) is None
+    assert fallback_probe_target({"database": {"expose": ["5432"]}}) is None
+
+
 def test_env_path_falls_back_to_legacy_release_layout(tmp_path: Path) -> None:
     from plugins.apps.backend.runtime.deployment import _env_path
 

@@ -114,20 +114,85 @@ class HardeningPolicy:
         }
 
 
-def automatic_hardening_policy(services: object) -> HardeningPolicy:
-    """Build the server-owned runtime policy from inspected Compose services."""
+def automatic_hardening_policy(
+    services: object,
+    dockerfile_users: Mapping[str, str | None] | None = None,
+) -> HardeningPolicy:
+    """Build the server-owned runtime policy from inspected Compose services.
+
+    Explicit Compose ``user:`` declarations win. When a service has no numeric
+    user there, fall back to the final ``USER`` instruction of its Dockerfile.
+    Only a missing declaration falls back to the safe default (1000:1000).
+    """
     if not isinstance(services, Mapping):
         raise ValueError("inspected services are invalid")
+    dockerfile_users = dockerfile_users or {}
     users = []
     for service in sorted(services):
         name = _service_name(service)
         config = services[service]
         config = config if isinstance(config, Mapping) else {}
-        match = _RUNTIME_USER.fullmatch(str(config.get("user", "")))
-        uid = int(match.group(1)) if match else _DEFAULT_RUNTIME_ID
-        gid = int(match.group(2) or match.group(1)) if match else _DEFAULT_RUNTIME_ID
+        resolved = _declared_runtime_user(
+            config.get("user"), dockerfile_users.get(name)
+        )
+        uid, gid = resolved or (_DEFAULT_RUNTIME_ID, _DEFAULT_RUNTIME_ID)
         users.append(RuntimeUserPolicy(name, uid, gid))
     return HardeningPolicy(tuple(users))
+
+
+def _declared_runtime_user(
+    compose_user: object, dockerfile_user: str | None
+) -> tuple[int, int] | None:
+    for value in (compose_user, dockerfile_user):
+        match = _RUNTIME_USER.fullmatch(str(value or ""))
+        if not match:
+            continue
+        uid = int(match.group(1))
+        gid = int(match.group(2) or match.group(1))
+        if 0 < uid <= 2**31 - 1 and 0 < gid <= 2**31 - 1:
+            return uid, gid
+    return None
+
+
+def resolve_hardening_policy(
+    policy: HardeningPolicy,
+    services: object,
+    dockerfile_users: Mapping[str, str | None] | None = None,
+) -> HardeningPolicy:
+    """Fill omitted services from the checkout while keeping explicit values."""
+    if not isinstance(services, Mapping):
+        raise ValueError("inspected services are invalid")
+    dockerfile_users = dockerfile_users or {}
+    declared = {item.service: (item.uid, item.gid) for item in policy.service_users}
+    unknown = sorted(set(declared).difference(services))
+    if unknown:
+        raise ValueError(
+            "runtime user references unknown service: " + ", ".join(unknown)
+        )
+    missing: list[str] = []
+    for service in sorted(services):
+        if service in declared:
+            continue
+        config = services[service]
+        config = config if isinstance(config, Mapping) else {}
+        resolved = _declared_runtime_user(
+            config.get("user"), dockerfile_users.get(service)
+        )
+        if resolved is None:
+            missing.append(service)
+            continue
+        declared[service] = resolved
+    if missing:
+        raise ValueError(
+            "explicit runtime user required for: " + ", ".join(missing)
+        )
+    return HardeningPolicy(
+        tuple(
+            RuntimeUserPolicy(service, uid, gid)
+            for service, (uid, gid) in sorted(declared.items())
+        ),
+        policy.writable_paths,
+    )
 
 
 def _json_evidence(value: object, *, depth: int = 0) -> Any:

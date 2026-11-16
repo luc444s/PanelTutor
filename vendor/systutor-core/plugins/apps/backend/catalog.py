@@ -410,6 +410,7 @@ def application_detail(db: Session, tenant_id: str, application_id: str) -> dict
                 "dockerfile": None,
                 "image": item.get("image"),
                 "compose_user": item.get("user"),
+                "dockerfile_user": None,
             }
             for item in _deployment_view(active)["service_details"]
         ]

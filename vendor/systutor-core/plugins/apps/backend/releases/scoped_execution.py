@@ -7,6 +7,7 @@ decision and proves the services outside the plan were not touched.
 from __future__ import annotations
 
 import hashlib
+import json
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -201,8 +202,119 @@ def _restore(
     return restored, failed, containers, composes
 
 
-def _merged_paths(
-    previous: Mapping[str, Path | None],
+_PROBE_PREFERRED_SERVICES = ("frontend", "web", "app", "nginx", "ingress")
+_PROBE_DENIED_SERVICES = frozenset({
+    "database", "db", "postgres", "postgresql", "mysql", "mariadb",
+    "mongo", "mongodb", "redis", "cache", "queue", "rabbitmq",
+})
+
+
+def compose_failure_reason(payload: object) -> str | None:
+    """Summarise unhealthy/exited services from ``docker compose ps`` JSON."""
+    if isinstance(payload, Mapping):
+        entries = payload.get("services") or []
+        if isinstance(entries, Mapping):
+            entries = list(entries.values())
+    elif isinstance(payload, list):
+        entries = payload
+    else:
+        return None
+    if not isinstance(entries, list):
+        return None
+    reasons: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, Mapping):
+            continue
+        service = entry.get("Service") or entry.get("Name")
+        state = str(entry.get("State") or "").lower()
+        health = str(entry.get("Health") or "").lower()
+        exit_code = entry.get("ExitCode")
+        if health == "unhealthy":
+            reasons.append(f"{service} is unhealthy")
+        elif state in {"exited", "dead"}:
+            reasons.append(f"{service} exited with code {exit_code}")
+    if not reasons:
+        return None
+    return "; ".join(sorted(set(reasons))[:4])
+
+
+def _exposed_port(config: Mapping[str, Any]) -> int | None:
+    for entry in config.get("expose") or []:
+        text = str(entry).split("/", 1)[0].strip()
+        if text.isdigit() and 1 <= int(text) <= 65535:
+            return int(text)
+    for entry in config.get("ports") or []:
+        target: object = None
+        if isinstance(entry, Mapping):
+            target = entry.get("target")
+        elif isinstance(entry, str):
+            target = entry.rsplit(":", 1)[-1].split("/", 1)[0]
+        if isinstance(target, str) and target.isdigit():
+            port = int(target)
+        elif isinstance(target, int):
+            port = target
+        else:
+            continue
+        if 1 <= port <= 65535:
+            return port
+    return None
+
+
+def fallback_probe_target(services: object) -> tuple[str, int] | None:
+    """Pick a declared HTTP service when the app has no explicit ingress.
+
+    Isolation is unchanged: the target is always a service of the same release
+    network. Databases and services without a declared port never qualify, and
+    an ambiguous set without a conventional ingress name fails closed.
+    """
+    if not isinstance(services, Mapping):
+        return None
+    candidates: dict[str, int] = {}
+    for name, config in services.items():
+        if not isinstance(name, str) or not isinstance(config, Mapping):
+            continue
+        if name.lower() in _PROBE_DENIED_SERVICES:
+            continue
+        port = _exposed_port(config)
+        if port is not None:
+            candidates[name] = port
+    if len(candidates) == 1:
+        service, port = next(iter(candidates.items()))
+        return service, port
+    for preferred in _PROBE_PREFERRED_SERVICES:
+        if preferred in candidates:
+            return preferred, candidates[preferred]
+    return None
+
+
+def _start_failure(
+    runner: Runner,
+    staged: Path,
+    compose_rel: str,
+    project: str,
+    *,
+    prefix: str,
+) -> str:
+    """Add the effective service state to a Compose start failure."""
+    result = runner.run(
+        _compose_command(
+            staged, compose_rel, project, True,
+            "ps", "--all", "--format", "json",
+        ),
+        check=False,
+    )
+    if result.returncode == 0:
+        try:
+            payload = json.loads(result.stdout)
+        except (json.JSONDecodeError, TypeError):
+            payload = None
+        reason = compose_failure_reason(payload)
+        if reason:
+            return f"{prefix}: {reason}"
+    return prefix
+
+
+def _merged_paths(    previous: Mapping[str, Path | None],
     services: Sequence[str],
     staged: Path,
     effective: Sequence[str],
@@ -253,6 +365,9 @@ def deploy_scoped(
     result = verified.audit
     if result.errors:
         raise AppDeployError("release audit found blocking errors")
+    resolved_probe_target = probe_target or fallback_probe_target(
+        result.data.get("services")
+    )
     if env_file is not None:
         env_file = validate_env_file(env_file, result.root)
     state_root = _state_root(runner.transport, runner.environ)
@@ -408,9 +523,13 @@ def deploy_scoped(
                 )
                 up_started = True
                 if started.returncode:
-                    raise AppDeployError(
-                        f"Compose services failed to start (exit {started.returncode})"
-                    )
+                    raise AppDeployError(_start_failure(
+                        runner, staged, compose_rel, project,
+                        prefix=(
+                            "Compose services failed to start "
+                            f"(exit {started.returncode})"
+                        ),
+                    ))
             else:
                 for service in effective:
                     modified.append(service)
@@ -424,10 +543,13 @@ def deploy_scoped(
                     )
                     up_started = True
                     if started.returncode:
-                        raise AppDeployError(
-                            f"service {service} failed to start "
-                            f"(exit {started.returncode})"
-                        )
+                        raise AppDeployError(_start_failure(
+                            runner, staged, compose_rel, project,
+                            prefix=(
+                                f"service {service} failed to start "
+                                f"(exit {started.returncode})"
+                            ),
+                        ))
         containers = _containers(
             runner, staged, compose_rel, project, True, all_services
         )
@@ -468,7 +590,7 @@ def deploy_scoped(
                 services=effective,
                 containers={item: merged_containers[item] for item in effective},
                 environ=runner.environ,
-                target=probe_target,
+                target=resolved_probe_target,
             )
         probes = run_probes(
             runner,
@@ -478,7 +600,7 @@ def deploy_scoped(
             services=all_services,
             containers=merged_containers,
             environ=runner.environ,
-            target=probe_target,
+            target=resolved_probe_target,
         )
         manifest.update({
             "status": "running",
@@ -487,6 +609,10 @@ def deploy_scoped(
             "service_runtime": runtime_snapshot(runner, merged_containers),
             "probes": probes,
             "service_probes": scoped_probes,
+            "probe_target": (
+                {"service": resolved_probe_target[0], "port": resolved_probe_target[1]}
+                if resolved_probe_target is not None else None
+            ),
             "preserved": {
                 "services": untouched,
                 "before": before,
@@ -577,7 +703,7 @@ def deploy_scoped(
                                 services=all_services,
                                 containers=identities,
                                 environ=runner.environ,
-                                target=probe_target,
+                                target=resolved_probe_target,
                             )
                         except Exception as probe_exc:
                             restoration["failed"] = [*failed, "probes"]

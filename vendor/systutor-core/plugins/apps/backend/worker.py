@@ -25,6 +25,7 @@ from .hardening import (
     HardeningPolicy,
     HardeningRejected,
     automatic_hardening_policy,
+    resolve_hardening_policy,
 )
 from .managed_environment import MANAGED_DATABASE_NAMES, clear_managed_environment
 from .models import (
@@ -45,6 +46,7 @@ from .runtime import (
     audit_project,
     clone_repo,
     compose_candidates,
+    dockerfile_runtime_user,
     lifecycle,
     runtime_snapshot,
 )
@@ -243,12 +245,18 @@ class AppsWorker:
                 return result
             audit = audit_project(checkout, source[2], non_root=True)
             service_details = []
+            dockerfile_users: dict[str, str | None] = {}
             for service in sorted(audit.data["services"]):
                 config = audit.data["services"].get(service)
                 config = config if isinstance(config, dict) else {}
                 dockerfile = audit.dockerfiles.get(service)
                 image = config.get("image")
                 compose_user = config.get("user")
+                user_declared = (
+                    dockerfile_runtime_user(dockerfile)
+                    if dockerfile is not None else None
+                )
+                dockerfile_users[service] = user_declared
                 service_details.append({
                     "name": service,
                     "build": dockerfile is not None,
@@ -260,6 +268,7 @@ class AppsWorker:
                     "compose_user": (
                         str(compose_user) if compose_user is not None else None
                     ),
+                    "dockerfile_user": user_declared,
                 })
             report = {
                 "compose": audit.compose.relative_to(audit.root).as_posix(),
@@ -278,11 +287,16 @@ class AppsWorker:
                 raise AppDeployError("Unsupported source operation")
             raw_policy = operation_report.get("hardening")
             try:
-                policy = (
-                    HardeningPolicy.from_dict(raw_policy)
-                    if raw_policy is not None
-                    else automatic_hardening_policy(audit.data["services"])
-                )
+                if raw_policy is not None:
+                    policy = resolve_hardening_policy(
+                        HardeningPolicy.from_dict(raw_policy),
+                        audit.data["services"],
+                        dockerfile_users,
+                    )
+                else:
+                    policy = automatic_hardening_policy(
+                        audit.data["services"], dockerfile_users
+                    )
             except (TypeError, ValueError):
                 raise AppDeployError("Runtime policy could not be generated") from None
             release, _candidate = self.execution.harden_checkout(

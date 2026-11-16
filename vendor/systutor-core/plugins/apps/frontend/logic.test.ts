@@ -72,10 +72,10 @@ EMPTY=
   it("builds a complete hardening policy with numeric users and safe paths", () => {
     const drafts = serviceUserDrafts([
       { name: "web", compose_user: "10001:10002" },
-      { name: "database", compose_user: null },
+      { name: "database", compose_user: null, dockerfile_user: "70:70" },
     ]);
     expect(drafts.web).toEqual({ uid: "10001", gid: "10002" });
-    expect(drafts.database).toEqual({ uid: "", gid: "" });
+    expect(drafts.database).toEqual({ uid: "70", gid: "70" });
     const policy = buildHardeningPolicy(
       ["web", "database"],
       { ...drafts, database: { uid: "70", gid: "70" } },

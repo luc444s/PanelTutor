@@ -193,11 +193,17 @@ export function validateWritablePath(path: string, mode: string): { path: string
 export type ServiceUserDraft = { uid: string; gid: string };
 
 export function serviceUserDrafts(
-  services: Array<{ name: string; compose_user: string | null }>,
+  services: Array<{
+    name: string;
+    compose_user: string | null;
+    dockerfile_user?: string | null;
+  }>,
 ): Record<string, ServiceUserDraft> {
   const result: Record<string, ServiceUserDraft> = {};
   for (const service of services) {
-    const match = /^([1-9][0-9]{0,9})(?::([1-9][0-9]{0,9}))?$/.exec(service.compose_user ?? "");
+    const match =
+      /^([1-9][0-9]{0,9})(?::([1-9][0-9]{0,9}))?$/.exec(service.compose_user ?? "") ??
+      /^([1-9][0-9]{0,9})(?::([1-9][0-9]{0,9}))?$/.exec(service.dockerfile_user ?? "");
     result[service.name] = match
       ? { uid: match[1], gid: match[2] ?? match[1] }
       : { uid: "", gid: "" };
