@@ -140,7 +140,13 @@ networks:
     assert "networks" not in service
     assert service["environment"]["API_TOKEN"] == "literal"
     assert fixed["networks"] == {"default": {"internal": True}}
-    assert service["volumes"][0].endswith(":/app/data")
+    assert service["volumes"][0] == {
+        "type": "volume",
+        "source": service["volumes"][0]["source"],
+        "target": "/app/data",
+        "volume": {"nocopy": True},
+    }
+    assert service["volumes"][0]["source"].startswith("spanel-web-")
     assert "./data:/app/data" not in service["volumes"]
 
 

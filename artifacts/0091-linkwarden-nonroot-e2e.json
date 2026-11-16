@@ -1,0 +1,61 @@
+{
+  "status": "passed",
+  "repository": "https://github.com/linkwarden/linkwarden",
+  "branch": "main",
+  "commit": "24adcc146ba356632859a1e8adb4bffae2874d11",
+  "source_modified": false,
+  "compose_file": "docker-compose.yml",
+  "project": "spanel-linkwarden-e2e",
+  "services": {
+    "linkwarden": {
+      "image_digest": "ghcr.io/linkwarden/linkwarden@sha256:7c11fde57d1a0c819b6de0079966eba3a33584d718464af7dacde22bd470ae46",
+      "user": "1000:1000"
+    },
+    "meilisearch": {
+      "image_digest": "getmeili/meilisearch@sha256:bed3fb650e62da53145777204891159242f6ea4ce69e215b36223af4aa64a0ae",
+      "user": "1000:1000"
+    },
+    "postgres": {
+      "image_digest": "postgres@sha256:81e77a4833487b8132fe4b00bedd39dc3f74b8641e387f19312a48f7de218c2e",
+      "user": "70:70"
+    }
+  },
+  "isolation": {
+    "runtime": "runc",
+    "writable_rootfs": true,
+    "cap_drop": [
+      "ALL"
+    ],
+    "no_new_privileges": true,
+    "apparmor": "docker-default",
+    "seccomp": "builtin",
+    "pids_limit": 256,
+    "memory_bytes": 536870912,
+    "nano_cpus": 1000000000,
+    "host_binds": false,
+    "published_ports": false,
+    "internal_project_network": true
+  },
+  "volumes": {
+    "generated_mount_nocopy": true,
+    "linkwarden_owner": "1000:1000",
+    "meilisearch_owner": "1000:1000",
+    "postgres_owner": "70:70"
+  },
+  "functional": {
+    "http_status": 200,
+    "http_status_after_recreate": 200,
+    "postgres_tables": 18,
+    "postgres_tables_after_recreate": 18
+  },
+  "persistence": {
+    "rootfs_canary_after_recreate": "absent",
+    "named_volume_canary_after_recreate": "present"
+  },
+  "cleanup": {
+    "containers_removed": true,
+    "network_removed": true,
+    "volumes_removed": true,
+    "external_env_removed": true
+  }
+}

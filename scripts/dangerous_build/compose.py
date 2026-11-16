@@ -143,7 +143,12 @@ def harden_compose(text: str, policies: dict[str, ServicePolicy]) -> str:
                 continue
             name = _managed_volume(str(service), item.path)
             generated_volumes[name] = {}
-            kept.append(f"{name}:{item.path}")
+            kept.append({
+                "type": "volume",
+                "source": name,
+                "target": item.path,
+                "volume": {"nocopy": True},
+            })
         if kept:
             config["volumes"] = kept
         else:
