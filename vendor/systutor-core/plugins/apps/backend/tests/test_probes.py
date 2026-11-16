@@ -287,6 +287,7 @@ def test_default_probe_image_and_ingress_target_need_no_environment() -> None:
     assert "@sha256:" in DEFAULT_PROBE_IMAGE
     command = probe_command({}, ("web", 8080))
     assert command[0] == "curl"
+    assert "%{http_code}" in command
     assert command[-1] == "http://web:8080/"
     with pytest.raises(ProbeFailed, match="service"):
         probe_command({}, ("../etc", 8080))

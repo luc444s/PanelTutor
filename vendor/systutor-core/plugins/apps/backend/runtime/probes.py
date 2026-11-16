@@ -57,9 +57,11 @@ def _default_probe_command(target: tuple[str, int]) -> list[str]:
     if not isinstance(port, int) or not 1 <= port <= 65535:
         raise ProbeFailed("the probe target port is invalid")
     # Any HTTP response, including 4xx/5xx, proves the ingress is reachable;
-    # connection failures still exit non-zero.
+    # connection failures still exit non-zero.  The status code is written to
+    # stdout as bounded evidence while the response body is discarded.
     return [
         "curl", "-sS", "-o", "/dev/null",
+        "--write-out", "%{http_code}",
         "--connect-timeout", "5", "--max-time", "10",
         f"http://{service}:{port}/",
     ]
