@@ -526,6 +526,55 @@ def test_global_plan_with_previous_state_uses_single_up(
     assert manifest["status"] == "running"
 
 
+def test_missing_runtime_containers_force_a_global_deployment(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from plugins.apps.backend.releases.planner import DeployPlan
+    from plugins.apps.backend.runtime.types import Completed
+
+    probes = {"isolation": {"frontend": {}}, "functional": {"checks": [{}]},
+              "stability": {"restart_counts": {"frontend": 0, "backend": 0}}}
+    (scoped_execution, runner, previous_release, previous_manifest, _plan,
+     staged, _written) = _scoped_failure_env(
+        tmp_path, monkeypatch, probes=lambda *_a, **_k: probes,
+    )
+    monkeypatch.setattr(scoped_execution, "_verify_containers", lambda *_a, **_k: None)
+    original = runner.run
+
+    def missing_container(argv, **kwargs):
+        if (
+            argv[:4] == ["docker", "container", "inspect", "-f"]
+            and argv[-1] == "cid-backend"
+        ):
+            return Completed(1, "", "no such container")
+        return original(argv, **kwargs)
+
+    runner.run = missing_container
+    plan = DeployPlan(
+        requested_scope="global",
+        requested_service=None,
+        effective_services=(),
+        strategy="noop",
+    )
+    manifest = scoped_execution.deploy_scoped(
+        runner,
+        release({"frontend": "f" * 64, "backend": "b" * 64}, "c" * 64),
+        plan=plan,
+        scope=plan.requested_scope,
+        project="app-demo",
+        previous_manifest=previous_manifest,
+        previous_release=previous_release,
+        env_file=None,
+        staging_id=staged.name,
+    )
+    ups = [command for command in runner.commands if "up" in command]
+    assert len(ups) == 1
+    assert "--no-deps" not in ups[0]
+    assert manifest["strategy"] == "fallback"
+    assert manifest["fallback_reason"] == "runtime_containers_missing"
+    assert manifest["effective_services"] == ["backend", "frontend"]
+
+
 def test_failed_scoped_deploy_restores_and_verifies_without_name_errors(
     tmp_path: Path, monkeypatch
 ) -> None:

@@ -259,6 +259,30 @@ def parse_compose_ps_json(value: str) -> object:
         return entries
 
 
+def _missing_runtime(
+    runner: Runner,
+    previous_containers: Mapping[str, Any],
+    services: Sequence[str],
+) -> list[str]:
+    """Return services whose recorded container no longer exists."""
+    missing: list[str] = []
+    for service in services:
+        container = previous_containers.get(service)
+        if not isinstance(container, str) or not container:
+            missing.append(service)
+            continue
+        inspected = runner.run(
+            [
+                "docker", "container", "inspect", "-f",
+                "{{.State.Status}}", container,
+            ],
+            check=False,
+        )
+        if inspected.returncode:
+            missing.append(service)
+    return missing
+
+
 def _exposed_port(config: Mapping[str, Any]) -> int | None:
     for entry in config.get("expose") or []:
         text = str(entry).split("/", 1)[0].strip()
@@ -434,6 +458,18 @@ def deploy_scoped(
     previous_paths = previous_service_paths(
         previous, previous_release, state_root, project, all_services
     )
+    if not initial and _missing_runtime(runner, previous_containers, all_services):
+        # The signed state is valid but its containers were removed (for
+        # example by an explicit ``down``).  Preserving services outside the
+        # plan is impossible, so reconcile the whole release.
+        plan = DeployPlan(
+            requested_scope=plan.requested_scope,
+            requested_service=plan.requested_service,
+            effective_services=tuple(all_services),
+            strategy="fallback",
+            fallback_reason="runtime_containers_missing",
+        )
+        effective = list(all_services)
     state = active_state(previous, release, plan, all_services)
     options = DeployOptions(
         repo=release.repo,
