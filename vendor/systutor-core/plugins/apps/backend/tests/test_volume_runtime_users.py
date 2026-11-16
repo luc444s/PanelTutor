@@ -131,6 +131,13 @@ def test_new_volume_is_labeled_initialized_and_helper_is_isolated() -> None:
         for call in helper_calls
     )
     assert any("--cap-add" in call and "CHOWN" in call for call in helper_calls)
+    chown_call = next(call for call in helper_calls if "chown" in call)
+    assert chown_call[chown_call.index("--user") + 1] == "0:0"
+    inspection_calls = [call for call in helper_calls if call is not chown_call]
+    assert all(
+        call[call.index("--user") + 1] == "65534:65534"
+        for call in inspection_calls
+    )
 
 
 def test_existing_non_root_owner_becomes_effective_without_chown() -> None:

@@ -111,9 +111,13 @@ def _helper_command(
     *command: str,
     cap_chown: bool = False,
 ) -> list[str]:
+    # Docker clears permitted/effective capabilities for a non-root ``--user``
+    # even when CHOWN is added.  Initialization therefore runs as UID 0 with
+    # CHOWN as its only capability; inspection helpers remain non-root.
+    helper_user = "0:0" if cap_chown else user
     argv = [
         "docker", "run", "--rm", "--network", "none", "--read-only",
-        "--cap-drop", "ALL", "--user", user, "-v", f"{name}:/volume",
+        "--cap-drop", "ALL", "--user", helper_user, "-v", f"{name}:/volume",
     ]
     if cap_chown:
         argv.extend(("--cap-add", "CHOWN"))

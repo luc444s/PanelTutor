@@ -188,7 +188,10 @@ Para inicializar:
 ```
 
 Los helper containers no publican puertos, no usan red y solo montan el volumen
-objetivo.
+objetivo. Los helpers de inspección corren como `65534:65534`. Docker elimina
+las capacidades efectivas al combinar un UID no-root con `--cap-add CHOWN`, por
+lo que el helper de inicialización corre como UID 0 exclusivamente con
+`CAP_CHOWN`; no conserva ninguna otra capacidad y su rootfs sigue read-only.
 
 ### Volúmenes compartidos
 
@@ -207,7 +210,9 @@ Si dos servicios montan el mismo volumen:
 
 ## INVARIANTS
 
-- Ningún servicio ni helper corre como root.
+- Ningún servicio corre como root. Solo el helper efímero que inicializa un
+  volumen recién creado puede usar UID 0, limitado a `CAP_CHOWN`, sin red,
+  rootfs read-only y con un único volumen montado.
 - Ningún volumen existente se modifica automáticamente.
 - Ningún volumen `external` se crea, renombra o inicializa.
 - El usuario efectivo siempre aparece en la evidencia firmada.
