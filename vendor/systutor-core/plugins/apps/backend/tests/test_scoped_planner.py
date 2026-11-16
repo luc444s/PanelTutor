@@ -236,13 +236,15 @@ def test_restoration_uses_up_no_deps_and_never_global_down(tmp_path: Path, monke
 
         def run(self, argv, **_kwargs):
             commands.append(list(argv))
+            if list(argv)[-3:] == ["ps", "-q", "frontend"]:
+                return Completed(0, "container123\n", "")
             return Completed(0, "", "")
 
     monkeypatch.setattr(
         scoped_execution, "_read_manifest",
         lambda *_args, **_kwargs: {"compose": "compose.yml"},
     )
-    restored, failed = scoped_execution._restore(
+    restored, failed, containers, composes = scoped_execution._restore(
         Runner(),
         project="app-demo",
         services=["frontend"],
@@ -250,6 +252,233 @@ def test_restoration_uses_up_no_deps_and_never_global_down(tmp_path: Path, monke
     )
     assert restored == ["frontend"]
     assert failed == []
+    assert containers == {"frontend": "container123"}
+    assert composes == {"frontend": "compose.yml"}
     flat = " ".join(commands[0])
     assert "up -d --no-deps frontend" in flat
     assert " down" not in flat
+
+
+def _scoped_failure_env(tmp_path: Path, monkeypatch, *, probes):
+    """Drive deploy_scoped through a failed scoped deploy + restoration."""
+
+    from types import SimpleNamespace
+
+    from plugins.apps.backend.releases import scoped_execution
+    from plugins.apps.backend.releases.planner import DeployPlan
+    from plugins.apps.backend.runtime.types import AppDeployError, Completed
+
+    previous_release = tmp_path / "releases" / "release-previous"
+    previous_release.mkdir(parents=True)
+    staged = tmp_path / "releases" / "op-failed"
+    written: dict = {}
+
+    class Runner:
+        transport = "local"
+        environ = {}
+        host = "local"
+
+        def run(self, argv, **_kwargs):
+            argv = list(argv)
+            if argv[:4] == ["docker", "container", "inspect", "-f"]:
+                return Completed(
+                    0, f"{argv[-1]}|sha256:img|2026-01-01T00:00:00Z|0\n", ""
+                )
+            if argv[:3] == ["docker", "image", "inspect"]:
+                return Completed(0, "sha256:img\n", "")
+            return Completed(0, "", "")
+
+    monkeypatch.setattr(scoped_execution, "HardeningPolicy", SimpleNamespace(
+        from_dict=lambda _value: object()
+    ))
+    monkeypatch.setattr(
+        scoped_execution, "verify_release",
+        lambda *_a, **_k: SimpleNamespace(
+            audit=SimpleNamespace(
+                errors=[],
+                root=tmp_path,
+                data={"services": {"frontend": {}, "backend": {}}},
+            ),
+        ),
+    )
+    monkeypatch.setattr(scoped_execution, "_state_root", lambda *_a, **_k: tmp_path)
+    monkeypatch.setattr(scoped_execution, "_ensure_owned", lambda *_a, **_k: None)
+    monkeypatch.setattr(scoped_execution, "_override", lambda *_a, **_k: "override")
+    monkeypatch.setattr(scoped_execution, "_stage_release", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        scoped_execution, "_env_path", lambda *_a, **_k: tmp_path / "app.env"
+    )
+    monkeypatch.setattr(
+        scoped_execution, "_validate_compose_environment", lambda *_a, **_k: None
+    )
+    monkeypatch.setattr(
+        scoped_execution, "_image_users",
+        lambda *_a, **_k: {"frontend": "spanel-app-x:op-failed"},
+    )
+    monkeypatch.setattr(
+        scoped_execution, "_manifest_data",
+        lambda options, *_a, **_k: {"release": options.release_id},
+    )
+    monkeypatch.setattr(
+        scoped_execution, "_write_manifest",
+        lambda _runner, _release, payload: written.update(payload),
+    )
+    monkeypatch.setattr(scoped_execution, "_publish_release_state", lambda *_a: None)
+    monkeypatch.setattr(
+        scoped_execution, "_container_names", lambda *_a, **_k: {},
+    )
+    monkeypatch.setattr(
+        scoped_execution, "runtime_snapshot",
+        lambda _runner, containers: {
+            name: {"container_id": value, "status": "running"}
+            for name, value in containers.items()
+        },
+    )
+    verify_calls = {"count": 0}
+
+    def fail_first_verification(*_a, **_k):
+        verify_calls["count"] += 1
+        if verify_calls["count"] == 1:
+            raise AppDeployError("frontend broke")
+
+    monkeypatch.setattr(
+        scoped_execution, "_verify_containers", fail_first_verification,
+    )
+    monkeypatch.setattr(
+        scoped_execution, "_read_manifest",
+        lambda *_a, **_k: {"compose": "compose.yml"},
+    )
+
+    def fake_containers(_runner, release, _compose, _project, _env, services):
+        if Path(release) == previous_release:
+            return {name: f"restored-{name}" for name in services}
+        return {name: f"new-{name}" for name in services}
+
+    monkeypatch.setattr(scoped_execution, "_containers", fake_containers)
+    monkeypatch.setattr(scoped_execution, "run_probes", probes)
+
+    previous_manifest = {
+        "compose": "compose.yml",
+        "services": ["backend", "frontend"],
+        "service_releases": {"backend": "release-previous",
+                             "frontend": "release-previous"},
+        "service_release_paths": {"backend": str(previous_release),
+                                  "frontend": str(previous_release)},
+        "containers": {"backend": "cid-backend", "frontend": "cid-old"},
+        "images": {}, "image_ids": {},
+    }
+    plan = DeployPlan(
+        requested_scope="service",
+        requested_service="frontend",
+        effective_services=("frontend",),
+        strategy="service",
+    )
+    return (
+        scoped_execution, Runner(), previous_release, previous_manifest, plan,
+        staged, written,
+    )
+
+
+def test_failed_scoped_deploy_restores_and_verifies_without_name_errors(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from plugins.apps.backend.releases.scoped_execution import ScopedDeployFailed
+
+    probes = {"isolation": {"frontend": {}}, "functional": {"checks": [{}]},
+              "stability": {"restart_counts": {"frontend": 0, "backend": 0}}}
+    (scoped_execution, runner, previous_release, previous_manifest, plan,
+     staged, _written) = _scoped_failure_env(
+        tmp_path, monkeypatch, probes=lambda *_a, **_k: probes,
+    )
+    with pytest.raises(ScopedDeployFailed) as raised:
+        scoped_execution.deploy_scoped(
+            runner,
+            release({"frontend": "f" * 64, "backend": "b" * 64}, "c" * 64),
+            plan=plan,
+            scope=plan.requested_scope,
+            project="app-demo",
+            previous_manifest=previous_manifest,
+            previous_release=previous_release,
+            env_file=None,
+            staging_id=staged.name,
+        )
+    restoration = raised.value.manifest["restoration"]
+    assert restoration["restored"] == ["frontend"]
+    assert restoration["failed"] == []
+    assert restoration["verified"] is True
+    assert restoration["probes"] == probes
+    assert restoration["container_ids"] == {
+        "backend": "cid-backend", "frontend": "restored-frontend",
+    }
+    assert restoration["service_runtime"]["frontend"]["container_id"] == (
+        "restored-frontend"
+    )
+
+
+def test_failed_scoped_deploy_keeps_identities_when_restored_probes_fail(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from plugins.apps.backend.releases.scoped_execution import ScopedDeployFailed
+    from plugins.apps.backend.runtime.probes import ProbeFailed
+
+    def probes(*_a, **_k):
+        raise ProbeFailed("the independent functional probe failed")
+
+    (scoped_execution, runner, previous_release, previous_manifest, plan,
+     staged, _written) = _scoped_failure_env(
+        tmp_path, monkeypatch, probes=probes,
+    )
+    with pytest.raises(ScopedDeployFailed) as raised:
+        scoped_execution.deploy_scoped(
+            runner,
+            release({"frontend": "f" * 64, "backend": "b" * 64}, "c" * 64),
+            plan=plan,
+            scope=plan.requested_scope,
+            project="app-demo",
+            previous_manifest=previous_manifest,
+            previous_release=previous_release,
+            env_file=None,
+            staging_id=staged.name,
+        )
+    restoration = raised.value.manifest["restoration"]
+    assert restoration["failed"] == ["probes"]
+    assert restoration["probe_error"] == "the independent functional probe failed"
+    assert "verified" not in restoration
+    # The restored identities must still be published so the active state never
+    # points at the container the failed deployment destroyed.
+    assert restoration["container_ids"]["frontend"] == "restored-frontend"
+
+
+def test_unrecoverable_restoration_reports_partial_identities(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from plugins.apps.backend.releases.scoped_execution import ScopedRestoreError
+    from plugins.apps.backend.runtime.types import AppDeployError
+
+    proxies = {"probes": lambda *_a, **_k: {}}
+    (scoped_execution, runner, previous_release, previous_manifest, plan,
+     staged, _written) = _scoped_failure_env(
+        tmp_path, monkeypatch, probes=proxies["probes"],
+    )
+
+    def failing_containers(_runner, release, *_args):
+        if Path(release) == previous_release:
+            raise AppDeployError("the previous release did not recreate the service")
+        return {"backend": "new-backend", "frontend": "new-frontend"}
+
+    monkeypatch.setattr(scoped_execution, "_containers", failing_containers)
+    with pytest.raises(ScopedRestoreError) as raised:
+        scoped_execution.deploy_scoped(
+            runner,
+            release({"frontend": "f" * 64, "backend": "b" * 64}, "c" * 64),
+            plan=plan,
+            scope=plan.requested_scope,
+            project="app-demo",
+            previous_manifest=previous_manifest,
+            previous_release=previous_release,
+            env_file=None,
+            staging_id=staged.name,
+        )
+    restoration = raised.value.manifest["restoration"]
+    assert restoration["failed"] == ["frontend"]
+    assert restoration["container_ids"] == {"backend": "cid-backend"}

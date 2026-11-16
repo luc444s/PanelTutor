@@ -102,6 +102,10 @@ class ReleaseExecution:
         containers = restoration.get("container_ids")
         if not isinstance(containers, Mapping) or not containers:
             return None
+        verified = restoration.get("verified") is True or bool(
+            restoration.get("probes")
+        )
+        status = "running" if verified else "degraded"
         with self.session_factory() as db:
             previous = db.get(Deployment, previous_id)
             app = db.get(Application, application_id)
@@ -121,7 +125,7 @@ class ReleaseExecution:
                     else base.get("service_runtime") or {}
                 ),
                 "probes": restoration.get("probes") or base.get("probes"),
-                "status": "running",
+                "status": status,
                 "restoration": dict(restoration),
             }
             deployment = Deployment(
@@ -134,7 +138,7 @@ class ReleaseExecution:
                 compose_file=previous.compose_file,
                 ingress_service=previous.ingress_service,
                 ingress_port=previous.ingress_port,
-                status="running",
+                status=status,
                 release=previous.release,
                 manifest=merged,
                 finished_at=datetime.now(UTC),
@@ -142,7 +146,7 @@ class ReleaseExecution:
             db.add(deployment)
             db.flush()
             app.active_deployment_id = deployment.id
-            app.status = "running"
+            app.status = status
             db.commit()
             deployment_id = deployment.id
         self.refresh_routes(application_id)
@@ -243,12 +247,21 @@ class ReleaseExecution:
                     branch=branch,
                 )
                 raise
-            except ScopedRestoreError:
-                with self.session_factory() as db:
-                    failed_app = db.get(Application, application_id)
-                    if failed_app is not None:
-                        failed_app.status = "degraded"
-                        db.commit()
+            except ScopedRestoreError as exc:
+                published = self._publish_restored_state(
+                    application_id=application_id,
+                    operation_id=operation_id,
+                    previous_id=previous_id,
+                    manifest=exc.manifest,
+                    repository=repository,
+                    branch=branch,
+                )
+                if published is None:
+                    with self.session_factory() as db:
+                        failed_app = db.get(Application, application_id)
+                        if failed_app is not None:
+                            failed_app.status = "degraded"
+                            db.commit()
                 raise
             if manifest is None:
                 raise RuntimeError("Deployment produced no manifest")
@@ -366,12 +379,21 @@ class ReleaseExecution:
                     branch=release.branch,
                 )
                 raise
-            except ScopedRestoreError:
-                with self.session_factory() as db:
-                    failed_app = db.get(Application, application_id)
-                    if failed_app is not None:
-                        failed_app.status = "degraded"
-                        db.commit()
+            except ScopedRestoreError as exc:
+                published = self._publish_restored_state(
+                    application_id=application_id,
+                    operation_id=operation_id,
+                    previous_id=current_id,
+                    manifest=exc.manifest,
+                    repository=release.repo,
+                    branch=release.branch,
+                )
+                if published is None:
+                    with self.session_factory() as db:
+                        failed_app = db.get(Application, application_id)
+                        if failed_app is not None:
+                            failed_app.status = "degraded"
+                            db.commit()
                 raise
             with self.session_factory() as db:
                 deployment = Deployment(

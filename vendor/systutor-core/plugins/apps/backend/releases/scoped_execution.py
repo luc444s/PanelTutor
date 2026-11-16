@@ -45,6 +45,12 @@ class ScopedRestoreError(AppDeployError):
 
     restore_failed = True
 
+    def __init__(
+        self, message: str, manifest: Mapping[str, Any] | None = None
+    ) -> None:
+        super().__init__(message)
+        self.manifest = dict(manifest or {})
+
 
 class ScopedDeployFailed(AppDeployError):
     """A partial deployment failed, but the touched subset was restored.
@@ -138,9 +144,19 @@ def _restore(
     project: str,
     services: Sequence[str],
     paths: Mapping[str, Path | None],
-) -> tuple[list[str], list[str]]:
+) -> tuple[list[str], list[str], dict[str, str], dict[str, str]]:
+    """Recreate the touched services from their previous releases.
+
+    Returns the restored and failed services, the container identity of every
+    recreated service and the compose file each service was restored with.
+    The identities are captured here so the caller never has to guess which
+    release path produced a container.
+    """
+
     restored: list[str] = []
     failed: list[str] = []
+    containers: dict[str, str] = {}
+    composes: dict[str, str] = {}
     root = _state_root(runner.transport, runner.environ)
     for service in services:
         path = paths.get(service)
@@ -149,20 +165,30 @@ def _restore(
             continue
         try:
             manifest = _read_manifest(runner, root, project, Path(path))
+            compose = manifest["compose"]
             started = runner.run(
                 _compose_command(
-                    Path(path), manifest["compose"], project, True,
+                    Path(path), compose, project, True,
                     "up", "-d", "--no-deps", service,
                 ),
                 check=False,
             )
             if started.returncode:
                 raise AppDeployError("previous service release did not start")
+            recreated = _containers(
+                runner, Path(path), compose, project, True, [service]
+            )
+            if not recreated.get(service):
+                raise AppDeployError(
+                    "previous service release did not recreate the container"
+                )
         except Exception:
             failed.append(service)
         else:
             restored.append(service)
-    return restored, failed
+            containers.update(recreated)
+            composes[service] = compose
+    return restored, failed, containers, composes
 
 
 def _merged_paths(
@@ -461,7 +487,7 @@ def deploy_scoped(
                 runner, staged, compose_rel, project
             )
         if modified and not initial:
-            restored, failed = _restore(
+            restored, failed, restored_containers, restored_composes = _restore(
                 runner,
                 project=project,
                 services=modified,
@@ -471,44 +497,87 @@ def deploy_scoped(
                 "restored": restored,
                 "failed": failed,
             }
-            if not failed:
-                base = previous_release or next(
-                    (value for value in previous_paths.values()
-                     if value is not None),
-                    None,
+            restoration = manifest["restoration"]
+            previous_compose = previous.get("compose")
+            if not isinstance(previous_compose, str) or not previous_compose:
+                previous_compose = release.compose_path
+            # Every service needs an identity before the restored runtime can be
+            # verified: touched services come from the recreation above, the rest
+            # keep the active state they already had.
+            identities: dict[str, str] = dict(restored_containers)
+            for service in all_services:
+                if service in identities or service in failed:
+                    continue
+                container = previous_containers.get(service)
+                if isinstance(container, str) and container:
+                    identities[service] = container
+            complete = len(identities) == len(all_services)
+            if identities:
+                restoration["container_ids"] = dict(sorted(identities.items()))
+                restoration["service_runtime"] = runtime_snapshot(
+                    runner, identities
                 )
-                if base is None:
-                    failed.append("probes")
+            if identities and complete and not failed:
+                probe_release = (
+                    previous_paths.get(restored[0])
+                    if restored else previous_release
+                )
+                probe_compose = (
+                    restored_composes.get(restored[0])
+                    if restored else None
+                ) or previous_compose
+                if probe_release is None:
+                    restoration["failed"] = [*failed, "verification"]
+                    restoration["verification_error"] = (
+                        "no release path is available to verify the restoration"
+                    )
                 else:
                     try:
-                        previous_compose = previous.get("compose")
-                        if not isinstance(previous_compose, str) or not previous_compose:
-                            previous_compose = release.compose_path
-                        restored_containers = _containers(
-                            runner, Path(base), previous_compose, project, True,
-                            all_services,
-                        )
-                        restored_probes = run_probes(
+                        # The restored containers were just recreated: wait for
+                        # running/healthy before the probe window, exactly like a
+                        # regular scoped deployment does.
+                        _verify_containers(
                             runner,
-                            release=Path(base),
-                            compose_rel=previous_compose,
-                            project=project,
-                            services=all_services,
-                            containers=restored_containers,
-                            environ=runner.environ,
+                            restored_containers,
+                            project,
+                            True,
+                            wait,
                         )
-                    except Exception:
-                        failed.append("probes")
+                    except Exception as verify_exc:
+                        restoration["failed"] = [*failed, "verification"]
+                        restoration["verification_error"] = (
+                            str(verify_exc) or type(verify_exc).__name__
+                        )
                     else:
-                        manifest["restoration"]["probes"] = restored_probes
-                        manifest["restoration"]["container_ids"] = restored_containers
-                        manifest["restoration"]["service_runtime"] = runtime_snapshot(
-                            runner, restored_containers
-                        )
+                        try:
+                            restored_probes = run_probes(
+                                runner,
+                                release=probe_release,
+                                compose_rel=probe_compose,
+                                project=project,
+                                services=all_services,
+                                containers=identities,
+                                environ=runner.environ,
+                            )
+                        except Exception as probe_exc:
+                            restoration["failed"] = [*failed, "probes"]
+                            restoration["probe_error"] = (
+                                str(probe_exc) or type(probe_exc).__name__
+                            )
+                        else:
+                            restoration["probes"] = restored_probes
+                            restoration["verified"] = True
+            elif not failed:
+                restoration["failed"] = [*failed, "verification"]
+                restoration["verification_error"] = (
+                    "restored state does not cover every service"
+                )
             _write_manifest(runner, staged, manifest)
-            if failed:
+            failed = list(restoration.get("failed") or [])
+            if any(service in modified for service in failed):
                 raise ScopedRestoreError(
-                    "restoration failed; the application is degraded"
+                    "restoration failed; the application is degraded",
+                    manifest,
                 ) from exc
             raise ScopedDeployFailed(
                 str(exc) or "scoped deployment failed", manifest

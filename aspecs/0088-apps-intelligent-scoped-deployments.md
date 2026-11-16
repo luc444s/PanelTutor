@@ -197,8 +197,16 @@ Si cualquier build, start o probe falla:
 - solo los servicios ya modificados vuelven a su release efectiva anterior;
 - la restauración usa `up -d --no-deps`, nunca `start` después de `down`;
 - se vuelven a ejecutar probes del subconjunto y probes globales;
-- el mapa activo no cambia hasta completar el plan entero;
-- si la restauración falla, la app queda `degraded` con diagnóstico hasheado.
+- el plan fallido no se publica: `service_releases`, `overrides` y fingerprints
+  siguen siendo los del deployment activo anterior;
+- si la restauración recrea los servicios, sus nuevos container IDs,
+  `service_runtime` y la evidencia de probes se publican como un nuevo
+  deployment activo (mismo commit y releases), de modo que el estado activo
+  nunca apunte a contenedores destruidos por el intento fallido;
+- si la verificación posterior a la restauración falla, el nuevo deployment
+  activo se publica igualmente con estado `degraded` y `probe_error`;
+- si algún servicio no puede restaurarse, la app queda `degraded` con
+  diagnóstico hasheado y solo se publican las identidades verificadas.
 
 ### 5. Estado activo sin migración
 
