@@ -48,27 +48,23 @@ export function Pagination({
   if (totalPages <= 1) return null;
 
   const pages = getPageNumbers(page, totalPages);
-  const slots: Array<number | "ellipsis" | null> =
-    totalPages > 7 ? pages : [...pages, ...Array.from({ length: 7 - pages.length }, () => null)];
 
   return (
-    <nav aria-label="pagination" className={cn("flex items-center justify-center gap-1", className)}>
+    <nav aria-label="pagination" className={cn("flex max-w-full flex-wrap items-center justify-center gap-1", className)}>
       <button
         type="button"
         disabled={page <= 1}
         onClick={() => onChange(page - 1)}
-        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 sm:h-9 sm:w-9"
         aria-label={previousLabel}
       >
         <ChevronLeft />
       </button>
 
       <div className="flex items-center justify-center gap-1">
-        {slots.map((p, i) =>
-          p === null ? (
-            <span key={`placeholder-${i}`} className="h-9 w-9 shrink-0" aria-hidden="true" />
-          ) : p === "ellipsis" ? (
-            <span key={`e-${i}`} className="inline-flex h-9 w-9 shrink-0 items-center justify-center text-sm text-muted-foreground">
+        {pages.map((p, i) =>
+          p === "ellipsis" ? (
+            <span key={`e-${i}`} className="inline-flex h-8 w-8 shrink-0 items-center justify-center text-sm text-muted-foreground sm:h-9 sm:w-9">
               ...
             </span>
           ) : (
@@ -77,7 +73,7 @@ export function Pagination({
               type="button"
               onClick={() => onChange(p)}
               className={cn(
-                "inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-sm font-medium transition",
+                "inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-xs font-medium transition sm:h-9 sm:w-9 sm:text-sm",
                 p === page
                   ? "bg-primary text-primary-foreground"
                   : "text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -93,7 +89,7 @@ export function Pagination({
         type="button"
         disabled={page >= totalPages}
         onClick={() => onChange(page + 1)}
-        className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40"
+        className="inline-flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border text-muted-foreground transition hover:bg-accent hover:text-foreground disabled:cursor-not-allowed disabled:opacity-40 sm:h-9 sm:w-9"
         aria-label={nextLabel}
       >
         <ChevronRight />
