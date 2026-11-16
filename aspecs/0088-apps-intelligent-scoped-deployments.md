@@ -187,6 +187,12 @@ Para cada servicio efectivo:
 6. ejecutar probe funcional del servicio cuando exista;
 7. al terminar el lote, ejecutar probes funcionales globales.
 
+Cuando el plan es global (todos los servicios), el arranque se hace con un
+único `docker compose up -d` sin lista de servicios: Compose debe poder parar
+todos los contenedores antes de reconciliar la red del proyecto. Hacerlo
+servicio a servicio con `--no-deps` deja los demás contenedores conectados y
+`up` falla al intentar eliminar la red (`network ... has active endpoints`).
+
 Los servicios fuera del plan deben conservar container ID, StartedAt y
 RestartCount. Esta condición se captura antes y se verifica después.
 
@@ -196,6 +202,9 @@ Si cualquier build, start o probe falla:
 
 - solo los servicios ya modificados vuelven a su release efectiva anterior;
 - la restauración usa `up -d --no-deps`, nunca `start` después de `down`;
+- los servicios que comparten release se recrean en una sola llamada de
+  Compose (`up -d --no-deps a b ...`), no una por servicio, para que la
+  reconciliación de red no encuentre endpoints activos;
 - se vuelven a ejecutar probes del subconjunto y probes globales;
 - el plan fallido no se publica: `service_releases`, `overrides` y fingerprints
   siguen siendo los del deployment activo anterior;

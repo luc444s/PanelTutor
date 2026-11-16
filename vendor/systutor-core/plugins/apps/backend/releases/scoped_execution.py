@@ -158,36 +158,46 @@ def _restore(
     containers: dict[str, str] = {}
     composes: dict[str, str] = {}
     root = _state_root(runner.transport, runner.environ)
+    groups: dict[str, list[str]] = {}
     for service in services:
         path = paths.get(service)
         if path is None:
             failed.append(service)
             continue
+        groups.setdefault(str(Path(path)), []).append(service)
+    for path_text, group in groups.items():
+        path = Path(path_text)
         try:
-            manifest = _read_manifest(runner, root, project, Path(path))
+            manifest = _read_manifest(runner, root, project, path)
             compose = manifest["compose"]
+            # Recreate the whole group in one Compose call.  With a global
+            # rollback this stops every affected service before Compose
+            # reconciles the project network; per-service calls would remove
+            # a network that still has the other services attached.
             started = runner.run(
                 _compose_command(
-                    Path(path), compose, project, True,
-                    "up", "-d", "--no-deps", service,
+                    path, compose, project, True,
+                    "up", "-d", "--no-deps", *group,
                 ),
                 check=False,
             )
             if started.returncode:
                 raise AppDeployError("previous service release did not start")
             recreated = _containers(
-                runner, Path(path), compose, project, True, [service]
+                runner, path, compose, project, True, group
             )
-            if not recreated.get(service):
+            missing = [service for service in group if not recreated.get(service)]
+            if missing:
                 raise AppDeployError(
                     "previous service release did not recreate the container"
                 )
         except Exception:
-            failed.append(service)
+            failed.extend(group)
         else:
-            restored.append(service)
-            containers.update(recreated)
-            composes[service] = compose
+            restored.extend(group)
+            containers.update({service: recreated[service] for service in group})
+            for service in group:
+                composes[service] = compose
     return restored, failed, containers, composes
 
 
@@ -383,7 +393,13 @@ def deploy_scoped(
                 )
             before[service] = _identity(runner, container)
         if effective:
-            if initial:
+            if initial or len(effective) == len(all_services):
+                # A global plan must reconcile every service in one Compose
+                # call.  Doing it service by service stops only one container
+                # and then Compose tries to remove the project network while
+                # the remaining containers are still attached.
+                if not initial:
+                    modified = list(effective)
                 started = runner.run(
                     _compose_command(staged, compose_rel, project, True, "up", "-d"),
                     timeout=timeout,

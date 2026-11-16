@@ -224,18 +224,35 @@ def test_release_override_uses_immutable_build_image_tags() -> None:
     assert "postgres:16-alpine" not in rendered
 
 
+def test_env_path_falls_back_to_legacy_release_layout(tmp_path: Path) -> None:
+    from plugins.apps.backend.runtime.deployment import _env_path
+
+    project = tmp_path / "project"
+    release = project / "releases" / "legacy"
+    release.mkdir(parents=True)
+    legacy = release / "app.env"
+    legacy.write_text("A=1\n", encoding="utf-8")
+    assert _env_path(release) == legacy
+
+    private = project / "private" / "legacy" / "app.env"
+    private.parent.mkdir(parents=True)
+    private.write_text("A=2\n", encoding="utf-8")
+    assert _env_path(release) == private
+
+
 def test_restoration_uses_up_no_deps_and_never_global_down(tmp_path: Path, monkeypatch) -> None:
     from plugins.apps.backend.releases import scoped_execution
     from plugins.apps.backend.runtime.types import Completed
-
-    commands: list[list[str]] = []
 
     class Runner:
         transport = "local"
         environ = {}
 
+        def __init__(self) -> None:
+            self.commands: list[list[str]] = []
+
         def run(self, argv, **_kwargs):
-            commands.append(list(argv))
+            self.commands.append(list(argv))
             if list(argv)[-3:] == ["ps", "-q", "frontend"]:
                 return Completed(0, "container123\n", "")
             return Completed(0, "", "")
@@ -244,8 +261,9 @@ def test_restoration_uses_up_no_deps_and_never_global_down(tmp_path: Path, monke
         scoped_execution, "_read_manifest",
         lambda *_args, **_kwargs: {"compose": "compose.yml"},
     )
+    runner = Runner()
     restored, failed, containers, composes = scoped_execution._restore(
-        Runner(),
+        runner,
         project="app-demo",
         services=["frontend"],
         paths={"frontend": tmp_path / "release"},
@@ -254,9 +272,50 @@ def test_restoration_uses_up_no_deps_and_never_global_down(tmp_path: Path, monke
     assert failed == []
     assert containers == {"frontend": "container123"}
     assert composes == {"frontend": "compose.yml"}
-    flat = " ".join(commands[0])
+    flat = " ".join(runner.commands[0])
     assert "up -d --no-deps frontend" in flat
     assert " down" not in flat
+
+
+def test_restoration_recreates_group_in_one_compose_call(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from plugins.apps.backend.releases import scoped_execution
+    from plugins.apps.backend.runtime.types import Completed
+
+    class Runner:
+        transport = "local"
+        environ = {}
+
+        def __init__(self) -> None:
+            self.commands: list[list[str]] = []
+
+        def run(self, argv, **_kwargs):
+            self.commands.append(list(argv))
+            if "ps" in argv and "-q" in argv:
+                return Completed(0, f"cid-{argv[-1]}\n", "")
+            return Completed(0, "", "")
+
+    monkeypatch.setattr(
+        scoped_execution, "_read_manifest",
+        lambda *_args, **_kwargs: {"compose": "compose.yml"},
+    )
+    runner = Runner()
+    release_path = tmp_path / "release"
+    restored, failed, containers, composes = scoped_execution._restore(
+        runner,
+        project="app-demo",
+        services=["backend", "frontend"],
+        paths={"backend": release_path, "frontend": release_path},
+    )
+    assert restored == ["backend", "frontend"]
+    assert failed == []
+    assert containers == {"backend": "cid-backend", "frontend": "cid-frontend"}
+    assert composes == {"backend": "compose.yml", "frontend": "compose.yml"}
+    ups = [command for command in runner.commands if "up" in command]
+    assert len(ups) == 1
+    flat = " ".join(ups[0])
+    assert "up -d --no-deps backend frontend" in flat
 
 
 def _scoped_failure_env(tmp_path: Path, monkeypatch, *, probes):
@@ -278,8 +337,12 @@ def _scoped_failure_env(tmp_path: Path, monkeypatch, *, probes):
         environ = {}
         host = "local"
 
+        def __init__(self) -> None:
+            self.commands: list[list[str]] = []
+
         def run(self, argv, **_kwargs):
             argv = list(argv)
+            self.commands.append(argv)
             if argv[:4] == ["docker", "container", "inspect", "-f"]:
                 return Completed(
                     0, f"{argv[-1]}|sha256:img|2026-01-01T00:00:00Z|0\n", ""
@@ -377,6 +440,42 @@ def _scoped_failure_env(tmp_path: Path, monkeypatch, *, probes):
         scoped_execution, Runner(), previous_release, previous_manifest, plan,
         staged, written,
     )
+
+
+def test_global_plan_with_previous_state_uses_single_up(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from plugins.apps.backend.releases.planner import DeployPlan
+
+    probes = {"isolation": {"frontend": {}}, "functional": {"checks": [{}]},
+              "stability": {"restart_counts": {"frontend": 0, "backend": 0}}}
+    (scoped_execution, runner, previous_release, previous_manifest, _plan,
+     staged, _written) = _scoped_failure_env(
+        tmp_path, monkeypatch, probes=lambda *_a, **_k: probes,
+    )
+    monkeypatch.setattr(scoped_execution, "_verify_containers", lambda *_a, **_k: None)
+    plan = DeployPlan(
+        requested_scope="global",
+        requested_service=None,
+        effective_services=("backend", "frontend"),
+        strategy="global",
+        fallback_reason="active_state_incomplete",
+    )
+    manifest = scoped_execution.deploy_scoped(
+        runner,
+        release({"frontend": "f" * 64, "backend": "b" * 64}, "c" * 64),
+        plan=plan,
+        scope=plan.requested_scope,
+        project="app-demo",
+        previous_manifest=previous_manifest,
+        previous_release=previous_release,
+        env_file=None,
+        staging_id=staged.name,
+    )
+    ups = [command for command in runner.commands if "up" in command]
+    assert len(ups) == 1
+    assert "--no-deps" not in ups[0]
+    assert manifest["status"] == "running"
 
 
 def test_failed_scoped_deploy_restores_and_verifies_without_name_errors(

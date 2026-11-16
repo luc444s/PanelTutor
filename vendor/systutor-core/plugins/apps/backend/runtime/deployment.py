@@ -274,7 +274,13 @@ def _stage_release(
 
 def _env_path(release: Path) -> Path:
     if release.parent.name == "releases":
-        return release.parent.parent / "private" / release.name / "app.env"
+        private = release.parent.parent / "private" / release.name / "app.env"
+        # Releases staged by older versions kept app.env inside the release
+        # directory.  Falling back keeps them restorable/rollback-able after
+        # the private/<release>/app.env layout was introduced.
+        if not private.exists() and (release / "app.env").is_file():
+            return release / "app.env"
+        return private
     return release / "app.env"
 
 
