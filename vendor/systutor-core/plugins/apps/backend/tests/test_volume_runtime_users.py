@@ -9,6 +9,7 @@ from plugins.apps.backend.hardening.contracts import (
     HardeningPolicy,
     RuntimeUserEvidence,
     RuntimeUserPolicy,
+    RuntimeVolumePolicy,
     automatic_hardening_policy,
     resolve_hardening_policy,
 )
@@ -177,6 +178,35 @@ def test_existing_non_root_uid_with_root_group_is_adopted() -> None:
     }
     prepare_runtime_volumes(runner, "app-demo", resolved, ["db"])
     assert not any("chown" in call for call in runner.calls)
+
+
+def test_prepare_repairs_a_fresh_volume_group_changed_by_docker() -> None:
+    runner = VolumeRunner({"app-demo_data": "33:0"})
+    signed = HardeningPolicy(
+        (RuntimeUserPolicy("web", 33, 33),),
+        runtime_volumes=(
+            RuntimeVolumePolicy(
+                "app-demo_data", ("web",), "33:33", initialize=True
+            ),
+        ),
+    )
+    prepare_runtime_volumes(runner, "app-demo", signed, ["web"])
+    assert runner.owners["app-demo_data"] == "33:33"
+    assert any("chown" in call for call in runner.calls)
+
+
+def test_prepare_rejects_a_fresh_volume_with_another_uid() -> None:
+    runner = VolumeRunner({"app-demo_data": "34:0"})
+    signed = HardeningPolicy(
+        (RuntimeUserPolicy("web", 33, 33),),
+        runtime_volumes=(
+            RuntimeVolumePolicy(
+                "app-demo_data", ("web",), "33:33", initialize=True
+            ),
+        ),
+    )
+    with pytest.raises(AppDeployError, match="incompatible owner"):
+        prepare_runtime_volumes(runner, "app-demo", signed, ["web"])
 
 
 def test_external_volume_is_inspected_but_never_initialized() -> None:

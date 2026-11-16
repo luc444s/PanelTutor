@@ -262,10 +262,35 @@ def prepare_runtime_volumes(
         if volume.external:
             raise AppDeployError(f"external volume {volume.name} cannot be initialized")
         if _volume_exists(runner, volume.name):
-            if _volume_owner(runner, volume.name, volume.services) != volume.user:
-                raise AppDeployError(
-                    f"volume {volume.name} appeared with an incompatible owner"
+            owner = _volume_owner(runner, volume.name, volume.services)
+            if owner != volume.user:
+                # Docker copies the image's mountpoint content into a fresh
+                # volume on the first start, which can change only its group
+                # (for example to ``33:0`` in Nextcloud).  The UID still proves
+                # it is the volume this release created, so restore the signed
+                # root owner instead of rejecting the whole release.
+                if (
+                    owner.split(":", 1)[0]
+                    != volume.user.split(":", 1)[0]
+                ):
+                    raise AppDeployError(
+                        f"volume {volume.name} appeared with an incompatible owner"
+                    )
+                restored = runner.run(
+                    _helper_command(
+                        image, volume.name, _HELPER_USER, "chown",
+                        volume.user, "/volume", cap_chown=True,
+                    ),
+                    check=False,
                 )
+                if (
+                    restored.returncode
+                    or _volume_owner(runner, volume.name, volume.services)
+                    != volume.user
+                ):
+                    raise AppDeployError(
+                        f"volume {volume.name} owner could not be restored"
+                    )
             continue
         created = runner.run([
             "docker", "volume", "create", "--label", f"{OWNER_LABEL}={project}",

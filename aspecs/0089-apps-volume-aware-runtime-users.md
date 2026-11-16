@@ -110,8 +110,11 @@ Solo se inicializan volúmenes que PanelTutor acaba de crear y que están vacío
 Docker copia el contenido de la ruta de montaje de la imagen dentro de un
 volumen vacío en el primer arranque. Si esa ruta existe en la imagen, el dueño
 raíz del volumen pasa a ser el de la imagen (por ejemplo `33:0` en Nextcloud),
-aunque la inicialización lo hubiera fijado antes en `33:33`. El siguiente
-deploy adopta ese dueño no-root; el grupo `0` no se considera root.
+aunque la inicialización lo hubiera fijado antes en `33:33`. Si un deploy
+posterior reutiliza esa release y el UID sigue coincidiendo, PanelTutor restaura
+el GID firmado sobre la raíz del volumen antes de arrancar; si el UID cambió,
+falla cerrado con `incompatible owner`. El siguiente deploy que construye una
+release nueva adopta el dueño no-root existente.
 
 ### Volumen existente
 
