@@ -35,6 +35,7 @@ from ..runtime.lifecycle import _read_manifest
 from ..runtime.probes import run_probes
 from ..runtime.transport import Runner
 from ..runtime.types import AppDeployError, DeployOptions
+from ..runtime.volumes import prepare_runtime_volumes
 from .planner import DeployPlan, DeployScope, active_state
 from .store import release_store_root
 from .trusted import TrustedRelease
@@ -473,9 +474,10 @@ def deploy_scoped(
                     )
                 images[service] = image
                 image_ids[service] = image_id
+            prepare_runtime_volumes(runner, project, policy, effective)
         host = "local" if runner.transport == "local" else runner.host
         manifest = _manifest_data(
-            options, result, project, images, "building", host, staged
+            options, result, project, images, "building", host, staged, policy
         )
         manifest.update({
             **state,

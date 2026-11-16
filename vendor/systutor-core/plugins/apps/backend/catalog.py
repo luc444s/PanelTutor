@@ -498,6 +498,8 @@ def _deployment_view(row: Deployment) -> dict:
     environments = manifest.get("service_environment", {})
     ports = manifest.get("service_ports", {})
     runtime = manifest.get("service_runtime", {})
+    runtime_users = manifest.get("runtime_users", {})
+    runtime_users = runtime_users if isinstance(runtime_users, dict) else {}
     release = _release_summary(manifest, row.id)
     service_releases = manifest.get("service_releases")
     service_releases = (
@@ -509,6 +511,8 @@ def _deployment_view(row: Deployment) -> dict:
     for service in services:
         state = runtime.get(service) if isinstance(runtime, dict) else {}
         state = state if isinstance(state, dict) else {}
+        user_resolution = runtime_users.get(service)
+        user_resolution = user_resolution if isinstance(user_resolution, dict) else {}
         health = state.get("health")
         names = environments.get(service, [])
         details.append({
@@ -522,6 +526,10 @@ def _deployment_view(row: Deployment) -> dict:
             "environment": _environment_metadata(manifest, service),
             "created_at": state.get("created_at") or row.created_at,
             **({"user": state["user"]} if state.get("user") else {}),
+            **(
+                {"runtime_user": dict(user_resolution)}
+                if user_resolution else {}
+            ),
             **({"started_at": state["started_at"]} if state.get("started_at") else {}),
             **({"container_id": state["container_id"]} if state.get("container_id") else {}),
             **({"image_id": state["image_id"]} if state.get("image_id") else {}),

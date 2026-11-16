@@ -72,6 +72,13 @@ export function ServiceDeployments({
         <dd className="break-all font-mono text-xs">{effectiveRelease ?? t("No active release")}</dd></div>
       <div><dt className="text-muted-foreground">{t("Scope")}</dt>
         <dd>{service.override ? <Badge>{t("Service override")}</Badge> : <Badge>{t("Global release")}</Badge>}</dd></div>
+      {service.runtime_user ? <>
+        <div><dt className="text-muted-foreground">{t("Effective runtime user")}</dt>
+          <dd className="font-mono text-xs">{service.runtime_user.effective}</dd></div>
+        <div><dt className="text-muted-foreground">{t("Runtime user source")}</dt>
+          <dd>{service.runtime_user.source}
+            {service.runtime_user.volume ? ` · ${service.runtime_user.volume}` : ""}</dd></div>
+      </> : null}
       {activeDeployment ? <>
         <div><dt className="text-muted-foreground">{t("Strategy")}</dt>
           <dd>{activeDeployment.strategy ?? "—"}</dd></div>

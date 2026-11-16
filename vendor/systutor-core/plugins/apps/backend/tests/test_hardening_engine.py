@@ -28,20 +28,27 @@ def policy() -> HardeningPolicy:
     )
 
 
-def test_automatic_policy_uses_inspected_user_or_safe_default() -> None:
+def test_automatic_policy_requires_and_uses_inspected_users() -> None:
     generated = automatic_hardening_policy({
-        "database": {"image": "postgres:16"},
+        "database": {"image": "postgres:16", "user": "70:70"},
         "web": {"build": ".", "user": "1200:1300"},
         "worker": {"user": "1400"},
     })
     assert generated.as_dict() == {
         "service_users": {
-            "database": {"uid": 1000, "gid": 1000},
+            "database": {"uid": 70, "gid": 70},
             "web": {"uid": 1200, "gid": 1300},
             "worker": {"uid": 1400, "gid": 1400},
         },
         "writable_paths": [],
+        "runtime_users": {
+            "database": {"requested": "70:70", "effective": "70:70", "source": "compose"},
+            "web": {"requested": "1200:1300", "effective": "1200:1300", "source": "compose"},
+            "worker": {"requested": "1400:1400", "effective": "1400:1400", "source": "compose"},
+        },
     }
+    with pytest.raises(ValueError, match="explicit runtime user required for: database"):
+        automatic_hardening_policy({"database": {"image": "postgres:16"}})
 
 
 def test_automatic_policy_uses_dockerfile_user_when_compose_has_none() -> None:

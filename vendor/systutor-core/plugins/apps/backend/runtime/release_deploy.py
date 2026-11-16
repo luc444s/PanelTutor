@@ -29,6 +29,7 @@ from .deployment import (
 from .probes import run_probes
 from .transport import Runner
 from .types import AppDeployError, DeployOptions
+from .volumes import prepare_runtime_volumes
 
 
 def deploy_trusted(
@@ -98,6 +99,7 @@ def deploy_trusted(
     if built.returncode:
         raise AppDeployError(f"Compose image build failed (exit {built.returncode})")
     images = _image_users(runner, staged, compose_rel, project, True, services)
+    prepare_runtime_volumes(runner, project, policy, services)
     image_ids: dict[str, str] = {}
     for service, image in images.items():
         inspected = runner.run(
@@ -108,7 +110,9 @@ def deploy_trusted(
             raise AppDeployError(f"cannot resolve the image id for service {service}")
         image_ids[service] = image_id
     host = "local" if runner.transport == "local" else runner.host
-    manifest = _manifest_data(options, result, project, images, "building", host, staged)
+    manifest = _manifest_data(
+        options, result, project, images, "building", host, staged, policy
+    )
     manifest.update({
         "commit": release.commit,
         "tree_hash": release.hardened_tree_sha256,

@@ -19,6 +19,7 @@ from typing import Any
 
 import yaml
 
+from ..hardening.contracts import HardeningPolicy
 from .docker_audit import _is_definitely_non_root_user
 from .source import _inside
 from .transport import Runner
@@ -160,9 +161,14 @@ def _override(
         services[service] = config
     output: dict[str, Any] = {"services": services}
     if data.get("volumes"):
-        output["volumes"] = {
-            name: {"labels": {OWNER_LABEL: project}} for name in data["volumes"]
-        }
+        managed_volumes = {}
+        for name, raw in data["volumes"].items():
+            config = raw if isinstance(raw, dict) else {}
+            if config.get("external") is True or isinstance(config.get("external"), dict):
+                continue
+            managed_volumes[name] = {"labels": {OWNER_LABEL: project}}
+        if managed_volumes:
+            output["volumes"] = managed_volumes
     network_names = {"default", *(data.get("networks") or {})}
     output["networks"] = {
         name: {"labels": {OWNER_LABEL: project}} for name in network_names
@@ -642,8 +648,9 @@ def _manifest_data(
     status: str,
     host: str,
     release: Path,
+    policy: HardeningPolicy | None = None,
 ) -> dict[str, Any]:
-    return {
+    manifest = {
         "schema": 1,
         "owner_label": OWNER_LABEL,
         "project": project,
@@ -665,6 +672,17 @@ def _manifest_data(
         "has_env": True,
         "external_env_supplied": bool(options.env_file),
     }
+    if policy is not None and policy.runtime_users:
+        manifest["runtime_users"] = {
+            item.service: {
+                "requested": item.requested,
+                "effective": item.effective,
+                "source": item.source,
+                **({"volume": item.volume} if item.volume is not None else {}),
+            }
+            for item in policy.runtime_users
+        }
+    return manifest
 
 
 def _write_manifest(runner: Runner, release: Path, manifest: dict[str, Any]) -> None:

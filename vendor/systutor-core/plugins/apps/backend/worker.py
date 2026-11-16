@@ -50,6 +50,7 @@ from .runtime import (
     lifecycle,
     runtime_snapshot,
 )
+from .runtime.volumes import resolve_runtime_volumes
 from .service import audit as record_apps_audit
 
 logger = logging.getLogger(__name__)
@@ -224,25 +225,6 @@ class AppsWorker:
             token = ""
             clone_env["GH_TOKEN"] = ""
             del clone_env
-            if kind == "harden":
-                try:
-                    raw_policy = (
-                        hardening_report.get("policy")
-                        if isinstance(hardening_report, dict)
-                        else None
-                    )
-                    policy = HardeningPolicy.from_dict(raw_policy)
-                except (TypeError, ValueError):
-                    raise HardeningRejected("Hardening policy is missing or invalid") from None
-                release, candidate = self.execution.harden_checkout(
-                    checkout, source, policy, operation_id, application_id, tenant_id,
-                )
-                result = release_result(release)
-                result.update({
-                    "status": "validated",
-                    "services": list(candidate.services),
-                })
-                return result
             audit = audit_project(checkout, source[2], non_root=True)
             service_details = []
             dockerfile_users: dict[str, str | None] = {}
@@ -283,6 +265,37 @@ class AppsWorker:
             }
             if kind == "inspect":
                 return report
+            if kind == "harden":
+                try:
+                    raw_policy = (
+                        hardening_report.get("policy")
+                        if isinstance(hardening_report, dict)
+                        else None
+                    )
+                    policy = resolve_hardening_policy(
+                        HardeningPolicy.from_dict(raw_policy),
+                        audit.data["services"],
+                        dockerfile_users,
+                    )
+                except (TypeError, ValueError):
+                    raise HardeningRejected(
+                        "Hardening policy is missing or invalid"
+                    ) from None
+                policy = resolve_runtime_volumes(
+                    self.runner_factory(self._transport()),
+                    audit.data,
+                    source[3],
+                    policy,
+                )
+                release, candidate = self.execution.harden_checkout(
+                    checkout, source, policy, operation_id, application_id, tenant_id,
+                )
+                result = release_result(release)
+                result.update({
+                    "status": "validated",
+                    "services": list(candidate.services),
+                })
+                return result
             if kind != "deploy":
                 raise AppDeployError("Unsupported source operation")
             raw_policy = operation_report.get("hardening")
@@ -297,8 +310,14 @@ class AppsWorker:
                     policy = automatic_hardening_policy(
                         audit.data["services"], dockerfile_users
                     )
-            except (TypeError, ValueError):
-                raise AppDeployError("Runtime policy could not be generated") from None
+            except (TypeError, ValueError) as exc:
+                raise AppDeployError(f"Runtime policy could not be generated: {exc}") from None
+            policy = resolve_runtime_volumes(
+                self.runner_factory(self._transport()),
+                audit.data,
+                source[3],
+                policy,
+            )
             release, _candidate = self.execution.harden_checkout(
                 checkout, source, policy, operation_id, application_id, tenant_id,
             )

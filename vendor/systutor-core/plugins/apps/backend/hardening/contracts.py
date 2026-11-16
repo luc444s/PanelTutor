@@ -14,7 +14,6 @@ _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_SERVICES = 64
 _MAX_WRITABLE_PATHS = 256
 _RUNTIME_USER = re.compile(r"([1-9][0-9]{0,9})(?::([1-9][0-9]{0,9}))?\Z")
-_DEFAULT_RUNTIME_ID = 1000
 
 
 class HardeningRejected(RuntimeError):
@@ -41,6 +40,51 @@ class RuntimeUserPolicy:
 
 
 @dataclass(frozen=True, slots=True)
+class RuntimeUserEvidence:
+    service: str
+    requested: str
+    effective: str
+    source: str
+    volume: str | None = None
+
+    def __post_init__(self) -> None:
+        _service_name(self.service)
+        if not _RUNTIME_USER.fullmatch(self.requested):
+            raise ValueError("requested runtime user is invalid")
+        if not _RUNTIME_USER.fullmatch(self.effective):
+            raise ValueError("effective runtime user is invalid")
+        if self.source not in {"policy", "compose", "dockerfile", "volume-owner"}:
+            raise ValueError("runtime user source is invalid")
+        if self.volume is not None and (
+            not self.volume or len(self.volume) > 255 or "\n" in self.volume
+        ):
+            raise ValueError("runtime user volume is invalid")
+
+
+@dataclass(frozen=True, slots=True)
+class RuntimeVolumePolicy:
+    name: str
+    services: tuple[str, ...]
+    user: str
+    initialize: bool = False
+    external: bool = False
+
+    def __post_init__(self) -> None:
+        if not self.name or len(self.name) > 255 or "\n" in self.name:
+            raise ValueError("runtime volume name is invalid")
+        services = tuple(sorted(self.services))
+        object.__setattr__(self, "services", services)
+        if not services or any(_service_name(item) != item for item in services):
+            raise ValueError("runtime volume services are invalid")
+        if len(services) != len(set(services)):
+            raise ValueError("runtime volume services contain duplicates")
+        if not _RUNTIME_USER.fullmatch(self.user):
+            raise ValueError("runtime volume user is invalid")
+        if self.external and self.initialize:
+            raise ValueError("external runtime volume cannot be initialized")
+
+
+@dataclass(frozen=True, slots=True)
 class WritablePathPolicy:
     service: str
     path: str
@@ -64,12 +108,18 @@ class WritablePathPolicy:
 class HardeningPolicy:
     service_users: tuple[RuntimeUserPolicy, ...]
     writable_paths: tuple[WritablePathPolicy, ...] = ()
+    runtime_users: tuple[RuntimeUserEvidence, ...] = ()
+    runtime_volumes: tuple[RuntimeVolumePolicy, ...] = ()
 
     def __post_init__(self) -> None:
         users = tuple(self.service_users)
         paths = tuple(self.writable_paths)
+        runtime_users = tuple(self.runtime_users)
+        runtime_volumes = tuple(self.runtime_volumes)
         object.__setattr__(self, "service_users", users)
         object.__setattr__(self, "writable_paths", paths)
+        object.__setattr__(self, "runtime_users", runtime_users)
+        object.__setattr__(self, "runtime_volumes", runtime_volumes)
         if not users or len(users) > _MAX_SERVICES:
             raise ValueError("hardening policy requires between 1 and 64 services")
         if len(paths) > _MAX_WRITABLE_PATHS:
@@ -80,10 +130,26 @@ class HardeningPolicy:
         declared = set(names)
         if any(item.service not in declared for item in paths):
             raise ValueError("writable path references an undeclared service")
+        evidence_names = [item.service for item in runtime_users]
+        if evidence_names and set(evidence_names) != declared:
+            raise ValueError("runtime user evidence must cover every declared service")
+        if len(evidence_names) != len(set(evidence_names)):
+            raise ValueError("runtime user evidence contains duplicate services")
+        if any(
+            service not in declared
+            for volume in runtime_volumes
+            for service in volume.services
+        ):
+            raise ValueError("runtime volume references an undeclared service")
+        volume_names = [item.name for item in runtime_volumes]
+        if len(volume_names) != len(set(volume_names)):
+            raise ValueError("runtime volume policy contains duplicate volumes")
 
     @classmethod
     def from_dict(cls, value: object) -> HardeningPolicy:
-        if not isinstance(value, Mapping) or set(value) != {"service_users", "writable_paths"}:
+        if not isinstance(value, Mapping) or not set(value).issubset({
+            "service_users", "writable_paths", "runtime_users", "runtime_volumes"
+        }) or not {"service_users", "writable_paths"}.issubset(value):
             raise ValueError("hardening policy is invalid")
         raw_users = value["service_users"]
         raw_paths = value["writable_paths"]
@@ -99,10 +165,36 @@ class HardeningPolicy:
             if not isinstance(item, Mapping) or set(item) != {"service", "path", "mode"}:
                 raise ValueError("writable path policy is invalid")
             paths.append(WritablePathPolicy(item["service"], item["path"], item["mode"]))
-        return cls(tuple(users), tuple(paths))
+        evidence = []
+        raw_evidence = value.get("runtime_users", {})
+        if not isinstance(raw_evidence, Mapping):
+            raise ValueError("runtime user evidence is invalid")
+        for service, item in raw_evidence.items():
+            if not isinstance(item, Mapping) or not set(item).issubset({
+                "requested", "effective", "source", "volume"
+            }) or not {"requested", "effective", "source"}.issubset(item):
+                raise ValueError("runtime user evidence is invalid")
+            evidence.append(RuntimeUserEvidence(
+                str(service), item["requested"], item["effective"], item["source"],
+                item.get("volume"),
+            ))
+        volumes = []
+        raw_volumes = value.get("runtime_volumes", [])
+        if not isinstance(raw_volumes, list):
+            raise ValueError("runtime volume policy is invalid")
+        for item in raw_volumes:
+            if not isinstance(item, Mapping) or set(item) != {
+                "name", "services", "user", "initialize", "external"
+            } or not isinstance(item["services"], list):
+                raise ValueError("runtime volume policy is invalid")
+            volumes.append(RuntimeVolumePolicy(
+                item["name"], tuple(item["services"]), item["user"],
+                item["initialize"], item["external"],
+            ))
+        return cls(tuple(users), tuple(paths), tuple(evidence), tuple(volumes))
 
     def as_dict(self) -> dict[str, Any]:
-        return {
+        result = {
             "service_users": {
                 item.service: {"uid": item.uid, "gid": item.gid}
                 for item in self.service_users
@@ -112,6 +204,28 @@ class HardeningPolicy:
                 for item in self.writable_paths
             ],
         }
+        if self.runtime_users:
+            result["runtime_users"] = {
+                item.service: {
+                    "requested": item.requested,
+                    "effective": item.effective,
+                    "source": item.source,
+                    **({"volume": item.volume} if item.volume is not None else {}),
+                }
+                for item in self.runtime_users
+            }
+        if self.runtime_volumes:
+            result["runtime_volumes"] = [
+                {
+                    "name": item.name,
+                    "services": list(item.services),
+                    "user": item.user,
+                    "initialize": item.initialize,
+                    "external": item.external,
+                }
+                for item in self.runtime_volumes
+            ]
+        return result
 
 
 def automatic_hardening_policy(
@@ -122,12 +236,13 @@ def automatic_hardening_policy(
 
     Explicit Compose ``user:`` declarations win. When a service has no numeric
     user there, fall back to the final ``USER`` instruction of its Dockerfile.
-    Only a missing declaration falls back to the safe default (1000:1000).
+    Missing or non-numeric declarations fail closed.
     """
     if not isinstance(services, Mapping):
         raise ValueError("inspected services are invalid")
     dockerfile_users = dockerfile_users or {}
     users = []
+    evidence = []
     for service in sorted(services):
         name = _service_name(service)
         config = services[service]
@@ -135,22 +250,26 @@ def automatic_hardening_policy(
         resolved = _declared_runtime_user(
             config.get("user"), dockerfile_users.get(name)
         )
-        uid, gid = resolved or (_DEFAULT_RUNTIME_ID, _DEFAULT_RUNTIME_ID)
+        if resolved is None:
+            raise ValueError(f"explicit runtime user required for: {name}")
+        uid, gid, source = resolved
         users.append(RuntimeUserPolicy(name, uid, gid))
-    return HardeningPolicy(tuple(users))
+        value = f"{uid}:{gid}"
+        evidence.append(RuntimeUserEvidence(name, value, value, source))
+    return HardeningPolicy(tuple(users), runtime_users=tuple(evidence))
 
 
 def _declared_runtime_user(
     compose_user: object, dockerfile_user: str | None
-) -> tuple[int, int] | None:
-    for value in (compose_user, dockerfile_user):
+) -> tuple[int, int, str] | None:
+    for value, source in ((compose_user, "compose"), (dockerfile_user, "dockerfile")):
         match = _RUNTIME_USER.fullmatch(str(value or ""))
         if not match:
             continue
         uid = int(match.group(1))
         gid = int(match.group(2) or match.group(1))
         if 0 < uid <= 2**31 - 1 and 0 < gid <= 2**31 - 1:
-            return uid, gid
+            return uid, gid, source
     return None
 
 
@@ -164,6 +283,7 @@ def resolve_hardening_policy(
         raise ValueError("inspected services are invalid")
     dockerfile_users = dockerfile_users or {}
     declared = {item.service: (item.uid, item.gid) for item in policy.service_users}
+    sources = {item.service: "policy" for item in policy.service_users}
     unknown = sorted(set(declared).difference(services))
     if unknown:
         raise ValueError(
@@ -181,7 +301,9 @@ def resolve_hardening_policy(
         if resolved is None:
             missing.append(service)
             continue
-        declared[service] = resolved
+        uid, gid, source = resolved
+        declared[service] = (uid, gid)
+        sources[service] = source
     if missing:
         raise ValueError(
             "explicit runtime user required for: " + ", ".join(missing)
@@ -192,6 +314,12 @@ def resolve_hardening_policy(
             for service, (uid, gid) in sorted(declared.items())
         ),
         policy.writable_paths,
+        tuple(
+            RuntimeUserEvidence(
+                service, f"{uid}:{gid}", f"{uid}:{gid}", sources[service]
+            )
+            for service, (uid, gid) in sorted(declared.items())
+        ),
     )
 
 

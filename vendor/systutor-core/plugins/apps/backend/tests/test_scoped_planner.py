@@ -411,6 +411,9 @@ def _scoped_failure_env(tmp_path: Path, monkeypatch, *, probes):
         lambda *_a, **_k: {"frontend": "spanel-app-x:op-failed"},
     )
     monkeypatch.setattr(
+        scoped_execution, "prepare_runtime_volumes", lambda *_a, **_k: None,
+    )
+    monkeypatch.setattr(
         scoped_execution, "_manifest_data",
         lambda options, *_a, **_k: {"release": options.release_id},
     )

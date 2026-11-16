@@ -194,6 +194,12 @@ export type DeploymentDetail = Deployment & {
     status: string;
     health: string;
     user?: string | null;
+    runtime_user?: {
+      requested: string;
+      effective: string;
+      source: "policy" | "compose" | "dockerfile" | "volume-owner";
+      volume?: string;
+    };
     ports: number[];
     restart_count: number;
     environment_names: string[];
