@@ -143,6 +143,30 @@ def test_create_application_derives_canonical_source(tmp_path: Path) -> None:
     assert app.source_status == "connected"
 
 
+def test_deleted_application_releases_slug_for_fresh_creation(tmp_path: Path) -> None:
+    db = database(tmp_path)
+    user = db.get(User, "u1")
+    deleted = catalog.create_application(
+        db, context(), user,
+        ApplicationCreate(name="Nextcloud", installation_id="i1", repository_id="r1"),
+    )
+    deleted.deleted_at = datetime.now(UTC)
+    deleted.managed_env_ciphertext = b"old-secret"
+    db.commit()
+
+    recreated = catalog.create_application(
+        db, context(), user,
+        ApplicationCreate(name="Nextcloud", installation_id="i1", repository_id="r1"),
+    )
+
+    db.refresh(deleted)
+    assert recreated.id != deleted.id
+    assert recreated.slug == "nextcloud"
+    assert recreated.runtime_project != deleted.runtime_project
+    assert recreated.managed_env_ciphertext is None
+    assert deleted.slug.startswith("nextcloud-deleted-")
+
+
 def test_application_inventory_scope_is_platform_only(tmp_path: Path) -> None:
     db = database(tmp_path)
     catalog.create_application(

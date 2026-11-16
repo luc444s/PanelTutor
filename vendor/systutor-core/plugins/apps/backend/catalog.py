@@ -155,12 +155,19 @@ def create_application(
         db, context.current_tenant_id, body.installation_id, body.repository_id
     )
     slug = _slug(body.name)
-    if db.scalar(select(Application.id).where(
+    existing = db.scalar(select(Application).where(
         Application.tenant_id == context.current_tenant_id, Application.slug == slug,
-    )):
-        raise AppError(
-            "Application slug already exists", status_code=409, code="apps.slug_conflict"
-        )
+    ))
+    if existing is not None:
+        if existing.deleted_at is None:
+            raise AppError(
+                "Application slug already exists",
+                status_code=409,
+                code="apps.slug_conflict",
+            )
+        suffix = f"-deleted-{existing.id}"
+        existing.slug = f"{slug[:100 - len(suffix)]}{suffix}"
+        db.flush()
     app = Application(
         tenant_id=context.current_tenant_id, name=body.name, slug=slug,
         repository=repository.full_name,
