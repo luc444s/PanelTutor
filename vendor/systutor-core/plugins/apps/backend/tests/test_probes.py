@@ -44,6 +44,7 @@ def container(**overrides):
         },
         "AppArmorProfile": "docker-default",
         "Config": {"User": "10001:10002"},
+        "Mounts": [],
         "NetworkSettings": {"Networks": {"proj_default": {}}},
     }
     for key, changes in overrides.items():
@@ -132,6 +133,21 @@ def test_isolation_rejects_published_ports_and_read_only_rootfs() -> None:
     runner = FakeRunner(container(HostConfig={"ReadonlyRootfs": True}))
     with pytest.raises(ProbeFailed, match="not writable"):
         check_isolation(runner, {"web": "cid1"})
+
+
+def test_isolation_accepts_named_volumes_and_rejects_host_binds() -> None:
+    named = container(
+        HostConfig={"Binds": ["project_data:/data:rw"]},
+        Mounts=[{"Type": "volume", "Name": "project_data", "Destination": "/data"}],
+    )
+    assert check_isolation(FakeRunner(named), {"web": "cid1"})["web"]["user"]
+
+    bound = container(
+        HostConfig={"Binds": ["/host/data:/data:rw"]},
+        Mounts=[{"Type": "bind", "Source": "/host/data", "Destination": "/data"}],
+    )
+    with pytest.raises(ProbeFailed, match="host bind"):
+        check_isolation(FakeRunner(bound), {"web": "cid1"})
 
 
 def test_isolation_rejects_missing_runtime_security_profiles() -> None:

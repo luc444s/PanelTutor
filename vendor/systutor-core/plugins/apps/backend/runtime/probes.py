@@ -102,6 +102,7 @@ def _container(container: dict[str, Any]) -> dict[str, Any]:
         "host": host,
         "config": config,
         "apparmor": container.get("AppArmorProfile"),
+        "mounts": container.get("Mounts") or [],
     }
 
 
@@ -130,7 +131,10 @@ def check_isolation(
             raise ProbeFailed(f"service {service} is privileged")
         if host.get("Devices"):
             raise ProbeFailed(f"service {service} accesses host devices")
-        if host.get("Binds"):
+        if any(
+            isinstance(mount, Mapping) and mount.get("Type") == "bind"
+            for mount in values["mounts"]
+        ):
             raise ProbeFailed(f"service {service} contains a host bind")
         if host.get("PortBindings"):
             raise ProbeFailed(f"service {service} publishes host ports")
