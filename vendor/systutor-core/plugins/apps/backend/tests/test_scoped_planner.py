@@ -237,6 +237,11 @@ def test_compose_failure_reason_reports_unhealthy_and_exited() -> None:
     ]) == "backend exited with code 1; database is unhealthy"
     assert compose_failure_reason([]) is None
     assert compose_failure_reason({"services": {"db": {"State": "dead"}}}) is not None
+    assert compose_failure_reason({
+        "Service": "database",
+        "State": "running",
+        "Health": "unhealthy",
+    }) == "database is unhealthy"
     payload = parse_compose_ps_json(
         '{"Service":"database","State":"running","Health":"unhealthy"}\n'
         '{"Service":"backend","State":"created","Health":""}\n'

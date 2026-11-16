@@ -213,9 +213,12 @@ _PROBE_DENIED_SERVICES = frozenset({
 def compose_failure_reason(payload: object) -> str | None:
     """Summarise unhealthy/exited services from ``docker compose ps`` JSON."""
     if isinstance(payload, Mapping):
-        entries = payload.get("services") or []
-        if isinstance(entries, Mapping):
-            entries = list(entries.values())
+        if "Service" in payload or "Name" in payload:
+            entries = [payload]
+        else:
+            entries = payload.get("services") or []
+            if isinstance(entries, Mapping):
+                entries = list(entries.values())
     elif isinstance(payload, list):
         entries = payload
     else:
