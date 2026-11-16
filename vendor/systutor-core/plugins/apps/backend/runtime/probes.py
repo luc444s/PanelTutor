@@ -18,17 +18,12 @@ from typing import Any
 
 from .deployment import _compose_command
 from .docker_audit import _is_definitely_non_root_user
+from .probe_defaults import DEFAULT_PROBE_IMAGE
 from .transport import Runner
 from .types import AppDeployError
 
 PROBE_USER = "65534:65534"
 MAX_OUTPUT_BYTES = 64 * 1024
-# Managed default: digest-pinned so probes never execute a mutable tag.
-DEFAULT_PROBE_IMAGE = (
-    "curlimages/curl@sha256:"
-    "d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b"
-)
-DEFAULT_PROBE_PORT = 80
 _SERVICE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _DIGEST_IMAGE = re.compile(r".+@sha256:[0-9a-f]{64}\Z")
 

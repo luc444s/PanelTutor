@@ -221,6 +221,8 @@ El healthcheck del repositorio es un prerrequisito, no una prueba.
 - Si `SPANEL_APPS_PROBE_COMMAND` no está definido, el comando se deriva del
   ingress de la app (`http://<ingress_service>:<ingress_port>/`) y acepta
   cualquier respuesta HTTP; el override explícito sigue disponible.
+- `scripts/deploy.sh` comprueba la imagen localmente, la descarga si falta y
+  aborta el despliegue cuando no puede obtenerla.
 
 **Nivel 3 — estabilidad**
 

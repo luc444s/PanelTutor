@@ -75,6 +75,10 @@ Requiere `.env.docker`, `.env.powerdns` y `SPANEL_APPS_PUBLIC_URL` o
 `SPANEL_DOMAIN`. Para seleccionar otra ruta de clave, define
 `SPANEL_APPS_ENCRYPTION_KEY_PATH` en `.env.docker`.
 
+Antes de construir, comprueba que la imagen de probe de Apps fijada por digest
+(por defecto, o `SPANEL_APPS_PROBE_IMAGE`) existe localmente; si no, la
+descarga y **aborta sin desplegar** cuando no puede obtenerla.
+
 ### `grant_tenant_permission.py`
 
 **Escritura; dispone de dry-run.** Crea un rol durable del tenant y asigna

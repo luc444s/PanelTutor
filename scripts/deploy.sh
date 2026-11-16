@@ -122,6 +122,33 @@ if len(key) != 32:
     raise SystemExit(f"ERROR: encryption key must resolve to exactly 32 bytes: {path}")
 PY
 
+PROBE_DEFAULTS_FILE="$ROOT/vendor/systutor-core/plugins/apps/backend/runtime/probe_defaults.py"
+[[ -f "$PROBE_DEFAULTS_FILE" ]] || fail "missing $PROBE_DEFAULTS_FILE"
+PROBE_IMAGE_DEFAULT=$(python3 - "$PROBE_DEFAULTS_FILE" <<'PY'
+import runpy
+import sys
+
+print(runpy.run_path(sys.argv[1])["DEFAULT_PROBE_IMAGE"])
+PY
+)
+PROBE_IMAGE_VALUE=${SPANEL_APPS_PROBE_IMAGE:-$(
+  read_env_value "$ENV_DOCKER" SPANEL_APPS_PROBE_IMAGE
+)}
+PROBE_IMAGE_VALUE=${PROBE_IMAGE_VALUE:-$PROBE_IMAGE_DEFAULT}
+[[ "$PROBE_IMAGE_VALUE" =~ @sha256:[0-9a-f]{64}$ ]] || fail \
+  "SPANEL_APPS_PROBE_IMAGE must be pinned by digest (@sha256:...): $PROBE_IMAGE_VALUE"
+
+if docker image inspect "$PROBE_IMAGE_VALUE" >/dev/null 2>&1; then
+  echo "Probe image ready: $PROBE_IMAGE_VALUE"
+else
+  echo "Pulling probe image: $PROBE_IMAGE_VALUE"
+  docker pull "$PROBE_IMAGE_VALUE" >/dev/null || fail \
+    "probe image is not available; deployment aborted"
+  docker image inspect "$PROBE_IMAGE_VALUE" >/dev/null 2>&1 || fail \
+    "probe image is not available after pull; deployment aborted"
+  echo "Probe image ready: $PROBE_IMAGE_VALUE"
+fi
+
 echo "Deploying Spanel at https://$SPANEL_DOMAIN_VALUE"
 cd "$ROOT"
 exec docker compose \

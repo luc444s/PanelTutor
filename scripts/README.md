@@ -75,6 +75,10 @@ Requires `.env.docker`, `.env.powerdns`, and either `SPANEL_APPS_PUBLIC_URL` or
 `SPANEL_DOMAIN`. To select another key location, set
 `SPANEL_APPS_ENCRYPTION_KEY_PATH` in `.env.docker`.
 
+Before building, it verifies the digest-pinned Apps probe image (managed default
+or `SPANEL_APPS_PROBE_IMAGE`) is present locally; otherwise it pulls it and
+**aborts without deploying** when the image cannot be obtained.
+
 ### `grant_tenant_permission.py`
 
 **Write operation; dry-run available.** Creates a durable tenant role and
