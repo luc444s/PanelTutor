@@ -46,6 +46,16 @@ def pending_env_path(operation_id: str) -> Path:
     return release_store_root(os.environ) / "pending" / f"{operation_id}.env"
 
 
+def _probe_target(service: object, port: object) -> tuple[str, int] | None:
+    """Derive the default probe target from the app ingress."""
+    if (
+        isinstance(service, str) and service
+        and isinstance(port, int) and 1 <= port <= 65535
+    ):
+        return service, port
+    return None
+
+
 def _declared_services(
     release: TrustedRelease,
     manifest: dict[str, Any] | None = None,
@@ -236,6 +246,7 @@ class ReleaseExecution:
                     tenant_environment_names=tenant_names,
                     publish_state=True,
                     require_expiry=True,
+                    probe_target=_probe_target(source[4], source[5]),
                 )
             except ScopedDeployFailed as exc:
                 self._publish_restored_state(
@@ -368,6 +379,7 @@ class ReleaseExecution:
                     publish_state=True,
                     require_expiry=False,
                     staging_release=staging_release,
+                    probe_target=_probe_target(ingress_service, ingress_port),
                 )
             except ScopedDeployFailed as exc:
                 self._publish_restored_state(

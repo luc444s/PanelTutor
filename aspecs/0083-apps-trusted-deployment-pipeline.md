@@ -216,6 +216,11 @@ El healthcheck del repositorio es un prerrequisito, no una prueba.
 - Ejecuta HTTP/TCP/command sin shell.
 - Timeout, CPU/memoria/PIDs limitados.
 - Salida acotada; se guarda digest y tamaño, nunca contenido.
+- La imagen por defecto está fijada por digest en el código
+  (`DEFAULT_PROBE_IMAGE`); `SPANEL_APPS_PROBE_IMAGE` solo la sustituye.
+- Si `SPANEL_APPS_PROBE_COMMAND` no está definido, el comando se deriva del
+  ingress de la app (`http://<ingress_service>:<ingress_port>/`) y acepta
+  cualquier respuesta HTTP; el override explícito sigue disponible.
 
 **Nivel 3 — estabilidad**
 

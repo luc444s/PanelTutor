@@ -235,6 +235,7 @@ def deploy_scoped(
     publish_state: bool = True,
     require_expiry: bool = True,
     staging_release: Path | None = None,
+    probe_target: tuple[str, int] | None = None,
 ) -> dict[str, Any]:
     """Execute exactly the planned subset and publish state only when green."""
 
@@ -467,6 +468,7 @@ def deploy_scoped(
                 services=effective,
                 containers={item: merged_containers[item] for item in effective},
                 environ=runner.environ,
+                target=probe_target,
             )
         probes = run_probes(
             runner,
@@ -476,6 +478,7 @@ def deploy_scoped(
             services=all_services,
             containers=merged_containers,
             environ=runner.environ,
+            target=probe_target,
         )
         manifest.update({
             "status": "running",
@@ -574,6 +577,7 @@ def deploy_scoped(
                                 services=all_services,
                                 containers=identities,
                                 environ=runner.environ,
+                                target=probe_target,
                             )
                         except Exception as probe_exc:
                             restoration["failed"] = [*failed, "probes"]

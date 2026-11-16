@@ -23,6 +23,13 @@ from .types import AppDeployError
 
 PROBE_USER = "65534:65534"
 MAX_OUTPUT_BYTES = 64 * 1024
+# Managed default: digest-pinned so probes never execute a mutable tag.
+DEFAULT_PROBE_IMAGE = (
+    "curlimages/curl@sha256:"
+    "d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b"
+)
+DEFAULT_PROBE_PORT = 80
+_SERVICE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _DIGEST_IMAGE = re.compile(r".+@sha256:[0-9a-f]{64}\Z")
 
 
@@ -41,15 +48,37 @@ def _int_env(environ: Mapping[str, str], name: str, default: int) -> int:
 
 def probe_image(environ: Mapping[str, str]) -> str:
     value = environ.get("SPANEL_APPS_PROBE_IMAGE", "").strip()
-    if not value or not _DIGEST_IMAGE.fullmatch(value):
+    if not value:
+        value = DEFAULT_PROBE_IMAGE
+    if not _DIGEST_IMAGE.fullmatch(value):
         raise ProbeFailed("a digest-pinned probe image is required")
     return value
 
 
-def probe_command(environ: Mapping[str, str]) -> list[str]:
+def _default_probe_command(target: tuple[str, int]) -> list[str]:
+    service, port = target
+    if not isinstance(service, str) or not _SERVICE_NAME.fullmatch(service):
+        raise ProbeFailed("the probe target service is invalid")
+    if not isinstance(port, int) or not 1 <= port <= 65535:
+        raise ProbeFailed("the probe target port is invalid")
+    # Any HTTP response, including 4xx/5xx, proves the ingress is reachable;
+    # connection failures still exit non-zero.
+    return [
+        "curl", "-sS", "-o", "/dev/null",
+        "--connect-timeout", "5", "--max-time", "10",
+        f"http://{service}:{port}/",
+    ]
+
+
+def probe_command(
+    environ: Mapping[str, str],
+    target: tuple[str, int] | None = None,
+) -> list[str]:
     raw = environ.get("SPANEL_APPS_PROBE_COMMAND", "").strip()
     if not raw:
-        raise ProbeFailed("an independent probe command is required")
+        if target is None:
+            raise ProbeFailed("an independent probe command is required")
+        return _default_probe_command(target)
     try:
         value = json.loads(raw)
     except json.JSONDecodeError:
@@ -302,11 +331,12 @@ def run_probes(
     services: Sequence[str],
     containers: Mapping[str, str],
     environ: Mapping[str, str] | None = None,
+    target: tuple[str, int] | None = None,
     sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
     environ = dict(os.environ if environ is None else environ)
     image = probe_image(environ)
-    command = probe_command(environ)
+    command = probe_command(environ, target)
     checks = _int_env(environ, "SPANEL_APPS_PROBE_CHECKS", 3)
     window = _int_env(environ, "SPANEL_APPS_PROBE_WINDOW_SECONDS", 30)
     timeout = _int_env(environ, "SPANEL_APPS_PROBE_TIMEOUT_SECONDS", 30)

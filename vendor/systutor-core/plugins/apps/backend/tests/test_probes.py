@@ -263,17 +263,6 @@ def test_run_probes_returns_only_digests_and_sizes(tmp_path) -> None:
 
 def test_missing_probe_configuration_fails_closed(tmp_path) -> None:
     runner = FakeRunner()
-    with pytest.raises(ProbeFailed, match="probe image"):
-        run_probes(
-            runner,
-            release=tmp_path,
-            compose_rel="compose.yml",
-            project="proj",
-            services=["web"],
-            containers={"web": "cid1"},
-            environ={"SPANEL_APPS_PROBE_COMMAND": '["true"]'},
-            sleep=lambda _seconds: None,
-        )
     with pytest.raises(ProbeFailed, match="command"):
         run_probes(
             runner,
@@ -282,9 +271,48 @@ def test_missing_probe_configuration_fails_closed(tmp_path) -> None:
             project="proj",
             services=["web"],
             containers={"web": "cid1"},
-            environ={"SPANEL_APPS_PROBE_IMAGE": IMAGE},
+            environ={},
             sleep=lambda _seconds: None,
         )
+
+
+def test_default_probe_image_and_ingress_target_need_no_environment() -> None:
+    from plugins.apps.backend.runtime.probes import (
+        DEFAULT_PROBE_IMAGE,
+        probe_command,
+        probe_image,
+    )
+
+    assert probe_image({}) == DEFAULT_PROBE_IMAGE
+    assert "@sha256:" in DEFAULT_PROBE_IMAGE
+    command = probe_command({}, ("web", 8080))
+    assert command[0] == "curl"
+    assert command[-1] == "http://web:8080/"
+    with pytest.raises(ProbeFailed, match="service"):
+        probe_command({}, ("../etc", 8080))
+    with pytest.raises(ProbeFailed, match="port"):
+        probe_command({}, ("web", 70000))
+
+
+def test_run_probes_derives_command_from_ingress_target(tmp_path) -> None:
+    from plugins.apps.backend.runtime.probes import DEFAULT_PROBE_IMAGE
+
+    runner = FakeRunner()
+    run_probes(
+        runner,
+        release=tmp_path,
+        compose_rel="compose.yml",
+        project="proj",
+        services=["web"],
+        containers={"web": "cid1"},
+        environ={"SPANEL_APPS_PROBE_CHECKS": "1",
+                 "SPANEL_APPS_PROBE_WINDOW_SECONDS": "0"},
+        target=("web", 8080),
+        sleep=lambda _seconds: None,
+    )
+    run = next(call for call in runner.calls if call[:2] == ["docker", "run"])
+    assert DEFAULT_PROBE_IMAGE in run
+    assert run[-1] == "http://web:8080/"
 
 
 def test_run_probes_accepts_image_healthcheck_without_a_lab_flag(tmp_path) -> None:
