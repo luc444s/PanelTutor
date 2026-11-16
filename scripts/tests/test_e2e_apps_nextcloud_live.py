@@ -21,10 +21,6 @@ pytestmark = pytest.mark.skipif(
 def _environment() -> list[list[str]]:
     suffix = secrets.token_hex(6)
     return [
-        ["MARIADB_ROOT_PASSWORD", secrets.token_hex(32)],
-        ["MARIADB_DATABASE", "nextcloud"],
-        ["MARIADB_USER", "nextcloud"],
-        ["MARIADB_PASSWORD", secrets.token_hex(32)],
         ["NEXTCLOUD_ADMIN_USER", f"admin_{suffix}"],
         ["NEXTCLOUD_ADMIN_PASSWORD", secrets.token_hex(32)],
         ["NEXTCLOUD_TRUSTED_DOMAINS", "localhost 127.0.0.1 app"],
