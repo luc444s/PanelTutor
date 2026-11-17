@@ -1,8 +1,12 @@
 """Trusted release orchestration shared by the Apps worker.
 
 The worker owns operation lifecycle and source preparation; this module owns the
-parts that consume a signed release: hardening, scoped deploy and rollback.
+parts that consume a signed release: preparation, scoped deploy and rollback.
 Every entry point re-verifies the descriptor before touching the runtime.
+
+Releases are snapshots of the unmodified application source.  The former
+hardening phase (which rewrote Dockerfiles and Compose files to force non-root)
+has been removed; ``prepare_release`` only validates and signs what was cloned.
 """
 
 from __future__ import annotations
@@ -11,7 +15,6 @@ import logging
 import os
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -78,13 +81,11 @@ class ReleaseExecution:
         session_factory: Callable[[], Session],
         runner_factory: Callable[..., Runner],
         *,
-        hardening_engine: Any,
         route_refresh: Callable[[Session, str, str], None] | None,
         transport: Callable[[], str],
     ) -> None:
         self.session_factory = session_factory
         self.runner_factory = runner_factory
-        self.hardening_engine = hardening_engine
         self.route_refresh = route_refresh
         self.transport = transport
 
@@ -163,14 +164,13 @@ class ReleaseExecution:
         self.refresh_routes(application_id)
         return deployment_id
 
-    def harden_checkout(self, checkout, source, policy, operation_id, application_id,
-                        tenant_id, *, normalization=None):
-        candidate = self.hardening_engine.prepare(checkout, source[2], policy)
-        if normalization is not None:
-            candidate = replace(candidate, normalization=normalization)
+    def prepare_release(self, checkout, source, policy, operation_id, application_id,
+                        tenant_id):
+        """Validate and sign the checkout without modifying any of its files."""
+
         release = create_release(
             checkout,
-            candidate,
+            compose_file=source[2],
             tenant_id=tenant_id,
             application_id=application_id,
             operation_id=operation_id,
@@ -178,9 +178,8 @@ class ReleaseExecution:
             branch=source[1],
             policy=policy,
             environ=os.environ,
-            normalization=candidate.normalization,
         )
-        return release, candidate
+        return release
 
     def deploy_known_release(self, operation_id: str, application_id: str,
                              release_id: str, operation_report: dict) -> dict:

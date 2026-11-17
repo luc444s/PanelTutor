@@ -1,7 +1,12 @@
-"""Immutable contracts and the fail-closed Apps hardening adapter."""
+"""Admission-policy contracts retained for signed releases and validation.
+
+The former subprocess hardener and its ``HardenedCandidate`` evidence type
+were removed together with all Dockerfile/Compose rewriting.  What remains is
+the small, immutable contract used to sign and re-verify the host-resource
+authorization policy of a release.
+"""
 
 from .contracts import (
-    HardenedCandidate,
     HardeningPolicy,
     HardeningRejected,
     RuntimeUserPolicy,
@@ -9,13 +14,10 @@ from .contracts import (
     automatic_hardening_policy,
     resolve_hardening_policy,
 )
-from .engine import CommandHardeningEngine
 
 __all__ = [
-    "CommandHardeningEngine",
     "automatic_hardening_policy",
     "resolve_hardening_policy",
-    "HardenedCandidate",
     "HardeningPolicy",
     "HardeningRejected",
     "RuntimeUserPolicy",

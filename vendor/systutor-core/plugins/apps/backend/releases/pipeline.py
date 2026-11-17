@@ -1,4 +1,12 @@
-"""Build, sign and persist a release from a validated hardening candidate."""
+"""Build, sign and persist a release from the unmodified application source.
+
+PanelTutor no longer rewrites Dockerfiles, Compose files, entrypoints,
+commands, users or volumes.  A release is a byte-for-byte snapshot of what the
+developer published, signed together with the static admission checks that
+were run against it.  Isolation of the runtime is infrastructure's job; the
+only policy carried here is the host-resource authorization policy needed to
+verify that snapshot at deploy time.
+"""
 
 from __future__ import annotations
 
@@ -8,7 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from ..hardening import HardenedCandidate, HardeningPolicy
+from ..hardening import HardeningPolicy
 from ..runtime.audit import audit_project
 from ..runtime.deployment import _git_commit
 from .fingerprints import compute_fingerprints
@@ -33,14 +41,6 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _plain(value: object) -> Any:
-    if isinstance(value, Mapping):
-        return {str(key): _plain(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_plain(item) for item in value]
-    return value
-
-
 def _tool_versions(environ: Mapping[str, str]) -> dict[str, Any]:
     import json
 
@@ -56,10 +56,24 @@ def _tool_versions(environ: Mapping[str, str]) -> dict[str, Any]:
     return value
 
 
+def _static_gate(audit: object) -> dict[str, Any]:
+    """Evidence that admission checks ran; never a claim of a runtime sandbox."""
+
+    errors = getattr(audit, "errors", ())
+    return {
+        "status": "passed" if not errors else "blocked",
+        "admission": {
+            "static_audit": True,
+            "source_unchanged": True,
+            "findings": len(getattr(audit, "findings", ())),
+        },
+    }
+
+
 def create_release(
     checkout: Path,
-    candidate: HardenedCandidate,
     *,
+    compose_file: str,
     tenant_id: str,
     application_id: str,
     operation_id: str,
@@ -67,39 +81,46 @@ def create_release(
     branch: str,
     policy: HardeningPolicy,
     environ: Mapping[str, str],
-    normalization: Mapping[str, Any] | None = None,
 ) -> TrustedRelease:
+    """Sign the application exactly as delivered, after static validation.
+
+    The tree digest is taken directly from ``checkout`` and is used for both
+    ``source_tree_sha256`` and ``hardened_tree_sha256`` so that previously
+    signed releases keep the same descriptor shape while it is now guaranteed
+    that no file was rewritten.  A blocking audit finding is an explicit
+    rejection: without a tenant sandbox we do not lower the admission bar.
+    """
+
     checkout = Path(checkout)
+    policy_data = policy.as_dict()
     audit = audit_project(
         checkout,
-        candidate.compose,
+        compose_file,
         non_root=True,
         authorized_external_networks=frozenset(
-            policy.as_dict().get("authorized_external_networks", [])
+            policy_data.get("authorized_external_networks", [])
         ),
     )
     if audit.errors:
-        raise ReleaseRejected("hardened tree has blocking audit errors")
-    if tree_digest(checkout) != candidate.hardened_tree_sha256:
-        raise ReleaseRejected("hardened tree does not match the hardener evidence")
-    compose_rel = candidate.compose
+        raise ReleaseRejected(
+            "application has blocking security findings: "
+            + ", ".join(sorted({item.code for item in audit.errors}))
+        )
+    digest = tree_digest(checkout)
+    compose_rel = audit.compose.relative_to(checkout).as_posix()
     compose = checkout / compose_rel
     if not compose.is_file():
-        raise ReleaseRejected("hardened Compose file is unavailable")
+        raise ReleaseRejected("Compose file is unavailable")
     dockerfiles: dict[str, str] = {}
     for dockerfile in audit.dockerfiles.values():
         relative = dockerfile.relative_to(checkout).as_posix()
         dockerfiles[relative] = _sha256(dockerfile)
-    policy_data = policy.as_dict()
-    gate = _plain(candidate.gate)
+    gate = _static_gate(audit)
     fingerprints = compute_fingerprints(checkout, audit)
     artifact = build_artifact(checkout)
     key_ring = ReleaseKeyRing.from_environ(environ)
     created = datetime.now(UTC)
     expires = expiry_for(created, release_ttl_seconds(environ))
-    tool_versions = _tool_versions(environ)
-    if normalization is not None:
-        tool_versions = {**tool_versions, "normalization": _plain(normalization)}
     release = TrustedRelease(
         schema=SCHEMA,
         algorithm="hmac-sha256",
@@ -112,15 +133,15 @@ def create_release(
         branch=branch,
         commit=_git_commit(checkout),
         artifact_sha256=hashlib.sha256(artifact).hexdigest(),
-        source_tree_sha256=candidate.source_tree_sha256,
-        hardened_tree_sha256=candidate.hardened_tree_sha256,
+        source_tree_sha256=digest,
+        hardened_tree_sha256=digest,
         compose_path=compose_rel,
         compose_sha256=_sha256(compose),
         dockerfiles=dockerfiles,
         policy_sha256=hashlib.sha256(canonical_json(policy_data)).hexdigest(),
         policy=policy_data,
         gate_sha256=hashlib.sha256(canonical_json(gate)).hexdigest(),
-        tool_versions=tool_versions,
+        tool_versions=_tool_versions(environ),
         created_at=created.isoformat(),
         expires_at=expires,
         service_fingerprints=fingerprints["service_fingerprints"],

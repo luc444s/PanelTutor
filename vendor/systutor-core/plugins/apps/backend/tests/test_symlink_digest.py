@@ -4,7 +4,6 @@ import io
 import tarfile
 from pathlib import Path
 
-from plugins.apps.backend.hardening.engine import _tree_digest
 from plugins.apps.backend.releases.verify import tree_digest
 from plugins.apps.backend.symlinks import symlink_target
 
@@ -30,5 +29,4 @@ def test_trailing_slash_symlink_round_trips_through_release_tar(
         archive.extractall(extracted, filter="data")
 
     assert symlink_target(root / "agents") == "agents2"
-    assert _tree_digest(root) == tree_digest(root)
-    assert _tree_digest(root) == tree_digest(extracted / "source")
+    assert tree_digest(root) == tree_digest(extracted / "source")

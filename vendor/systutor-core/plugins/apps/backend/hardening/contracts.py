@@ -1,21 +1,25 @@
-"""Validated, immutable contracts for application hardening."""
+"""Validated, immutable admission-policy contracts for signed releases.
+
+``service_users``, ``writable_paths``, ``runtime_users`` and ``runtime_volumes``
+are retained so releases signed before the invasive hardener was retired can
+still be verified and rolled back.  New releases no longer apply them: the
+only policy still enforced here is the host-resource authorization carried by
+``authorized_external_networks`` and ``egress_networks``.
+"""
 
 from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from pathlib import PurePosixPath
-from types import MappingProxyType
 from typing import Any
 
 _SERVICE = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z")
 _NETWORK_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
-_SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_SERVICES = 64
 _MAX_WRITABLE_PATHS = 256
 _RUNTIME_USER = re.compile(r"([1-9][0-9]{0,9})(?::([0-9]{1,10}))?\Z")
-_DEFAULT_RUNTIME_ID = 1000
 
 
 class HardeningRejected(RuntimeError):
@@ -142,8 +146,8 @@ class HardeningPolicy:
                 raise ValueError("network policy contains an invalid network name")
             if len(names) != len(set(names)):
                 raise ValueError("network policy contains duplicate networks")
-        if not users or len(users) > _MAX_SERVICES:
-            raise ValueError("hardening policy requires between 1 and 64 services")
+        if len(users) > _MAX_SERVICES:
+            raise ValueError("hardening policy allows at most 64 services")
         if len(paths) > _MAX_WRITABLE_PATHS:
             raise ValueError("hardening policy has too many writable paths")
         names = [item.service for item in users]
@@ -172,10 +176,12 @@ class HardeningPolicy:
         if not isinstance(value, Mapping) or not set(value).issubset({
             "service_users", "writable_paths", "runtime_users", "runtime_volumes",
             "authorized_external_networks", "egress_networks",
-        }) or not {"service_users", "writable_paths"}.issubset(value):
+        }):
             raise ValueError("hardening policy is invalid")
-        raw_users = value["service_users"]
-        raw_paths = value["writable_paths"]
+        # A release signed after the hardener was retired may carry only the
+        # host-resource authorization fields (or no policy fields at all).
+        raw_users = value.get("service_users", {})
+        raw_paths = value.get("writable_paths", [])
         if not isinstance(raw_users, Mapping) or not isinstance(raw_paths, list):
             raise ValueError("hardening policy is invalid")
         users = []
@@ -271,11 +277,13 @@ def automatic_hardening_policy(
     dockerfile_users: Mapping[str, str | None] | None = None,
     dockerfile_images: Mapping[str, tuple[str, ...]] | None = None,
 ) -> HardeningPolicy:
-    """Build the server-owned runtime policy from inspected Compose services.
+    """Record only users the application itself declares.
 
-    Explicit Compose ``user:`` declarations win. When a service has no numeric
-    user there, fall back to the final ``USER`` instruction of its Dockerfile,
-    then to the server-owned non-root policy default.
+    Explicit Compose ``user:`` declarations win, then the final ``USER``
+    instruction of the Dockerfile.  When neither is numeric the service is
+    omitted: PanelTutor no longer invents a non-root identity for it.  For
+    images without a declared user the image's own ``USER`` is respected at
+    runtime and the non-root admission check rejects it if it is root.
     """
     if not isinstance(services, Mapping):
         raise ValueError("inspected services are invalid")
@@ -290,11 +298,9 @@ def automatic_hardening_policy(
         resolved = _declared_runtime_user(
             config.get("user"), dockerfile_users.get(name)
         )
-        uid, gid, source = resolved or (
-            _DEFAULT_RUNTIME_ID,
-            _DEFAULT_RUNTIME_ID,
-            "policy",
-        )
+        if resolved is None:
+            continue
+        uid, gid, source = resolved
         users.append(RuntimeUserPolicy(name, uid, gid))
         value = f"{uid}:{gid}"
         evidence.append(RuntimeUserEvidence(name, value, value, source))
@@ -346,8 +352,7 @@ def resolve_hardening_policy(
             config.get("user"), dockerfile_users.get(service)
         )
         if resolved is None:
-            declared[service] = (_DEFAULT_RUNTIME_ID, _DEFAULT_RUNTIME_ID)
-            sources[service] = "policy"
+            # No invented identity: the image's own USER is respected.
             continue
         uid, gid, source = resolved
         declared[service] = (uid, gid)
@@ -404,143 +409,3 @@ def _merge_writable_paths(
     result = {(item.service, item.path): item for item in automatic}
     result.update({(item.service, item.path): item for item in explicit})
     return tuple(result[key] for key in sorted(result))
-
-
-def _json_evidence(value: object, *, depth: int = 0) -> Any:
-    if depth > 12:
-        raise ValueError("hardening evidence is too deeply nested")
-    if value is None or isinstance(value, (bool, int, float)):
-        return value
-    if isinstance(value, str):
-        if len(value) > 8192:
-            raise ValueError("hardening evidence string is too large")
-        return value
-    if isinstance(value, list):
-        if len(value) > 2048:
-            raise ValueError("hardening evidence list is too large")
-        return [_json_evidence(item, depth=depth + 1) for item in value]
-    if isinstance(value, Mapping):
-        if len(value) > 256:
-            raise ValueError("hardening evidence object is too large")
-        result = {}
-        for key, item in value.items():
-            if not isinstance(key, str) or len(key) > 128:
-                raise ValueError("hardening evidence key is invalid")
-            result[key] = _json_evidence(item, depth=depth + 1)
-        return result
-    raise ValueError("hardening evidence contains an unsupported value")
-
-
-def _freeze_json(value: Any) -> Any:
-    if isinstance(value, dict):
-        return MappingProxyType({key: _freeze_json(item) for key, item in value.items()})
-    if isinstance(value, list):
-        return tuple(_freeze_json(item) for item in value)
-    return value
-
-
-def _thaw_json(value: Any) -> Any:
-    if isinstance(value, Mapping):
-        return {key: _thaw_json(item) for key, item in value.items()}
-    if isinstance(value, tuple):
-        return [_thaw_json(item) for item in value]
-    return value
-
-
-@dataclass(frozen=True, slots=True)
-class HardenedCandidate:
-    source_tree_sha256: str
-    hardened_tree_sha256: str
-    compose: str
-    services: tuple[str, ...]
-    changes: tuple[str, ...]
-    policy: Mapping[str, Any]
-    gate: Mapping[str, Any]
-    normalization: Mapping[str, Any] = field(default_factory=dict)
-
-    @classmethod
-    def from_response(
-        cls,
-        response: object,
-        *,
-        source_tree_sha256: str | None = None,
-        hardened_tree_sha256: str | None = None,
-        compose: str | None = None,
-        policy: HardeningPolicy | None = None,
-        normalization: object | None = None,
-    ) -> HardenedCandidate:
-        if not isinstance(response, Mapping):
-            raise ValueError("hardener response is invalid")
-        gate = response.get("gate")
-        post_gate = response.get("gate_after_apply")
-        if (
-            response.get("status") != "applied"
-            or response.get("applied") is not True
-            or not isinstance(gate, Mapping)
-            or gate.get("status") != "passed"
-            or not isinstance(post_gate, Mapping)
-            or post_gate.get("status") not in {"reused", "passed"}
-        ):
-            raise ValueError("hardener did not produce a fully validated candidate")
-        source_hash = source_tree_sha256 or response.get("source_tree_sha256")
-        hardened_hash = (
-            hardened_tree_sha256
-            or response.get("hardened_tree_sha256")
-            or post_gate.get("tree_sha256")
-        )
-        if not isinstance(source_hash, str) or not _SHA256.fullmatch(source_hash):
-            raise ValueError("source tree evidence is invalid")
-        if not isinstance(hardened_hash, str) or not _SHA256.fullmatch(hardened_hash):
-            raise ValueError("hardened tree evidence is invalid")
-        compose_value = compose or response.get("compose")
-        if not isinstance(compose_value, str) or not compose_value or compose_value.startswith("/"):
-            raise ValueError("compose evidence is invalid")
-        compose_path = PurePosixPath(compose_value)
-        if ".." in compose_path.parts or compose_path.as_posix() != compose_value:
-            raise ValueError("compose evidence is invalid")
-        changes = response.get("changes")
-        if not isinstance(changes, list) or len(changes) > 1024:
-            raise ValueError("change evidence is invalid")
-        clean_changes = []
-        for value in changes:
-            if not isinstance(value, str) or not value or value.startswith("/"):
-                raise ValueError("change evidence is invalid")
-            path = PurePosixPath(value)
-            if ".." in path.parts or path.as_posix() != value:
-                raise ValueError("change evidence is invalid")
-            clean_changes.append(value)
-        expected_policy = policy.as_dict() if policy is not None else response.get("policy")
-        if not isinstance(expected_policy, Mapping):
-            raise ValueError("policy evidence is invalid")
-        services = tuple(sorted(expected_policy.get("service_users", {})))
-        if not services or any(not isinstance(item, str) for item in services):
-            raise ValueError("service evidence is invalid")
-        evidence = {"primary": gate, "post_apply": post_gate}
-        normalization_value = (
-            normalization if normalization is not None else response.get("normalization")
-        )
-        if not isinstance(normalization_value, Mapping):
-            raise ValueError("normalization evidence is invalid")
-        return cls(
-            source_hash,
-            hardened_hash,
-            compose_value,
-            services,
-            tuple(clean_changes),
-            _freeze_json(_json_evidence(expected_policy)),
-            _freeze_json(_json_evidence(evidence)),
-            _freeze_json(_json_evidence(normalization_value)),
-        )
-
-    def as_report(self) -> dict[str, Any]:
-        return {
-            "status": "validated",
-            "source_tree_sha256": self.source_tree_sha256,
-            "hardened_tree_sha256": self.hardened_tree_sha256,
-            "compose": self.compose,
-            "services": list(self.services),
-            "changes": list(self.changes),
-            "policy": _thaw_json(self.policy),
-            "gate": _thaw_json(self.gate),
-            "normalization": _thaw_json(self.normalization),
-        }

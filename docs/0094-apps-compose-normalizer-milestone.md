@@ -1,3 +1,8 @@
+> **Retirado en `remove-hardener`:** el normalizador y el hardener ya no forman
+> parte del pipeline de Apps. Consulta
+> [`apps-sin-hardening-invasivo.md`](apps-sin-hardening-invasivo.md). Este
+> documento se conserva como registro histórico del hito 0094.
+
 # Milestone 0094 — POS desplegado sin modificar su repositorio
 
 > Documento de cierre y crónica técnica de la aceptación live de

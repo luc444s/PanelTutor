@@ -592,43 +592,54 @@ def deploy_scoped(
                     "active state is incomplete; a global deployment is required"
                 )
             before[service] = _identity(runner, container)
+        # Pre-refactor releases carried ``x-spanel-readonly-files`` markers
+        # produced by the retired Compose normalizer.  Only those legacy
+        # artifacts need the stop/create/inject cycle so they stay rollback-
+        # compatible.  New releases keep the developer's Compose untouched and
+        # go straight from build to ``up``.
+        readonly_services = {
+            name for name in effective
+            if isinstance(result.data["services"].get(name), Mapping)
+            and result.data["services"][name].get("x-spanel-readonly-files")
+        }
         if effective:
-            # Recreate the effective services so signed read-only files can be
-            # copied into their filesystem before the processes start.
-            removed = runner.run(
-                _compose_command(
-                    staged, compose_rel, project, True,
-                    "rm", "-s", "-f", *sorted(effective),
-                ),
-                timeout=timeout,
-                check=False,
-            )
-            if removed.returncode:
-                raise AppDeployError(
-                    f"Compose services failed to remove (exit {removed.returncode})"
+            if readonly_services:
+                # Recreate the effective services so signed legacy read-only
+                # files can be copied before the processes start.
+                removed = runner.run(
+                    _compose_command(
+                        staged, compose_rel, project, True,
+                        "rm", "-s", "-f", *sorted(effective),
+                    ),
+                    timeout=timeout,
+                    check=False,
                 )
-            created = runner.run(
-                _compose_command(
-                    staged, compose_rel, project, True,
-                    "create", *sorted(effective),
-                ),
-                timeout=timeout,
-                check=False,
-            )
-            if created.returncode:
-                raise AppDeployError(
-                    f"Compose services failed to create (exit {created.returncode})"
+                if removed.returncode:
+                    raise AppDeployError(
+                        f"Compose services failed to remove (exit {removed.returncode})"
+                    )
+                created = runner.run(
+                    _compose_command(
+                        staged, compose_rel, project, True,
+                        "create", *sorted(effective),
+                    ),
+                    timeout=timeout,
+                    check=False,
                 )
-            staged_containers = _containers(
-                runner, staged, compose_rel, project, True, sorted(effective)
-            )
-            _inject_readonly_files(
-                runner,
-                staged,
-                compose_rel,
-                staged_containers,
-                {name: result.data["services"][name] for name in effective},
-            )
+                if created.returncode:
+                    raise AppDeployError(
+                        f"Compose services failed to create (exit {created.returncode})"
+                    )
+                staged_containers = _containers(
+                    runner, staged, compose_rel, project, True, sorted(effective)
+                )
+                _inject_readonly_files(
+                    runner,
+                    staged,
+                    compose_rel,
+                    staged_containers,
+                    {name: result.data["services"][name] for name in effective},
+                )
             if initial or len(effective) == len(all_services):
                 # A global plan must reconcile every service in one Compose
                 # call.  Doing it service by service stops only one container

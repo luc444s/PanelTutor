@@ -18,11 +18,9 @@ from sqlalchemy.orm import Session
 
 from .catalog import audit as record_catalog_audit
 from .catalog import mark_installation_suspended, require_source
-from .compose_normalizer import normalize_compose
 from .crypto import EncryptedValue, TokenCipher
 from .github import GithubClient, UrllibGithubClient, app_jwt_for, repository_row
 from .hardening import (
-    CommandHardeningEngine,
     HardeningPolicy,
     HardeningRejected,
     automatic_hardening_policy,
@@ -55,7 +53,6 @@ from .runtime import (
     purge_orphaned_project,
     runtime_snapshot,
 )
-from .runtime.volumes import resolve_runtime_volumes
 from .service import audit as record_apps_audit
 
 logger = logging.getLogger(__name__)
@@ -72,7 +69,6 @@ class AppsWorker:
         github: GithubClient | None = None,
         route_cleanup: Callable[[Session, str, str], None] | None = None,
         route_refresh: Callable[[Session, str, str], None] | None = None,
-        hardening_engine: Any = None,
     ) -> None:
         self.session_factory = session_factory
         self.cipher = cipher
@@ -81,11 +77,9 @@ class AppsWorker:
         self.github = github or UrllibGithubClient()
         self.route_cleanup = route_cleanup
         self.route_refresh = route_refresh
-        self.hardening_engine = hardening_engine or CommandHardeningEngine()
         self.execution = ReleaseExecution(
             session_factory,
             runner_factory,
-            hardening_engine=self.hardening_engine,
             route_refresh=route_refresh,
             transport=self._transport,
         )
@@ -236,15 +230,9 @@ class AppsWorker:
                 source[0], source[1], effective_compose, source[3],
                 source[4], source[5], source[6],
             )
-            selected = audit_project(checkout, effective_compose, non_root=True)
-            compose_path = selected.compose
-            compose_relative = compose_path.relative_to(checkout)
-            normalization = normalize_compose(
-                compose_path.read_text(encoding="utf-8"),
-                checkout,
-                compose_relative,
-            )
-            compose_path.write_text(normalization.text, encoding="utf-8")
+            # The checkout is audited exactly as cloned.  No normalizer runs
+            # here: container names, binds, ports and users are validated, not
+            # rewritten, so the developer's Compose remains byte-identical.
             audit = audit_project(checkout, effective_compose, non_root=True)
             service_details = []
             dockerfile_users: dict[str, str | None] = {}
@@ -289,7 +277,6 @@ class AppsWorker:
                 "warnings": list(audit.warnings),
                 "blocking": bool(audit.errors),
                 "source_adapter": adaptation.as_dict(),
-                "normalization": normalization.evidence,
             }
             if audit.warnings:
                 report["output"] = "\n".join(
@@ -317,22 +304,17 @@ class AppsWorker:
                     )
                 except (TypeError, ValueError):
                     raise HardeningRejected(
-                        "Hardening policy is missing or invalid"
+                        "Admission policy is missing or invalid"
                     ) from None
-                policy = resolve_runtime_volumes(
-                    self.runner_factory(self._transport()),
-                    audit.data,
-                    source[3],
-                    policy,
-                )
-                release, candidate = self.execution.harden_checkout(
+                # Kept operation name for API compatibility: this now only
+                # validates and signs the original tree; it does not harden it.
+                release = self.execution.prepare_release(
                     checkout, source, policy, operation_id, application_id, tenant_id,
-                    normalization=normalization.evidence,
                 )
                 result = release_result(release)
                 result.update({
                     "status": "validated",
-                    "services": list(candidate.services),
+                    "services": sorted(audit.data["services"]),
                 })
                 return result
             if kind != "deploy":
@@ -351,16 +333,9 @@ class AppsWorker:
                         audit.data["services"], dockerfile_users, dockerfile_images
                     )
             except (TypeError, ValueError) as exc:
-                raise AppDeployError(f"Runtime policy could not be generated: {exc}") from None
-            policy = resolve_runtime_volumes(
-                self.runner_factory(self._transport()),
-                audit.data,
-                source[3],
-                policy,
-            )
-            release, _candidate = self.execution.harden_checkout(
+                raise AppDeployError(f"Admission policy could not be generated: {exc}") from None
+            release = self.execution.prepare_release(
                 checkout, source, policy, operation_id, application_id, tenant_id,
-                normalization=normalization.evidence,
             )
             return self.execution.trusted_deploy(
                 operation_id, application_id, release, source, tenant_names,

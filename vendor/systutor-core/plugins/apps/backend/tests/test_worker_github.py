@@ -16,7 +16,6 @@ import systutor.kernel.models  # noqa: F401
 from plugins.apps.backend import worker as worker_module
 from plugins.apps.backend.crypto import TokenCipher
 from plugins.apps.backend.github import InstallationToken
-from plugins.apps.backend.hardening import HardenedCandidate, HardeningPolicy
 from plugins.apps.backend.models import (
     Application,
     Deployment,
@@ -28,7 +27,6 @@ from plugins.apps.backend.models import (
 from plugins.apps.backend.releases import execution as execution_module
 from plugins.apps.backend.releases import find_release
 from plugins.apps.backend.releases import pipeline as pipeline_module
-from plugins.apps.backend.releases.verify import tree_digest
 from plugins.apps.backend.runtime import AppDeployError
 from plugins.apps.backend.worker import AppsWorker
 from systutor.core.database import Base
@@ -314,24 +312,9 @@ def test_harden_signs_and_persists_a_trusted_release(
         )
         captured["clone_token"] = runner.environ["GH_TOKEN"]
 
-    class Engine:
-        def prepare(self, checkout, compose_file, hardening_policy):
-            captured["checkout"] = checkout
-            captured["compose_file"] = compose_file
-            captured["policy"] = hardening_policy
-            return HardenedCandidate(
-                source_tree_sha256="b" * 64,
-                hardened_tree_sha256=tree_digest(checkout),
-                compose="compose.yml",
-                services=("web",),
-                changes=(),
-                policy=hardening_policy.as_dict(),
-                gate={"primary": {"status": "passed"}},
-            )
-
     monkeypatch.setattr(worker_module, "clone_repo", fake_clone)
     worker = AppsWorker(
-        lambda: Session(db.get_bind()), cipher, github=FakeGithub(), hardening_engine=Engine(),
+        lambda: Session(db.get_bind()), cipher, github=FakeGithub(),
         runner_factory=lambda transport, environ=None: SimpleNamespace(
             transport=transport, environ=environ or {}
         ),
@@ -342,14 +325,13 @@ def test_harden_signs_and_persists_a_trusted_release(
     assert result["release_id"] == "op-hard"
     assert len(result["artifact_sha256"]) == 64
     assert captured["clone_token"] == TOKEN
-    assert captured["compose_file"] is None
-    assert isinstance(captured["policy"], HardeningPolicy)
-    assert captured["policy"].service_users[0].uid == 10001
     release = find_release(
         tmp_path / "state", "t1", "a1", "op-hard"
     )
     assert release.artifact_sha256 == result["artifact_sha256"]
     assert release.commit == "a" * 40
+    # No transformation took place: the signed tree is the cloned tree.
+    assert release.source_tree_sha256 == release.hardened_tree_sha256
     _assert_token_absent(db)
 
 

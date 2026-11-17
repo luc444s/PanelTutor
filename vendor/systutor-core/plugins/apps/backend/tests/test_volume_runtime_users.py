@@ -64,7 +64,7 @@ def policy(*users: tuple[str, int, int, str]) -> HardeningPolicy:
     )
 
 
-def test_desired_user_precedence_policy_compose_dockerfile_then_default() -> None:
+def test_declared_user_precedence_without_inventing_a_default() -> None:
     explicit = policy(("web", 2000, 2001, "policy"))
     resolved = resolve_hardening_policy(
         explicit, {"web": {"user": "3000:3001"}}, {"web": "4000:4001"}
@@ -76,22 +76,19 @@ def test_desired_user_precedence_policy_compose_dockerfile_then_default() -> Non
     assert compose.as_dict()["runtime_users"]["web"]["source"] == "compose"
     dockerfile = automatic_hardening_policy({"web": {}}, {"web": "4000:4001"})
     assert dockerfile.as_dict()["runtime_users"]["web"]["source"] == "dockerfile"
-    fallback = automatic_hardening_policy({"web": {}}, {})
-    assert fallback.as_dict()["runtime_users"]["web"] == {
-        "requested": "1000:1000",
-        "effective": "1000:1000",
-        "source": "policy",
-    }
+    # No numeric user declared anywhere: nothing is invented, the image's own
+    # USER is respected and the non-root admission check validates it.
+    undecided = automatic_hardening_policy({"web": {}}, {})
+    assert undecided.as_dict() == {"service_users": {}, "writable_paths": []}
+    assert HardeningPolicy.from_dict({}).as_dict() == undecided.as_dict()
 
 
-def test_named_dockerfile_users_fall_back_before_volume_owner_resolution() -> None:
+def test_only_named_numeric_dockerfile_users_are_recorded() -> None:
     generated = automatic_hardening_policy(
         {"backend": {}, "database": {}, "frontend": {}},
         {"backend": "app", "database": "postgres", "frontend": "101"},
     )
     assert generated.as_dict()["service_users"] == {
-        "backend": {"uid": 1000, "gid": 1000},
-        "database": {"uid": 1000, "gid": 1000},
         "frontend": {"uid": 101, "gid": 101},
     }
 

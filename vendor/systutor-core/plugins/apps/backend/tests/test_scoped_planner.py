@@ -534,12 +534,11 @@ def test_global_plan_with_previous_state_uses_single_up(
     assert len(ups) == 1
     assert "--no-deps" not in ups[0]
     assert "--no-recreate" in ups[0]
+    # Without legacy read-only file markers the deploy no longer recreates
+    # containers; the original Compose is started as delivered.
     removes = [command for command in runner.commands if "rm" in command]
     creates = [command for command in runner.commands if "create" in command]
-    assert len(removes) == 1 and len(creates) == 1
-    assert sorted(creates[0][-2:]) == ["backend", "frontend"]
-    order = runner.commands
-    assert order.index(removes[0]) < order.index(creates[0]) < order.index(ups[0])
+    assert not removes and not creates
     assert manifest["status"] == "running"
 
 
