@@ -53,7 +53,7 @@ app = typer.Typer(
     help="Rootless per-tenant cell: doctor, provision, status, deprovision.",
 )
 
-DEFAULT_DATA_ROOT = "/var/lib/spanel/cells"
+DEFAULT_DATA_ROOT = "/var/lib/spanel"
 
 
 def _service(data_root: str) -> CellService:

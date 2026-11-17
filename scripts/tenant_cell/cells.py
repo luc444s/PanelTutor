@@ -144,13 +144,14 @@ class CellService:
         alloc.update_allocation(
             self.data_root,
             slug,
-            state="ready",
+            # A cell without a running daemon is degraded, never "ready".
+            state="ready" if pid > 0 else "degraded",
             applied=applied,
             daemon_pid=pid,
             network_mode=mode,
             apparmor_hash=apparmor.profile_hash(slug),
-            apparmor_effective=self.probe.profile_effective(
-                pid, apparmor.profile_name(slug)
+            apparmor_effective=(
+                pid > 0 and self.probe.profile_effective(pid, apparmor.profile_name(slug))
             ),
         )
         audit.write_audit(

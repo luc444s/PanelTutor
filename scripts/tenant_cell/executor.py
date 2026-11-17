@@ -134,7 +134,9 @@ class LocalExecutor(Executor):
     def ensure_dirs(self, cell_dir: str, uid: int, gid: int) -> None:
         base = Path(cell_dir)
         common = ["install", "-d", "-m", "0700", "-o", str(uid), "-g", str(gid)]
-        for target in (base, base / "apps"):
+        # dockerd-rootless.sh requires XDG_RUNTIME_DIR to exist and be owned
+        # by the cell user before it will start.
+        for target in (base, base / "apps", Path(f"/run/user/{uid}")):
             self._run([*common, str(target)])
 
     def install_profile(self, name: str, content: str) -> None:

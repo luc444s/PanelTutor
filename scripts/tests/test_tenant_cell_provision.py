@@ -309,6 +309,15 @@ def test_network_spec_targets_dedicated_loopback_and_skuid() -> None:
     assert other["loopback_address"] != spec["loopback_address"]
 
 
+def test_cell_is_degraded_when_daemon_failed_to_start(tmp_path) -> None:
+    svc, _, _ = _service(tmp_path, executor=FakeExecutor(pid=0))
+
+    result = svc.provision("acme")
+
+    assert result["state"] == "degraded"
+    assert result["apparmor"]["effective"] is False
+
+
 def test_two_tenants_get_distinct_userspaces(tmp_path) -> None:
     """Two slugs must never share uid, subuid range, socket, cgroup or profile."""
     map_a = [{"host_id": 60000, "inner_id": 0, "count": 1}]
