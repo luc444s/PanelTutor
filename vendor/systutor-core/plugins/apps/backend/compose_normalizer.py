@@ -121,13 +121,126 @@ def _readonly_file(source: str, target: str) -> dict[str, str]:
     return {"source": source, "target": str(PurePosixPath(target))}
 
 
+def _external_networks(data: dict[str, Any]) -> set[str]:
+    declared = data.get("networks")
+    if not isinstance(declared, dict):
+        return set()
+    return {
+        str(name) for name, options in declared.items()
+        if isinstance(options, dict) and options.get("external")
+    }
+
+
+def _alias_list(options: dict[str, Any]) -> list[str]:
+    current = options.get("aliases")
+    if current is None:
+        return []
+    if isinstance(current, str):
+        return [current]
+    if isinstance(current, list) and all(isinstance(item, str) for item in current):
+        return list(current)
+    raise ComposeNormalizationError(
+        "normalize_invalid_service_networks: aliases must be strings"
+    )
+
+
+def _apply_network_alias(
+    config: dict[str, Any],
+    data: dict[str, Any],
+    name: str,
+    value: str,
+    warnings: list[dict[str, str]],
+    authorized: frozenset[str],
+) -> list[str]:
+    """Add *value* to every existing network instead of replacing the topology.
+
+    Returns the networks that received the alias.  An empty result means N1 was
+    not applied; a structured warning always explains the omission.
+    """
+    if config.get("network_mode") is not None:
+        warnings.append(_warning(
+            "normalize_alias_network_mode",
+            name,
+            "network_mode is incompatible with service networks; no alias injected",
+        ))
+        return []
+
+    external = _external_networks(data)
+    declared = config.get("networks")
+
+    if declared is None:
+        targets: dict[str, dict[str, Any]] = {"default": {}}
+        if "default" in external and "default" not in authorized:
+            warnings.append(_warning(
+                "normalize_alias_external_network",
+                name,
+                "default network is external and not authorized for aliases",
+            ))
+            return []
+    elif isinstance(declared, (list, dict)) and not declared:
+        warnings.append(_warning(
+            "normalize_alias_empty_networks",
+            name,
+            "networks is explicitly empty; not treated as an absent configuration",
+        ))
+        return []
+    elif isinstance(declared, list):
+        if not all(isinstance(item, str) for item in declared):
+            raise ComposeNormalizationError(
+                f"normalize_invalid_service_networks: {name} has a non-string network"
+            )
+        targets = {item: {} for item in declared}
+    elif isinstance(declared, dict):
+        targets = {}
+        for network, options in declared.items():
+            if isinstance(options, dict):
+                targets[str(network)] = dict(options)
+            elif options is None:
+                targets[str(network)] = {}
+            else:
+                raise ComposeNormalizationError(
+                    f"normalize_invalid_service_networks: {name}.{network} is not a mapping"
+                )
+    else:
+        raise ComposeNormalizationError(
+            f"normalize_invalid_service_networks: {name} has invalid networks"
+        )
+
+    skipped = sorted(
+        network for network in targets
+        if network in external and network not in authorized
+    )
+    applied_to: list[str] = []
+    for network in sorted(targets):
+        if network in skipped:
+            continue
+        options = targets[network]
+        aliases = _alias_list(options)
+        if value not in aliases:
+            aliases.append(value)
+        options["aliases"] = aliases
+        applied_to.append(network)
+    if skipped:
+        warnings.append(_warning(
+            "normalize_alias_external_network",
+            name,
+            "external networks kept without alias: " + ", ".join(skipped),
+        ))
+    if applied_to:
+        config["networks"] = targets
+    return applied_to
+
+
 def normalize_compose(
     text: str,
     checkout_root: Path,
     compose_file: str | Path | None = None,
+    *,
+    authorized_external_networks: frozenset[str] | None = None,
 ) -> NormalizationResult:
     """Normalize a Compose document without writing to its checkout."""
     source_hash = hashlib.sha256(text.encode()).hexdigest()
+    authorized = frozenset(authorized_external_networks or ())
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
@@ -179,9 +292,12 @@ def normalize_compose(
         if name in aliases:
             value = aliases[name]
             config[_ALIAS_MARKER] = [value]
-            config["networks"] = {"default": {"aliases": [value]}}
-            applied["N1"].add(name)
-            details["N1"][name] = {"alias": value}
+            applied_to = _apply_network_alias(
+                config, data, name, value, warnings, authorized
+            )
+            if applied_to:
+                applied["N1"].add(name)
+                details["N1"][name] = {"alias": value, "networks": applied_to}
 
         injections: list[dict[str, str]] = []
         marked_files = config.pop(_READONLY_FILES_MARKER, None)

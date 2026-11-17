@@ -8,6 +8,10 @@
 Implementada y aceptada en `spanel.lab` (2026-11-16). Evidencia en
 `artifacts/apps-compose-normalizer-pos-e2e.json`.
 
+Corregida el 2026-11-17: N1 ya no reemplaza la topología de redes del servicio
+(defecto `N1-network-loss`). El contrato ampliado de `networks` /
+`network_mode` / `external` está en la sección N1.
+
 Caso que la motiva: desplegar `satisfecho/pos` sin modificar su repo ni sus
 YAML. El hardener actual elimina `container_name`, binds, `ports` y `sysctls`,
 pero no ofrece un reemplazo compatible: los servicios siguen buscando
@@ -121,7 +125,7 @@ Cada ejecución produce:
   "source_sha256": "<sha256 del compose original>",
   "normalized_sha256": "<sha256 del compose normalizado>",
   "rules": [
-    {"id": "N1", "applied": true, "services": ["back"], "details": {"alias": "pos-back"}}
+    {"id": "N1", "applied": true, "services": ["back"], "details": {"alias": "pos-back", "networks": ["default"]}}
   ],
   "warnings": [],
   "rejected": []
@@ -138,21 +142,44 @@ exponen en el manifiesto. Un `rejected` no vacío aborta el deploy.
 - Entrada: `services.<svc>.container_name`.
 - Transformación:
   - se elimina `container_name` del runtime;
-  - se agrega el nombre como alias en la red interna del proyecto:
+  - se agrega el nombre como alias en **cada red ya declarada por el servicio**;
+    si el servicio no declara ninguna, se usa `default`:
     ```yaml
     networks:
       default:
         aliases: [pos-back]
     ```
+- Topología de redes (N1 **nunca reemplaza** `services.<svc>.networks`):
+  - `networks` como lista: se convierte a diccionario conservando **todas** las
+    redes y se añade el alias a cada una.
+  - `networks` como diccionario: se preservan todas las opciones
+    (`ipv4_address`, `priority`, `aliases`, …) y el alias se **agrega** a la lista
+    existente sin sobrescribirla.
+  - sin `networks`: se usa `default`, siempre que no exista configuración
+    incompatible.
+  - `network_mode`: N1 no inyecta `networks` (ambos campos son incompatibles en
+    un mismo servicio) y emite el warning `normalize_alias_network_mode`.
+  - `networks: []` (o `{}`): caso explícito que requiere validación; no se
+    interpreta como configuración ausente. Se conserva tal cual y emite
+    `normalize_alias_empty_networks`.
+  - redes `external: true`: su declaración **no** se descarta ni se modifica,
+    pero no reciben alias salvo que la política de seguridad lo autorice
+    explícitamente (`authorized_external_networks`); por defecto la autorización
+    está vacía (fail-closed) y se emite `normalize_alias_external_network`.
 - Validación:
   - DNS label válido (`[a-zA-Z0-9][a-zA-Z0-9_.-]{0,62}`);
   - único dentro del proyecto;
   - no colisiona con el nombre de otro servicio;
   - no es un nombre reservado del panel.
 - Si no valida: warning y se descarta el alias; el deploy puede fallar después
-  por DNS, con mensaje claro.
+  por DNS, con mensaje claro. Lo mismo aplica a los conflictos de red: N1 queda
+  sin aplicar (`applied: false`), se conserva el Compose tal cual y el warning
+  estructurado explica el motivo (`normalize_alias_network_mode`,
+  `normalize_alias_empty_networks`, `normalize_alias_external_network`).
 - Seguridad: el alias vive solo en la red interna del proyecto; no cambia el
-  nombre global del contenedor ni crea nombres compartidos entre tenants.
+  nombre global del contenedor ni crea nombres compartidos entre tenants. Una
+  red `external` nunca se autentica como red interna del proyecto: solo puede
+  recibir el alias mediante autorización explícita de política.
 
 #### N2 — Inyección read-only de archivo dentro del checkout
 
@@ -305,7 +332,7 @@ invariants:
 ### Cambios necesarios
 
 - Nuevo módulo `plugins/apps/backend/compose_normalizer.py` con:
-  - `normalize_compose(text, checkout_root) -> NormalizationResult`;
+  - `normalize_compose(text, checkout_root, compose_file=None, *, authorized_external_networks=None) -> NormalizationResult`;
   - reglas puras e idempotentes;
   - códigos `normalize_*` para evidencia y errores.
 - Integración en `worker._source_operation` antes de `audit_project`/harden.
@@ -345,6 +372,10 @@ invariants:
 ### Unitarios
 
 - N1: alias válido, duplicado, colisión con servicio, label inválido.
+- N1 (regresión de topología): `networks` como lista y como diccionario se
+  conservan íntegros; opciones y aliases existentes no se sobrescriben;
+  `network_mode`, `networks: []` y redes `external` se omiten con warning;
+  autorización explícita permite el alias en `external`; idempotencia.
 - N2: archivo ro dentro del checkout, incluido Compose anidado; metadata
   firmada, orden `create → docker cp → up --no-recreate`; rechazo de
   directorio, rw, ruta absoluta, symlink que escapa, `docker.sock`, target

@@ -52,6 +52,22 @@ que hubo que instrumentar y reproducir antes de arreglar.
 | 7 | `the signed release is not listed by the API` | Worker reconstruido sin `docker-compose.lab-local.yml` → montaba `spanel_apps_state` en vez de `mailadmin_apps_state` | recrear el worker con el stack completo |
 | 8 | Síntomas aleatorios (reinicios, timeouts, `ws-bridge: running none`) | Disco lleno: el mensaje de readiness muestra el último servicio válido, no el que falla | limpieza de disco + mensajes reales de `docker top` |
 
+### Regresión N1-network-loss (2026-11-17)
+
+Revisión del contrato N1: la asignación
+`config["networks"] = {"default": {"aliases": [value]}}` reemplazaba
+completamente las redes declaradas por el servicio. Un `backend` en
+`frontend_net` + `database_net` quedaba solo en `default` y perdía la
+conectividad con `db`, sin error visible durante la normalización.
+
+Corrección: `_apply_network_alias` preserva listas y diccionarios, conserva
+opciones y aliases previos, y solo añade el alias. Casos límite con warning
+estructurado: `network_mode` (no se inyecta `networks`), `networks: []` (no se
+interpreta como ausente) y redes `external` (sin alias salvo autorización
+explícita vía `authorized_external_networks`, vacía por defecto). Aplicada en
+las dos copias del normalizador (`scripts/dangerous_build` y
+`vendor/systutor-core/plugins/apps/backend`) con tests de regresión en ambas.
+
 ### Pistas falsas (para no repetirlas)
 
 - `docker top` parecía fallar por carrera en HAProxy. No era eso: el contenedor
@@ -94,12 +110,14 @@ es un stack aparte con su propio Redis: no interfiere con la cola de `spanel`.
 # hardener / normalizador
 .venv/bin/python -m pytest \
   scripts/tests/test_compose_normalizer.py \
+  scripts/tests/test_compose_normalizer_networks.py \
   scripts/tests/test_dangerous_build_normalize.py \
   scripts/tests/test_transactional_build_hardener.py -q
 
 # backend Apps (incluye scoped y deploy firmado)
 cd vendor/systutor-core && ../../.venv/bin/python -m pytest \
   plugins/apps/backend/tests/test_compose_normalizer.py \
+  plugins/apps/backend/tests/test_compose_normalizer_networks.py \
   plugins/apps/backend/tests/test_hardening_engine.py \
   plugins/apps/backend/tests/test_trusted_deploy.py \
   plugins/apps/backend/tests/test_probes.py \
@@ -118,7 +136,7 @@ cd vendor/systutor-core && ../../.venv/bin/python -m pytest \
 git diff --check
 ```
 
-Resultado actual: **25 + 89 tests**, Ruff limpio, `git diff --check` limpio.
+Resultado actual: **33 + 97 tests**, Ruff limpio, `git diff --check` limpio.
 
 ## Lecciones
 
