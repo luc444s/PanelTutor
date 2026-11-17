@@ -147,22 +147,40 @@ def _override(
             ).hexdigest()[:20]
             config["image"] = f"spanel-app-{image_key}:{image_tag}"
         if non_root:
-            source_caps = (
-                source_config.get("cap_drop")
-                if isinstance(source_config, dict) else None
-            )
-            source_security = (
-                source_config.get("security_opt")
-                if isinstance(source_config, dict) else None
-            )
-            if not source_caps:
-                config["cap_drop"] = ["ALL"]
-            source_has_nnp = isinstance(source_security, list) and any(
-                "no-new-privileges" in str(item).lower().replace(" ", "")
-                for item in source_security
-            )
-            if not source_has_nnp:
-                config["security_opt"] = ["no-new-privileges:true"]
+            # Runtime host-resource policy lives only in this override file;
+            # the developer's Compose is never rewritten.  These controls were
+            # previously injected into Compose by the retired hardener, and
+            # `check_isolation` still requires all of them after deployment.
+            source = source_config if isinstance(source_config, dict) else {}
+            raw_caps = source.get("cap_drop") or []
+            if isinstance(raw_caps, str):
+                raw_caps = [raw_caps]
+            caps = [str(item) for item in raw_caps]
+            if "ALL" not in {item.upper() for item in caps}:
+                caps.append("ALL")
+            config["cap_drop"] = caps
+            raw_security = source.get("security_opt") or []
+            if isinstance(raw_security, str):
+                raw_security = [raw_security]
+            security = [
+                str(item) for item in raw_security
+                if not any(
+                    key in str(item).lower().replace(" ", "")
+                    for key in ("no-new-privileges", "apparmor", "seccomp")
+                )
+            ]
+            security.extend((
+                "no-new-privileges:true",
+                "apparmor=docker-default",
+                "seccomp=builtin",
+            ))
+            config["security_opt"] = security
+            if not source.get("pids_limit"):
+                config["pids_limit"] = 256
+            if not source.get("mem_limit"):
+                config["mem_limit"] = "512m"
+            if not source.get("cpus"):
+                config["cpus"] = 1.0
         services[service] = config
     output: dict[str, Any] = {"services": services}
     if data.get("volumes"):

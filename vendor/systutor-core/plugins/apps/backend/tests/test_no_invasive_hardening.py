@@ -210,6 +210,30 @@ def test_new_releases_carry_no_normalization_or_transformation_evidence(
     assert release.body.get("tool_versions") == {"schema": 1}
 
 
+def test_runtime_isolation_policy_lives_in_override_not_in_the_compose() -> None:
+    """check_isolation must still pass without rewriting the app's Compose."""
+
+    import yaml
+
+    from plugins.apps.backend.runtime.deployment import _override
+
+    rendered = yaml.safe_load(_override(
+        {"services": {"web": {"image": "alpine:3.20"}}}, "demo", True
+    ))
+    web = rendered["services"]["web"]
+    assert web["cap_drop"] == ["ALL"]
+    assert set(web["security_opt"]) == {
+        "no-new-privileges:true",
+        "apparmor=docker-default",
+        "seccomp=builtin",
+    }
+    assert web["pids_limit"] == 256
+    assert web["mem_limit"] == "512m"
+    assert web["cpus"] == 1.0
+    for injected in ("user", "read_only", "tmpfs", "init", "entrypoint", "command"):
+        assert injected not in web
+
+
 # --- security validations remain active -----------------------------------
 
 

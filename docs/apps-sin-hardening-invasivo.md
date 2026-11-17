@@ -63,9 +63,12 @@ Se mantienen igual y siguen siendo bloqueantes:
   Compose**, sin capacidades añadidas ni acceso a mount de host.
 - `_override()` sigue aplicando política de runtime **en un archivo separado**
   (`override.yaml`), nunca sobre el Compose original: `cap_drop: ALL`,
-  `no-new-privileges:true` cuando el Compose no los declara, red `internal` y
-  etiquetas de propiedad. No inyecta `user`, `read_only`, `tmpfs`, `init` ni
-  modifica entrypoint/command/volúmenes/redes del desarrollador.
+  `security_opt` con `no-new-privileges:true`, `apparmor=docker-default` y
+  `seccomp=builtin`, límites `pids_limit=256`/`mem_limit=512m`/`cpus=1.0`, red
+  `internal` y etiquetas de propiedad. Estos controles antes los inyectaba el
+  hardener dentro del Compose; ahora solo viven en el override que
+  `check_isolation` verifica. No inyecta `user`, `read_only`, `tmpfs`, `init`
+  ni modifica entrypoint/command/volúmenes/redes del desarrollador.
 
 ### Compatibilidad
 
