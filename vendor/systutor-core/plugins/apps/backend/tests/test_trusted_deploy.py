@@ -27,6 +27,7 @@ from plugins.apps.backend.releases import (
 from plugins.apps.backend.releases import store as store_module
 from plugins.apps.backend.releases.verify import tree_digest
 from plugins.apps.backend.runtime import release_deploy
+from plugins.apps.backend.runtime.deployment import _image_users
 from plugins.apps.backend.runtime.probes import ProbeFailed
 from plugins.apps.backend.runtime.types import AppDeployError, Completed, DeployOptions
 
@@ -399,6 +400,28 @@ def test_probe_failure_tears_down_and_never_publishes(monkeypatch, tmp_path: Pat
         )
     assert published == []
     assert any("down" in call for call in runner.calls)
+
+
+def test_image_users_ignores_services_absent_from_rendered_config() -> None:
+    """Compose omits inactive-profile services from `config --format json`."""
+
+    class ConfigRunner:
+        transport = "local"
+        environ: dict[str, str] = {}
+
+        def run(self, argv, **_kwargs):
+            if "config" in argv:
+                rendered = {"services": {"web": {"image": "web:1"}}}
+                return Completed(0, json.dumps(rendered))
+            if "inspect" in argv and "image" in argv:
+                return Completed(0, "10001:10002")
+            return Completed(0)
+
+    users = _image_users(
+        ConfigRunner(), Path("."), "compose.yml", "app-demo", True,
+        ["web", "seed"],
+    )
+    assert users == {"web": "web:1"}
 
 
 def test_release_store_root_matches_the_apps_state_root(tmp_path: Path) -> None:

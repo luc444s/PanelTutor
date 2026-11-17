@@ -405,7 +405,12 @@ def _image_users(
     images: dict[str, str] = {}
     for service in services:
         service_config = configured_services.get(service)
-        image = service_config.get("image", "") if isinstance(service_config, dict) else ""
+        if not isinstance(service_config, dict):
+            # Compose omits services behind inactive profiles from `config`.
+            # Such a service is not part of this deployment, so it has no image
+            # to resolve and no container to verify.
+            continue
+        image = service_config.get("image", "")
         if not isinstance(image, str) or not image.strip() or "\n" in image:
             raise AppDeployError(
                 f"cannot resolve exactly one image for service {service}"
