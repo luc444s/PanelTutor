@@ -68,6 +68,18 @@ explícita vía `authorized_external_networks`, vacía por defecto). Aplicada en
 las dos copias del normalizador (`scripts/dangerous_build` y
 `vendor/systutor-core/plugins/apps/backend`) con tests de regresión en ambas.
 
+Verificación en `spanel.lab` (2026-11-17): worker reconstruido con el mismo
+stack (`--build`) y E2E black-box sobre `luc444s/pos@6d3c951`: **10/10 pasos
+OK**, release `ff19035e-69d5-4295-8fdd-b04f12ea41b6`, verify y redeploy
+correctos, cleanup confirmado. Evidencia:
+`artifacts/apps-compose-normalizer-pos-e2e-n1-networks.json`.
+
+Matiz: el Compose de POS declara `pos2_net` en sus seis servicios y el
+normalizador corregido lo preserva (comprobado ejecutándolo directamente), pero
+el hardener posterior reescribe las redes a `default internal: true` en el
+release firmado. Por tanto el E2E demuestra ausencia de regresión; la
+preservación de topología la cubren los tests unitarios.
+
 ### Pistas falsas (para no repetirlas)
 
 - `docker top` parecía fallar por carrera en HAProxy. No era eso: el contenedor

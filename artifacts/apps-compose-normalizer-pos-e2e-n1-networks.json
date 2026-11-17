@@ -1,0 +1,49 @@
+{
+  "admission": "isolation+probes+signature+real-build",
+  "application_id": "d38b1d3c-6600-417b-9fb0-5ea0fb4f7297",
+  "application_slug": "trusted-e2e-fbaa363a3c",
+  "base_url": "https://spanel.lab",
+  "branch": "master",
+  "cleanup": "application deleted (404 verified)",
+  "commit": "6d3c95138dd917a8deaaae52f692ed0598b12b56",
+  "compose_file": "docker-compose.yml",
+  "duration_seconds": 351.32,
+  "hashes": {
+    "artifact_sha256": "fa46fe62acfa94fc0ee82665ba440cf571c2632050e3a7b6bdc2efcba7cdd917",
+    "compose_sha256": "bdbfe7d37505c413f0a9708bf5d911a0a127a92bee5d657d4773f8049ecfe4f3",
+    "gate_sha256": "b210da087b8e673ac99c6ab7207480cbd77ed82bd231d69ed8deb83977592dad",
+    "hardened_tree_sha256": "a88bd23f9c8f5a6ff9328cdacaf11188237a15b039561e60a52ca80356c51632",
+    "policy_sha256": "40ff94655b5b20a2f232081d0c098d8b6effd6ba1c16f4d05131a59b7d3c1227"
+  },
+  "release_id": "ff19035e-69d5-4295-8fdd-b04f12ea41b6",
+  "repository": "luc444s/pos",
+  "runtime": {
+    "probes": {
+      "functional_checks": 2,
+      "restart_counts": {
+        "back": 0,
+        "db": 0,
+        "front": 0,
+        "haproxy": 0,
+        "redis": 0,
+        "ws-bridge": 0
+      },
+      "services": [
+        "back",
+        "db",
+        "front",
+        "haproxy",
+        "redis",
+        "ws-bridge"
+      ]
+    },
+    "users": {
+      "back": "1000:1000",
+      "db": "1000:1000",
+      "front": "1000:1000",
+      "haproxy": "1000:1000",
+      "redis": "1000:1000",
+      "ws-bridge": "1000:1000"
+    }
+  }
+}
