@@ -6,6 +6,7 @@ serializable result. All logic and all host access live in the service layer.
 
 from __future__ import annotations
 
+import importlib.metadata
 import json
 from collections.abc import Callable
 from typing import Any
@@ -19,10 +20,24 @@ from . import doctor as doctor_mod
 from .cells import CellNotFound, CellService, ProvisionRefused
 from .executor import LocalExecutor
 
-# typer 0.4.2 always forwards flag_value=None, which click >= 8.2 reads as a
+
+def _needs_flag_value_shim() -> bool:
+    """Only typer <= 0.9 forwards flag_value=None to click >= 8.2.
+
+    Newer typer versions pass their own sentinel and reject ``flag_value`` as
+    an unexpected keyword, so the shim must not be installed on those hosts.
+    """
+    try:
+        parts = importlib.metadata.version("typer").split(".")
+        return int(parts[0]) == 0 and int(parts[1]) < 10
+    except (ValueError, IndexError, importlib.metadata.PackageNotFoundError):
+        return False
+
+
+# typer 0.4.x always forwards flag_value=None, which click >= 8.2 reads as a
 # real (non-bool) flag value, breaking every option. Translate it to click's
 # UNSET sentinel so flags and value options are auto-detected correctly.
-if getattr(click.core, "UNSET", None) is not None:
+if _needs_flag_value_shim() and getattr(click.core, "UNSET", None) is not None:
     _option_init = TyperOption.__init__
 
     def _compat_option_init(self: TyperOption, *args: object, **kwargs: object) -> None:
