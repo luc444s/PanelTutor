@@ -11,6 +11,7 @@ import logging
 import os
 import threading
 from collections.abc import Callable, Mapping
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -163,8 +164,10 @@ class ReleaseExecution:
         return deployment_id
 
     def harden_checkout(self, checkout, source, policy, operation_id, application_id,
-                        tenant_id):
+                        tenant_id, *, normalization=None):
         candidate = self.hardening_engine.prepare(checkout, source[2], policy)
+        if normalization is not None:
+            candidate = replace(candidate, normalization=normalization)
         release = create_release(
             checkout,
             candidate,
@@ -175,6 +178,7 @@ class ReleaseExecution:
             branch=source[1],
             policy=policy,
             environ=os.environ,
+            normalization=candidate.normalization,
         )
         return release, candidate
 

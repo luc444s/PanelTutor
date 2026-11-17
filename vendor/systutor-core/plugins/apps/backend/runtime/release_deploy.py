@@ -15,6 +15,7 @@ from .deployment import (
     _ensure_owned,
     _env_path,
     _image_users,
+    _inject_readonly_files,
     _manifest_data,
     _override,
     _publish_release_state,
@@ -28,7 +29,7 @@ from .deployment import (
 )
 from .probes import run_probes
 from .transport import Runner
-from .types import AppDeployError, DeployOptions
+from .types import AppDeployError, DeployOptions, one_shot_services
 from .volumes import prepare_runtime_volumes
 
 
@@ -50,6 +51,7 @@ def deploy_trusted(
     result = verified.audit
     if result.errors:
         raise AppDeployError("release audit found blocking errors")
+    one_shot = one_shot_services(result.data["services"])
     env_file = (
         validate_env_file(options.env_file, result.root)
         if options.env_file else None
@@ -124,10 +126,25 @@ def deploy_trusted(
         "non_root": True,
     })
     _write_manifest(runner, staged, manifest)
+    create_attempted = False
     up_started = False
     try:
+        create_attempted = True
+        created = runner.run(
+            _compose_command(staged, compose_rel, project, True, "create"),
+            timeout=options.timeout,
+            check=False,
+        )
+        if created.returncode:
+            raise AppDeployError(
+                f"Compose services failed to create (exit {created.returncode})"
+            )
+        containers = _containers(runner, staged, compose_rel, project, True, services)
+        _inject_readonly_files(runner, staged, compose_rel, containers, result.data["services"])
         started = runner.run(
-            _compose_command(staged, compose_rel, project, True, "up", "-d"),
+            _compose_command(
+                staged, compose_rel, project, True, "up", "-d", "--no-recreate"
+            ),
             timeout=options.timeout,
             check=False,
         )
@@ -136,8 +153,7 @@ def deploy_trusted(
             raise AppDeployError(
                 f"Compose services failed to start (exit {started.returncode})"
             )
-        containers = _containers(runner, staged, compose_rel, project, True, services)
-        _verify_containers(runner, containers, project, True, options.wait)
+        _verify_containers(runner, containers, project, True, options.wait, one_shot=one_shot)
         probes = run_probes(
             runner,
             release=staged,
@@ -146,6 +162,7 @@ def deploy_trusted(
             services=services,
             containers=containers,
             environ=runner.environ,
+            one_shot=one_shot,
         )
         manifest["status"] = "running"
         manifest["containers"] = containers
@@ -171,6 +188,7 @@ def deploy_trusted(
                 "sha256": hashlib.sha256(diagnostic).hexdigest(),
                 "bytes": len(diagnostic),
             }
+        if create_attempted:
             runner.run(
                 _compose_command(
                     staged, compose_rel, project, True, "down", "--remove-orphans"

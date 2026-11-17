@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import re
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -56,7 +57,12 @@ def _managed_volume(service: str, path: str) -> str:
     return f"spanel-{safe}-{digest}"
 
 
-def harden_compose(text: str, policies: dict[str, ServicePolicy]) -> str:
+def harden_compose(
+    text: str,
+    policies: dict[str, ServicePolicy],
+    checkout_root: Path | None = None,
+    compose_file: str | Path | None = None,
+) -> str:
     try:
         data = yaml.safe_load(text)
     except yaml.YAMLError as exc:
@@ -78,6 +84,28 @@ def harden_compose(text: str, policies: dict[str, ServicePolicy]) -> str:
         if exposed:
             config["expose"] = sorted(exposed)
 
+        normalized_sysctl = config.get("sysctls") == {
+            "net.ipv4.ip_unprivileged_port_start": "0"
+        }
+        normalized_aliases = config.pop("x-spanel-normalized-aliases", None)
+        normalized_aliases = (
+            sorted(set(normalized_aliases))
+            if isinstance(normalized_aliases, list)
+            and all(isinstance(item, str) for item in normalized_aliases)
+            else []
+        )
+        readonly_files = config.pop("x-spanel-readonly-files", None)
+        readonly_files = (
+            readonly_files
+            if isinstance(readonly_files, list)
+            and all(
+                isinstance(item, dict)
+                and set(item) == {"source", "target"}
+                and all(isinstance(value, str) for value in item.values())
+                for item in readonly_files
+            )
+            else []
+        )
         for key in (
             "privileged",
             "cap_add",
@@ -91,7 +119,6 @@ def harden_compose(text: str, policies: dict[str, ServicePolicy]) -> str:
             "dns_search",
             "dns_opt",
             "storage_opt",
-            "sysctls",
             "ulimits",
             "use_api_socket",
             "volumes_from",
@@ -102,6 +129,16 @@ def harden_compose(text: str, policies: dict[str, ServicePolicy]) -> str:
         config.pop("extra_hosts", None)
         config.pop("deploy", None)
         config.pop("networks", None)
+        if normalized_aliases:
+            config["networks"] = {"default": {"aliases": normalized_aliases}}
+        if readonly_files:
+            config["x-spanel-readonly-files"] = readonly_files
+        if normalized_sysctl:
+            config["sysctls"] = {
+                "net.ipv4.ip_unprivileged_port_start": "0"
+            }
+        else:
+            config.pop("sysctls", None)
         config["user"] = f"{policy.uid}:{policy.gid}"
         config["cap_drop"] = ["ALL"]
         config["security_opt"] = [
@@ -129,9 +166,19 @@ def harden_compose(text: str, policies: dict[str, ServicePolicy]) -> str:
 
         kept: list[Any] = []
         for volume in config.get("volumes", []) or []:
-            _source, _target, bind = _volume_parts(volume)
-            if not bind:
-                kept.append(volume)
+            source, target, bind = _volume_parts(volume)
+            if bind:
+                continue
+            if not source:
+                name = _managed_volume(str(service), target)
+                generated_volumes[name] = {}
+                kept.append({
+                    "type": "volume",
+                    "source": name,
+                    "target": target,
+                })
+                continue
+            kept.append(volume)
         for item in policy.writable_paths:
             if item.path == "/tmp":
                 continue

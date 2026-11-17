@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import PurePosixPath
 from types import MappingProxyType
 from typing import Any
@@ -428,6 +428,7 @@ class HardenedCandidate:
     changes: tuple[str, ...]
     policy: Mapping[str, Any]
     gate: Mapping[str, Any]
+    normalization: Mapping[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_response(
@@ -438,6 +439,7 @@ class HardenedCandidate:
         hardened_tree_sha256: str | None = None,
         compose: str | None = None,
         policy: HardeningPolicy | None = None,
+        normalization: object | None = None,
     ) -> HardenedCandidate:
         if not isinstance(response, Mapping):
             raise ValueError("hardener response is invalid")
@@ -486,6 +488,11 @@ class HardenedCandidate:
         if not services or any(not isinstance(item, str) for item in services):
             raise ValueError("service evidence is invalid")
         evidence = {"primary": gate, "post_apply": post_gate}
+        normalization_value = (
+            normalization if normalization is not None else response.get("normalization")
+        )
+        if not isinstance(normalization_value, Mapping):
+            raise ValueError("normalization evidence is invalid")
         return cls(
             source_hash,
             hardened_hash,
@@ -494,6 +501,7 @@ class HardenedCandidate:
             tuple(clean_changes),
             _freeze_json(_json_evidence(expected_policy)),
             _freeze_json(_json_evidence(evidence)),
+            _freeze_json(_json_evidence(normalization_value)),
         )
 
     def as_report(self) -> dict[str, Any]:
@@ -506,4 +514,5 @@ class HardenedCandidate:
             "changes": list(self.changes),
             "policy": _thaw_json(self.policy),
             "gate": _thaw_json(self.gate),
+            "normalization": _thaw_json(self.normalization),
         }

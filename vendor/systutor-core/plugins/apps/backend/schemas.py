@@ -74,6 +74,29 @@ class SourceUpdate(BaseModel):
         return value
 
 
+class ComposeUpdate(BaseModel):
+    compose_file: str | None = Field(default=None, max_length=510)
+
+    @field_validator("compose_file")
+    @classmethod
+    def safe_compose(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        text = value.strip()
+        if not text:
+            return None
+        if (
+            len(text) > 510
+            or text.startswith("/")
+            or "\\" in text
+            or any(ch in text for ch in "\x00\r\n")
+            or any(part in {"", ".", ".."} for part in text.split("/"))
+            or not text.lower().endswith((".yml", ".yaml"))
+        ):
+            raise ValueError("compose_file must stay inside the repository")
+        return text
+
+
 class HardeningRuntimeUser(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 

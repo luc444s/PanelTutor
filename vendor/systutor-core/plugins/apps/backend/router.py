@@ -19,6 +19,7 @@ from systutor.kernel.tenants.context import TenantContext
 from systutor.kernel.tenants.models import Tenant
 
 from . import catalog
+from .compose_selection import list_compose_files
 from .managed_environment import (
     MANAGED_DATABASE_NAMES,
     managed_environment_values,
@@ -39,6 +40,7 @@ from .schemas import (
     ActionRequest,
     ApplicationCreate,
     ApplicationView,
+    ComposeUpdate,
     DeleteRequest,
     DeployRequest,
     HardeningRequest,
@@ -220,6 +222,23 @@ def github_repositories(
     return catalog.repository_views(db, user.tenant_id, installation_id)
 
 
+@router.get(
+    "/github/installations/{installation_id}/repositories/{repository_id}/compose-files",
+    response_model=list[str],
+)
+def github_repository_compose_files(
+    installation_id: str, repository_id: str, request: Request,
+    branch: str | None = None, db: Session = Depends(get_db_session),
+    context: TenantContext = Depends(get_current_tenant_context),
+    _user: User = Depends(require_permission("apps.applications.read")),
+) -> list[str]:
+    resources = _resources(request)
+    return list_compose_files(
+        db, context.current_tenant_id, installation_id, repository_id, branch,
+        resources.github, resources.cipher(),
+    )
+
+
 @router.post("/github/installations/{installation_id}/sync", response_model=OperationView, status_code=202)
 def github_sync(
     installation_id: str, request: Request,
@@ -310,6 +329,16 @@ def update_application_source(
 ) -> Application:
     app = catalog.get_application(db, context.current_tenant_id, application_id)
     return catalog.update_source(db, app, body, user.id)
+
+
+@router.patch("/applications/{application_id}/compose", response_model=ApplicationView)
+def update_application_compose(
+    application_id: str, body: ComposeUpdate, db: Session = Depends(get_db_session),
+    context: TenantContext = Depends(get_current_tenant_context),
+    user: User = Depends(require_permission("apps.applications.create")),
+) -> Application:
+    app = catalog.get_application(db, context.current_tenant_id, application_id)
+    return catalog.update_compose(db, app, body.compose_file, user.id)
 
 
 @router.get("/applications/{application_id}/operations")

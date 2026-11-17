@@ -67,6 +67,7 @@ def create_release(
     branch: str,
     policy: HardeningPolicy,
     environ: Mapping[str, str],
+    normalization: Mapping[str, Any] | None = None,
 ) -> TrustedRelease:
     checkout = Path(checkout)
     audit = audit_project(checkout, candidate.compose, non_root=True)
@@ -89,6 +90,9 @@ def create_release(
     key_ring = ReleaseKeyRing.from_environ(environ)
     created = datetime.now(UTC)
     expires = expiry_for(created, release_ttl_seconds(environ))
+    tool_versions = _tool_versions(environ)
+    if normalization is not None:
+        tool_versions = {**tool_versions, "normalization": _plain(normalization)}
     release = TrustedRelease(
         schema=SCHEMA,
         algorithm="hmac-sha256",
@@ -109,7 +113,7 @@ def create_release(
         policy_sha256=hashlib.sha256(canonical_json(policy_data)).hexdigest(),
         policy=policy_data,
         gate_sha256=hashlib.sha256(canonical_json(gate)).hexdigest(),
-        tool_versions=_tool_versions(environ),
+        tool_versions=tool_versions,
         created_at=created.isoformat(),
         expires_at=expires,
         service_fingerprints=fingerprints["service_fingerprints"],
@@ -122,7 +126,7 @@ def create_release(
 def release_result(release: TrustedRelease) -> dict[str, Any]:
     """Non-secret metadata safe for operation results and CLI output."""
 
-    return {
+    result = {
         "release_id": release.release_id,
         "artifact_sha256": release.artifact_sha256,
         "compose_sha256": release.compose_sha256,
@@ -141,3 +145,13 @@ def release_result(release: TrustedRelease) -> dict[str, Any]:
         ),
         "shared_fingerprint": release.shared_fingerprint,
     }
+    # ``tool_versions`` is frozen (nested MappingProxyType).  Use the thawed
+    # signed body so the result is JSON-serializable for the operation record.
+    tool_versions = release.body.get("tool_versions")
+    normalization = (
+        tool_versions.get("normalization")
+        if isinstance(tool_versions, Mapping) else None
+    )
+    if isinstance(normalization, Mapping):
+        result["normalization"] = dict(normalization)
+    return result

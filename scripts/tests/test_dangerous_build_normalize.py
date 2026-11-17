@@ -402,3 +402,57 @@ def test_ephemeral_writable_paths_use_tmpfs_instead_of_volumes() -> None:
     assert service["volumes"] == ["database-data:/var/lib/postgresql/data"]
     assert "/var/run/postgresql:rw,noexec,nosuid,nodev,mode=0775,uid=70,gid=70" in service["tmpfs"]
     assert not any("postgresql" in name for name in hardened.get("volumes", {}))
+
+
+def test_hardener_preserves_only_normalized_compatibility(tmp_path: Path) -> None:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from dangerous_build.compose import ServicePolicy, harden_compose
+    from dangerous_build.compose_normalizer import normalize_compose
+
+    (tmp_path / "proxy.cfg").write_text("ok", encoding="utf-8")
+    normalized = normalize_compose(
+        """services:
+  proxy:
+    container_name: pos-proxy
+    ports: ["80:80"]
+    volumes: ["./proxy.cfg:/etc/proxy.cfg:ro", "./code:/app"]
+""",
+        tmp_path,
+    )
+    data = yaml.safe_load(
+        harden_compose(normalized.text, {"proxy": ServicePolicy(1000, 1000)}, tmp_path)
+    )
+    service = data["services"]["proxy"]
+    assert service["networks"]["default"]["aliases"] == ["pos-proxy"]
+    assert "volumes" not in service
+    assert service["x-spanel-readonly-files"] == [{
+        "source": "proxy.cfg", "target": "/etc/proxy.cfg",
+    }]
+    assert service["sysctls"] == {
+        "net.ipv4.ip_unprivileged_port_start": "0"
+    }
+    assert "ports" not in service
+
+
+def test_hardener_resolves_bind_from_nested_compose_directory(tmp_path: Path) -> None:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from dangerous_build.compose import ServicePolicy, harden_compose
+
+    compose_dir = tmp_path / "deploy"
+    compose_dir.mkdir()
+    (compose_dir / "proxy.cfg").write_text("ok", encoding="utf-8")
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.cfg"
+    outside.write_text("secret", encoding="utf-8")
+    source = """services:
+  proxy:
+    volumes:
+      - {type: bind, source: ./proxy.cfg, target: /etc/proxy.cfg, read_only: true}
+      - {type: bind, source: ./../../TMP_OUTSIDE, target: /etc/outside.cfg, read_only: true}
+""".replace("TMP_OUTSIDE", outside.name)
+    data = yaml.safe_load(harden_compose(
+        source,
+        {"proxy": ServicePolicy(1000, 1000)},
+        tmp_path,
+        "deploy/compose.yml",
+    ))
+    assert "volumes" not in data["services"]["proxy"]

@@ -92,6 +92,10 @@ class GithubClient(Protocol):
         self, token: str, page: int, per_page: int = 100
     ) -> dict[str, Any]: ...
 
+    def repository_tree(
+        self, token: str, full_name: str, ref: str
+    ) -> dict[str, Any]: ...
+
 
 class UrllibGithubClient:
     def _json(self, request: urllib.request.Request) -> dict[str, Any]:
@@ -158,6 +162,23 @@ class UrllibGithubClient:
         query = urllib.parse.urlencode({"page": page, "per_page": per_page})
         request = urllib.request.Request(
             f"{REPOSITORIES_URL}?{query}",
+            headers={
+                "Accept": "application/vnd.github+json",
+                "Authorization": f"Bearer {token}",
+                "X-GitHub-Api-Version": "2022-11-28",
+            },
+        )
+        return self._json(request)
+
+    def repository_tree(
+        self, token: str, full_name: str, ref: str
+    ) -> dict[str, Any]:
+        owner, separator, name = full_name.partition("/")
+        if not separator or not owner or not name or "/" in name:
+            raise GithubError("GitHub repository name is invalid")
+        encoded_ref = urllib.parse.quote(ref, safe="")
+        request = urllib.request.Request(
+            f"{API}/repos/{owner}/{name}/git/trees/{encoded_ref}?recursive=1",
             headers={
                 "Accept": "application/vnd.github+json",
                 "Authorization": f"Bearer {token}",

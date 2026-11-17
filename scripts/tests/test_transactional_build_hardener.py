@@ -85,6 +85,23 @@ def test_runtime_user_is_inserted_after_build_without_rewriting_permissions() ->
     assert fixed.index("USER 10001:10001") < fixed.index('CMD ["sh"]')
 
 
+def test_runtime_user_owns_explicit_final_workdir() -> None:
+    original = (
+        "FROM node:22-alpine\nWORKDIR /app\n"
+        "COPY package.json .\nCOPY --from=build /dist ./dist\nCOPY . .\n"
+        'ENTRYPOINT ["/app/entrypoint.sh"]\n'
+    )
+    fixed = harden_dockerfile(original, uid=1000, gid=1000)
+    assert "COPY --chown=1000:1000 package.json ." in fixed
+    assert "COPY --chown=1000:1000 --from=build /dist ./dist" in fixed
+    assert "COPY --chown=1000:1000 . ." in fixed
+    assert "RUN chown 1000:1000 /app" in fixed
+    assert fixed.index("COPY --chown=1000:1000 . .") < fixed.index("RUN chown 1000:1000 /app")
+    assert fixed.index("RUN chown 1000:1000 /app") < fixed.index("USER 1000:1000")
+    assert fixed.index("USER 1000:1000") < fixed.index("ENTRYPOINT")
+    assert harden_dockerfile(fixed, uid=1000, gid=1000) == fixed
+
+
 def test_image_cache_corruption_and_expiry_fail_to_miss(tmp_path: Path) -> None:
     digest = "example/app@sha256:abc123"
     cache = ImageValidationCache(tmp_path / "cache", scan_ttl=60, pull_ttl=60, enabled=True)
@@ -148,6 +165,24 @@ networks:
     }
     assert service["volumes"][0]["source"].startswith("spanel-web-")
     assert "./data:/app/data" not in service["volumes"]
+
+
+def test_compose_hardening_names_anonymous_volumes() -> None:
+    fixed = yaml.safe_load(
+        harden_compose(
+            "services:\n  web:\n    image: example/web\n"
+            "    volumes: [/app/node_modules]\n",
+            {"web": ServicePolicy(1000, 1000)},
+        )
+    )
+    volume = fixed["services"]["web"]["volumes"][0]
+    assert volume == {
+        "type": "volume",
+        "source": volume["source"],
+        "target": "/app/node_modules",
+    }
+    assert volume["source"].startswith("spanel-web-")
+    assert fixed["volumes"][volume["source"]] == {}
 
 
 def test_blocked_hardening_never_changes_source_or_runs_external_tools(tmp_path: Path) -> None:

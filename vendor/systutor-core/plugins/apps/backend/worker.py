@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 
 from .catalog import audit as record_catalog_audit
 from .catalog import mark_installation_suspended, require_source
+from .compose_normalizer import normalize_compose
 from .crypto import EncryptedValue, TokenCipher
 from .github import GithubClient, UrllibGithubClient, app_jwt_for, repository_row
 from .hardening import (
@@ -235,6 +236,15 @@ class AppsWorker:
                 source[0], source[1], effective_compose, source[3],
                 source[4], source[5], source[6],
             )
+            selected = audit_project(checkout, effective_compose, non_root=True)
+            compose_path = selected.compose
+            compose_relative = compose_path.relative_to(checkout)
+            normalization = normalize_compose(
+                compose_path.read_text(encoding="utf-8"),
+                checkout,
+                compose_relative,
+            )
+            compose_path.write_text(normalization.text, encoding="utf-8")
             audit = audit_project(checkout, effective_compose, non_root=True)
             service_details = []
             dockerfile_users: dict[str, str | None] = {}
@@ -279,6 +289,7 @@ class AppsWorker:
                 "warnings": list(audit.warnings),
                 "blocking": bool(audit.errors),
                 "source_adapter": adaptation.as_dict(),
+                "normalization": normalization.evidence,
             }
             if audit.warnings:
                 report["output"] = "\n".join(
@@ -316,6 +327,7 @@ class AppsWorker:
                 )
                 release, candidate = self.execution.harden_checkout(
                     checkout, source, policy, operation_id, application_id, tenant_id,
+                    normalization=normalization.evidence,
                 )
                 result = release_result(release)
                 result.update({
@@ -348,6 +360,7 @@ class AppsWorker:
             )
             release, _candidate = self.execution.harden_checkout(
                 checkout, source, policy, operation_id, application_id, tenant_id,
+                normalization=normalization.evidence,
             )
             return self.execution.trusted_deploy(
                 operation_id, application_id, release, source, tenant_names,

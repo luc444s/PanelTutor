@@ -21,6 +21,9 @@ export const appsKeys = {
   providers: ["apps", "github", "providers"] as const,
   installations: ["apps", "github", "installations"] as const,
   repositories: (id: string) => ["apps", "github", "installations", id, "repositories"] as const,
+  composeFiles: (installationId: string, repositoryId: string, branch: string) =>
+    ["apps", "github", "installations", installationId, "repositories", repositoryId,
+      "compose-files", branch] as const,
   operation: (id: string) => ["apps", "operations", id] as const,
 };
 
@@ -50,6 +53,15 @@ export const syncInstallation = (id: string, key: string) => apiRequest<Operatio
 export const listInstallationRepositories = (installationId: string) => apiRequest<GithubRepository[]>(
   `${ROOT}/github/installations/${encodeURIComponent(installationId)}/repositories`,
 );
+export const listComposeFiles = (
+  installationId: string,
+  repositoryId: string,
+  branch: string,
+) => apiRequest<string[]>(
+  `${ROOT}/github/installations/${encodeURIComponent(installationId)}`
+  + `/repositories/${encodeURIComponent(repositoryId)}/compose-files`
+  + `?branch=${encodeURIComponent(branch)}`,
+);
 
 export const listApplications = (platform = false) => apiRequest<Application[]>(
   `${ROOT}/applications${platform ? "?scope=all" : ""}`,
@@ -70,6 +82,11 @@ export const updateApplicationSource = (
     installation_id: installationId, repository_id: repositoryId, branch,
   }),
 });
+export const updateApplicationCompose = (id: string, composeFile: string | null) =>
+  apiRequest<Application>(`${ROOT}/applications/${encodeURIComponent(id)}/compose`, {
+    method: "PATCH",
+    body: JSON.stringify({ compose_file: composeFile }),
+  });
 export const inspectApplication = (id: string, key: string) => apiRequest<OperationSummary>(
   `${ROOT}/applications/${encodeURIComponent(id)}/inspect`, operationOptions("POST", key),
 );

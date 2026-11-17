@@ -150,6 +150,29 @@ def test_isolation_accepts_named_volumes_and_rejects_host_binds() -> None:
         check_isolation(FakeRunner(bound), {"web": "cid1"})
 
 
+def test_isolation_rejects_even_read_only_release_file_bind(tmp_path) -> None:
+    config = tmp_path / "proxy.cfg"
+    config.write_text("ok", encoding="utf-8")
+    bound = container(Mounts=[{
+        "Type": "bind",
+        "Source": str(config),
+        "Destination": "/etc/proxy.cfg",
+        "RW": False,
+    }])
+    with pytest.raises(ProbeFailed, match="host bind"):
+        check_isolation(FakeRunner(bound), {"web": "cid1"}, tmp_path)
+
+
+def test_isolation_allows_only_unprivileged_port_sysctl() -> None:
+    allowed = container(HostConfig={
+        "Sysctls": {"net.ipv4.ip_unprivileged_port_start": "0"}
+    })
+    assert check_isolation(FakeRunner(allowed), {"web": "cid1"})
+    denied = container(HostConfig={"Sysctls": {"kernel.shmmax": "1"}})
+    with pytest.raises(ProbeFailed, match="sysctl"):
+        check_isolation(FakeRunner(denied), {"web": "cid1"})
+
+
 def test_isolation_rejects_missing_runtime_security_profiles() -> None:
     runner = FakeRunner(container(AppArmorProfile="unconfined"))
     with pytest.raises(ProbeFailed, match="AppArmor"):

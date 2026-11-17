@@ -270,6 +270,12 @@ def test_fallback_probe_target_prefers_ingress_and_skips_datastores() -> None:
         "vote": {"expose": ["80"]},
         "result": {"expose": ["80"]},
     }) == ("vote", 80)
+    assert fallback_probe_target({
+        "back": {"expose": ["8020"]},
+        "front": {"expose": ["4200"]},
+        "haproxy": {"expose": ["4202", "443", "80"]},
+        "ws-bridge": {"expose": ["8021"]},
+    }) == ("haproxy", 4202)
     assert fallback_probe_target({"database": {"expose": ["5432"]}}) is None
 
 
@@ -302,7 +308,7 @@ def test_restoration_uses_up_no_deps_and_never_global_down(tmp_path: Path, monke
 
         def run(self, argv, **_kwargs):
             self.commands.append(list(argv))
-            if list(argv)[-3:] == ["ps", "-q", "frontend"]:
+            if "ps" in argv and "-q" in argv and list(argv)[-1] == "frontend":
                 return Completed(0, "container123\n", "")
             return Completed(0, "", "")
 
@@ -527,6 +533,13 @@ def test_global_plan_with_previous_state_uses_single_up(
     ups = [command for command in runner.commands if "up" in command]
     assert len(ups) == 1
     assert "--no-deps" not in ups[0]
+    assert "--no-recreate" in ups[0]
+    removes = [command for command in runner.commands if "rm" in command]
+    creates = [command for command in runner.commands if "create" in command]
+    assert len(removes) == 1 and len(creates) == 1
+    assert sorted(creates[0][-2:]) == ["backend", "frontend"]
+    order = runner.commands
+    assert order.index(removes[0]) < order.index(creates[0]) < order.index(ups[0])
     assert manifest["status"] == "running"
 
 

@@ -119,7 +119,9 @@ def _process_users(runner: Runner, container_id: str) -> list[str]:
 
 
 def check_isolation(
-    runner: Runner, containers: Mapping[str, str]
+    runner: Runner,
+    containers: Mapping[str, str],
+    release_root: Path | None = None,
 ) -> dict[str, Any]:
     evidence: dict[str, Any] = {}
     for service, container_id in containers.items():
@@ -132,10 +134,16 @@ def check_isolation(
         if host.get("Devices"):
             raise ProbeFailed(f"service {service} accesses host devices")
         if any(
-            isinstance(mount, Mapping) and mount.get("Type") == "bind"
+            isinstance(mount, Mapping)
+            and mount.get("Type") == "bind"
             for mount in values["mounts"]
         ):
             raise ProbeFailed(f"service {service} contains a host bind")
+        sysctls = host.get("Sysctls") or {}
+        if sysctls != {} and sysctls != {
+            "net.ipv4.ip_unprivileged_port_start": "0"
+        }:
+            raise ProbeFailed(f"service {service} contains an unsafe sysctl")
         if host.get("PortBindings"):
             raise ProbeFailed(f"service {service} publishes host ports")
         if str(host.get("PidMode", "")) == "host":
@@ -378,6 +386,7 @@ def run_probes(
     environ: Mapping[str, str] | None = None,
     target: tuple[str, int] | None = None,
     sleep: Callable[[float], None] = time.sleep,
+    one_shot: set[str] | frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     environ = dict(os.environ if environ is None else environ)
     image = probe_image(environ)
@@ -392,8 +401,13 @@ def run_probes(
         or not 0 <= startup <= 3600
     ):
         raise ProbeFailed("the probe window is invalid")
+    completed = set(one_shot)
+    active = {
+        service: container for service, container in containers.items()
+        if service not in completed
+    }
     assert_compose_healthchecks(runner, release, compose_rel, project, services)
-    isolation = check_isolation(runner, containers)
+    isolation = check_isolation(runner, active, release)
     networks: set[str] = set()
     for values in isolation.values():
         networks.update(values["networks"])
@@ -433,7 +447,7 @@ def run_probes(
                     timeout=timeout,
                 )
             )
-        restart_counts = _inspect_stability(runner, containers)
+        restart_counts = _inspect_stability(runner, active)
         if index + 1 < checks and interval:
             sleep(interval)
     return {

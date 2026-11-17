@@ -231,6 +231,26 @@ def update_source(
     return app
 
 
+def update_compose(
+    db: Session, app: Application, compose_file: str | None, actor_user_id: str
+) -> Application:
+    if app.active_operation_id is not None:
+        raise AppError(
+            "Application has an active operation", status_code=409,
+            code="apps.operation_active",
+        )
+    previous = app.compose_file
+    app.compose_file = compose_file
+    audit(
+        db, "application.compose_selected", tenant_id=app.tenant_id,
+        actor=actor_user_id, entity_id=app.id, entity_type="application",
+        details={"compose_file": compose_file, "previous": previous},
+    )
+    db.commit()
+    db.refresh(app)
+    return app
+
+
 def get_application(db: Session, tenant_id: str, application_id: str) -> Application:
     row = db.scalar(select(Application).where(
         Application.id == application_id, Application.tenant_id == tenant_id,
@@ -507,6 +527,8 @@ def _deployment_view(row: Deployment) -> dict:
     runtime = manifest.get("service_runtime", {})
     runtime_users = manifest.get("runtime_users", {})
     runtime_users = runtime_users if isinstance(runtime_users, dict) else {}
+    one_shot = manifest.get("one_shot")
+    one_shot = set(one_shot) if isinstance(one_shot, list) else set()
     release = _release_summary(manifest, row.id)
     service_releases = manifest.get("service_releases")
     service_releases = (
@@ -529,6 +551,7 @@ def _deployment_view(row: Deployment) -> dict:
             "health": "unknown" if health in (None, "none") else health,
             "ports": ports.get(service) or [],
             "restart_count": state.get("restart_count") or 0,
+            **({"one_shot": True} if service in one_shot else {}),
             "environment_names": names,
             "environment": _environment_metadata(manifest, service),
             "created_at": state.get("created_at") or row.created_at,

@@ -18,6 +18,7 @@ import type {
   AppAction, Application, AuditReport, Finding, OperationSummary,
 } from "../types";
 import { DeleteDialog } from "./DeleteDialog";
+import { ComposeSelector } from "./ComposeSelector";
 import { DeployDialog } from "./DeployDialog";
 import { FindingsReport } from "./FindingsReport";
 import { ReleasesPanel } from "./ReleasesPanel";
@@ -139,7 +140,7 @@ export function ApplicationDetail({ application, deploying, canCreate, canManage
         <dl className="grid gap-3 text-sm sm:grid-cols-2">
           <div><dt className="text-muted-foreground">{t("Status")}</dt><dd><StatusIndicator status={isDeploying ? "deploying" : current.status} /></dd></div>
           <div><dt className="text-muted-foreground">{t("Source")}</dt><dd>GitHub · {sourceConnected ? t("connected") : t("requires reconnection")}</dd></div>
-          <div><dt className="text-muted-foreground">{t("Compose")}</dt><dd>{current.compose_file ?? report.compose ?? t("Autodetect")}</dd></div>
+          <div><dt className="text-muted-foreground">{t("Compose")}</dt><dd><ComposeSelector application={current} disabled={pending || busy} /></dd></div>
           <div><dt className="text-muted-foreground">{t("Active commit")}</dt><dd><code>{activeDeployment?.commit ?? "—"}</code></dd></div>
           <div><dt className="text-muted-foreground">{t("Runtime project")}</dt><dd><code>{detail.data?.runtime_project ?? "—"}</code></dd></div>
           <div><dt className="text-muted-foreground">{t("Last deploy")}</dt><dd>{lastDeploy ? new Date(lastDeploy).toLocaleString() : "—"}</dd></div>

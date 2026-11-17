@@ -30,12 +30,13 @@ describe("Apps API module contract", () => {
     expect(page).toMatch(/tracked\.map\(\(operation\)/);
   });
 
-  it("creates applications without compose or ingress overrides", () => {
+  it("offers nested compose selection without ingress overrides", () => {
     const dialog = readFileSync(new URL(
       "../../../../vendor/systutor-core/plugins/apps/frontend/components/CreateApplicationDialog.tsx",
       import.meta.url,
     ), "utf8");
-    expect(dialog).not.toContain("Compose (optional");
+    expect(dialog).toContain("listComposeFiles");
+    expect(dialog).toContain('t("Compose")');
     expect(dialog).not.toContain("Platform ingress");
   });
 });

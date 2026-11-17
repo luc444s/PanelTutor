@@ -95,6 +95,19 @@ def audit_project(
                 "Fixed container names can collide with resources outside the project.",
                 "Remove container_name and let Compose scope the name.",
             )
+        if config.get("x-spanel-one-shot") is True:
+            restart = str(config.get("restart", "no")).strip().lower()
+            if restart not in {"no", "none"}:
+                _finding(
+                    findings,
+                    "error",
+                    "compose_one_shot_restart",
+                    service,
+                    compose_rel,
+                    _line(lines, *base, "restart"),
+                    "One-shot services must not restart after completing.",
+                    "Set restart: \"no\" on x-spanel-one-shot services.",
+                )
         if config.get("ports"):
             _finding(
                 findings,

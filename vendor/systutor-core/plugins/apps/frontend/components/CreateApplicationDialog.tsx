@@ -9,7 +9,7 @@ import { Select } from "@systutor/shell/ui/select";
 import { useT } from "@/i18n/use-i18n";
 
 import {
-  appsKeys, createApplication, inspectApplication, listInstallations,
+  appsKeys, createApplication, inspectApplication, listComposeFiles, listInstallations,
   listInstallationRepositories, newIdempotencyKey,
 } from "../api";
 import type { Application, OperationSummary } from "../types";
@@ -26,6 +26,7 @@ export function CreateApplicationDialog({ open, onClose, onAccepted }: Props) {
   const [repositoryId, setRepositoryId] = useState("");
   const [name, setName] = useState("");
   const [branch, setBranch] = useState("");
+  const [composeFile, setComposeFile] = useState("");
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const installations = useQuery({
@@ -37,6 +38,17 @@ export function CreateApplicationDialog({ open, onClose, onAccepted }: Props) {
     queryFn: () => listInstallationRepositories(installationId),
     enabled: open && Boolean(installationId), retry: false,
   });
+  const composeFiles = useQuery({
+    queryKey: appsKeys.composeFiles(
+      installationId || "idle", repositoryId || "idle", branch.trim(),
+    ),
+    queryFn: () => listComposeFiles(installationId, repositoryId, branch.trim()),
+    enabled: open && Boolean(installationId) && Boolean(repositoryId), retry: false,
+  });
+  const composeOptions = [
+    { value: "", label: t("Auto (detect)") },
+    ...(composeFiles.data ?? []).map((path) => ({ value: path, label: path })),
+  ];
   const activeInstallations = (installations.data ?? []).filter(
     (item) => item.status === "active",
   );
@@ -50,6 +62,12 @@ export function CreateApplicationDialog({ open, onClose, onAccepted }: Props) {
     setInstallationId(value);
     setRepositoryId("");
     setBranch("");
+    setComposeFile("");
+  }
+
+  function selectRepository(value: string) {
+    setRepositoryId(value);
+    setComposeFile("");
   }
 
   async function submit(event: FormEvent) {
@@ -63,14 +81,14 @@ export function CreateApplicationDialog({ open, onClose, onAccepted }: Props) {
         installation_id: installationId,
         repository_id: repositoryId,
         branch: branch.trim() || null,
-        compose_file: null,
+        compose_file: composeFile || null,
         domain: null,
         ingress_service: null,
         ingress_port: null,
       });
       const operation = await inspectApplication(application.id, newIdempotencyKey());
       setName("");
-      setInstallationId(""); setRepositoryId(""); setBranch("");
+      setInstallationId(""); setRepositoryId(""); setBranch(""); setComposeFile("");
       onAccepted(application, operation);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : t("Could not create and inspect the application"));
@@ -101,7 +119,7 @@ export function CreateApplicationDialog({ open, onClose, onAccepted }: Props) {
           <span>{t("Authorized repository")}</span>
           <Select
             value={repositoryId}
-            onChange={setRepositoryId}
+            onChange={selectRepository}
             options={(repositories.data ?? []).map((item) => ({
               value: item.id, label: item.full_name,
             }))}
@@ -113,6 +131,15 @@ export function CreateApplicationDialog({ open, onClose, onAccepted }: Props) {
         ) : null}
         <label className="block space-y-1 text-sm"><span>{t("Name")}</span><Input required value={name} onChange={(e) => setName(e.target.value)} /></label>
         <label className="block space-y-1 text-sm"><span>{t("Branch")}</span><Input required value={branch} onChange={(e) => setBranch(e.target.value)} /></label>
+        <label className="block space-y-1 text-sm">
+          <span>{t("Compose")}</span>
+          <Select
+            value={composeFile}
+            onChange={setComposeFile}
+            options={composeOptions}
+            placeholder={composeFiles.isLoading ? t("Loading…") : t("Auto (detect)")}
+          />
+        </label>
         {error ? <Alert title={t("Error")}>{error}</Alert> : null}
         <div className="flex justify-end gap-2">
           <Button type="button" variant="secondary" disabled={pending} onClick={onClose}>{t("Cancel")}</Button>

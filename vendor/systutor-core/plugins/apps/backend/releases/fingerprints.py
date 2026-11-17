@@ -10,12 +10,12 @@ from __future__ import annotations
 
 import fnmatch
 import hashlib
-import os
 from collections.abc import Iterable, Mapping
 from pathlib import Path
 from typing import Any
 
 from ..runtime.types import SECRET_NAME_RE, AppDeployError, AuditResult
+from ..symlinks import symlink_target
 from .trusted import canonical_json
 
 MAX_FINGERPRINT_SERVICES = 256
@@ -112,7 +112,7 @@ def build_context_digest(context: Path, dockerfile: Path) -> str:
         digest.update(b"\0")
         try:
             if path.is_symlink():
-                digest.update(b"L" + os.readlink(path).encode())
+                digest.update(b"L" + symlink_target(path).encode())
             elif path.is_file():
                 digest.update(b"F")
                 with path.open("rb") as handle:

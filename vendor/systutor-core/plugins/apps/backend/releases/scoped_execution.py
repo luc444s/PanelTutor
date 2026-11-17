@@ -20,6 +20,7 @@ from ..runtime.deployment import (
     _ensure_owned,
     _env_path,
     _image_users,
+    _inject_readonly_files,
     _manifest_data,
     _override,
     _publish_release_state,
@@ -34,7 +35,7 @@ from ..runtime.deployment import (
 from ..runtime.lifecycle import _read_manifest
 from ..runtime.probes import run_probes
 from ..runtime.transport import Runner
-from ..runtime.types import AppDeployError, DeployOptions
+from ..runtime.types import AppDeployError, DeployOptions, one_shot_services
 from ..runtime.volumes import prepare_runtime_volumes
 from .planner import DeployPlan, DeployScope, active_state
 from .store import release_store_root
@@ -204,7 +205,8 @@ def _restore(
 
 
 _PROBE_PREFERRED_SERVICES = (
-    "frontend", "web", "app", "vote", "result", "nginx", "ingress"
+    "frontend", "web", "app", "vote", "result", "nginx", "ingress",
+    "haproxy", "traefik", "proxy",
 )
 _PROBE_DENIED_SERVICES = frozenset({
     "database", "db", "postgres", "postgresql", "mysql", "mariadb",
@@ -409,6 +411,7 @@ def deploy_scoped(
     result = verified.audit
     if result.errors:
         raise AppDeployError("release audit found blocking errors")
+    one_shot = one_shot_services(result.data["services"])
     resolved_probe_target = probe_target or fallback_probe_target(
         result.data.get("services")
     )
@@ -566,6 +569,42 @@ def deploy_scoped(
                 )
             before[service] = _identity(runner, container)
         if effective:
+            # Recreate the effective services so signed read-only files can be
+            # copied into their filesystem before the processes start.
+            removed = runner.run(
+                _compose_command(
+                    staged, compose_rel, project, True,
+                    "rm", "-s", "-f", *sorted(effective),
+                ),
+                timeout=timeout,
+                check=False,
+            )
+            if removed.returncode:
+                raise AppDeployError(
+                    f"Compose services failed to remove (exit {removed.returncode})"
+                )
+            created = runner.run(
+                _compose_command(
+                    staged, compose_rel, project, True,
+                    "create", *sorted(effective),
+                ),
+                timeout=timeout,
+                check=False,
+            )
+            if created.returncode:
+                raise AppDeployError(
+                    f"Compose services failed to create (exit {created.returncode})"
+                )
+            staged_containers = _containers(
+                runner, staged, compose_rel, project, True, sorted(effective)
+            )
+            _inject_readonly_files(
+                runner,
+                staged,
+                compose_rel,
+                staged_containers,
+                {name: result.data["services"][name] for name in effective},
+            )
             if initial or len(effective) == len(all_services):
                 # A global plan must reconcile every service in one Compose
                 # call.  Doing it service by service stops only one container
@@ -574,7 +613,10 @@ def deploy_scoped(
                 if not initial:
                     modified = list(effective)
                 started = runner.run(
-                    _compose_command(staged, compose_rel, project, True, "up", "-d"),
+                    _compose_command(
+                        staged, compose_rel, project, True,
+                        "up", "-d", "--no-recreate",
+                    ),
                     timeout=timeout,
                     check=False,
                 )
@@ -593,7 +635,7 @@ def deploy_scoped(
                     started = runner.run(
                         _compose_command(
                             staged, compose_rel, project, True,
-                            "up", "-d", "--no-deps", service,
+                            "up", "-d", "--no-deps", "--no-recreate", service,
                         ),
                         timeout=timeout,
                         check=False,
@@ -617,6 +659,7 @@ def deploy_scoped(
                 project,
                 True,
                 wait,
+                one_shot=one_shot,
             )
         after: dict[str, dict[str, Any]] = {}
         for service in untouched:
@@ -648,6 +691,7 @@ def deploy_scoped(
                 containers={item: merged_containers[item] for item in effective},
                 environ=runner.environ,
                 target=resolved_probe_target,
+                one_shot=one_shot,
             )
         probes = run_probes(
             runner,
@@ -658,6 +702,7 @@ def deploy_scoped(
             containers=merged_containers,
             environ=runner.environ,
             target=resolved_probe_target,
+            one_shot=one_shot,
         )
         manifest.update({
             "status": "running",
@@ -744,6 +789,7 @@ def deploy_scoped(
                             project,
                             True,
                             wait,
+                            one_shot=set(previous.get("one_shot") or []),
                         )
                     except Exception as verify_exc:
                         restoration["failed"] = [*failed, "verification"]
@@ -761,6 +807,7 @@ def deploy_scoped(
                                 containers=identities,
                                 environ=runner.environ,
                                 target=resolved_probe_target,
+                                one_shot=set(previous.get("one_shot") or []),
                             )
                         except Exception as probe_exc:
                             restoration["failed"] = [*failed, "probes"]

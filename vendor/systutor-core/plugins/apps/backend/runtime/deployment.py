@@ -20,6 +20,7 @@ from typing import Any
 import yaml
 
 from ..hardening.contracts import HardeningPolicy
+from ..symlinks import symlink_target
 from .docker_audit import _is_definitely_non_root_user
 from .source import _inside
 from .transport import Runner
@@ -31,6 +32,8 @@ from .types import (
     AppDeployError,
     AuditResult,
     DeployOptions,
+    one_shot_services,
+    readonly_release_file,
 )
 
 
@@ -96,7 +99,7 @@ def _tree_hash(root: Path) -> str:
             continue
         digest.update(rel.encode() + b"\0")
         if path.is_symlink():
-            digest.update(b"L" + os.readlink(path).encode())
+            digest.update(b"L" + symlink_target(path).encode())
         elif path.is_file():
             digest.update(b"F")
             with path.open("rb") as stream:
@@ -553,7 +556,9 @@ def _containers(
     result: dict[str, str] = {}
     for service in services:
         value = runner.run(
-            _compose_command(release, compose_rel, project, env, "ps", "-q", service)
+            _compose_command(
+                release, compose_rel, project, env, "ps", "--all", "-q", service
+            )
         ).stdout.strip()
         if not value or "\n" in value:
             raise AppDeployError(
@@ -563,18 +568,90 @@ def _containers(
     return result
 
 
+def _inject_readonly_files(
+    runner: Runner,
+    release: Path,
+    compose_rel: str,
+    containers: dict[str, str],
+    services: dict[str, Any],
+) -> None:
+    """Copy signed files into stopped containers without daemon host binds."""
+    private = release.parent.parent / "private" / release.name / "readonly-files"
+    prepared = runner.run(["mkdir", "-p", str(private)], check=False)
+    if prepared.returncode:
+        raise AppDeployError("failed to prepare read-only file injection")
+    for service in sorted(services):
+        config = services[service]
+        files = config.get("x-spanel-readonly-files") if isinstance(config, dict) else None
+        if files is None:
+            continue
+        if not isinstance(files, list) or not all(
+            readonly_release_file(item, release / "source", compose_rel) for item in files
+        ):
+            raise AppDeployError("read-only file injection metadata is invalid")
+        compose_directory = (release / "source" / compose_rel).parent
+        for item in files:
+            digest = hashlib.sha256(
+                f"{service}\0{item['source']}\0{item['target']}".encode()
+            ).hexdigest()
+            temporary = private / digest
+            copied = runner.run(
+                ["cp", "--", str(compose_directory / item["source"]), str(temporary)],
+                check=False,
+            )
+            if copied.returncode:
+                raise AppDeployError("failed to prepare read-only file injection")
+            try:
+                mode = runner.run(["chmod", "0444", str(temporary)], check=False)
+                if mode.returncode:
+                    raise AppDeployError("failed to prepare read-only file injection")
+                injected = runner.run(
+                    ["docker", "cp", str(temporary), f"{containers[service]}:{item['target']}"],
+                    check=False,
+                )
+                if injected.returncode:
+                    raise AppDeployError("failed to inject a read-only release file")
+            finally:
+                runner.run(["rm", "-f", "--", str(temporary)], check=False)
+
+
 def _verify_containers(
     runner: Runner,
     containers: dict[str, str],
     project: str,
     non_root: bool,
     wait: int,
+    one_shot: set[str] | frozenset[str] = frozenset(),
 ) -> None:
     deadline = time.monotonic() + wait
     last = ""
+    completed = set(one_shot)
     while time.monotonic() < deadline:
         ready = True
         for service, container in containers.items():
+            if service in completed:
+                status = runner.run(
+                    [
+                        "docker",
+                        "container",
+                        "inspect",
+                        "-f",
+                        "{{.State.Status}} {{.State.ExitCode}}",
+                        container,
+                    ],
+                    check=False,
+                ).stdout.strip()
+                last = f"{service}: {status}"
+                state, _, exit_code = status.partition(" ")
+                if state == "exited" and exit_code == "0":
+                    continue
+                if state == "exited":
+                    raise AppDeployError(
+                        f"one-shot service {service} exited with code "
+                        f"{exit_code or 'unknown'}"
+                    )
+                ready = False
+                continue
             status = runner.run(
                 [
                     "docker",
@@ -621,6 +698,9 @@ def _verify_containers(
                 raise AppDeployError(
                     f"container {service} lacks a definite configured non-root user"
                 )
+            if service in completed:
+                # A completed init container has no processes left to inspect.
+                continue
             top = runner.run(
                 ["docker", "top", container, "-eo", "pid,uid"], check=False
             )
@@ -662,6 +742,7 @@ def _manifest_data(
         "tree_hash": _tree_hash(result.root),
         "compose": result.compose.relative_to(result.root).as_posix(),
         "services": sorted(result.data["services"]),
+        "one_shot": sorted(one_shot_services(result.data["services"])),
         "service_environment": _service_environment_names(result.data),
         "tenant_environment_names": sorted(set(options.tenant_environment_names)),
         "service_ports": _service_internal_ports(result.data),
@@ -810,10 +891,25 @@ def deploy(
     host = "local" if runner.transport == "local" else runner.host
     manifest = _manifest_data(options, result, project, images, "building", host, release)
     _write_manifest(runner, release, manifest)
+    create_attempted = False
     up_started = False
     try:
+        create_attempted = True
+        created = runner.run(
+            _compose_command(release, compose_rel, project, True, "create"),
+            timeout=options.timeout,
+            check=False,
+        )
+        if created.returncode:
+            raise AppDeployError(
+                f"Compose services failed to create (exit {created.returncode})"
+            )
+        containers = _containers(runner, release, compose_rel, project, True, services)
+        _inject_readonly_files(runner, release, compose_rel, containers, result.data["services"])
         started = runner.run(
-            _compose_command(release, compose_rel, project, True, "up", "-d"),
+            _compose_command(
+                release, compose_rel, project, True, "up", "-d", "--no-recreate"
+            ),
             timeout=options.timeout,
             check=False,
         )
@@ -822,8 +918,10 @@ def deploy(
             raise AppDeployError(
                 f"Compose services failed to start (exit {started.returncode})"
             )
-        containers = _containers(runner, release, compose_rel, project, True, services)
-        _verify_containers(runner, containers, project, options.non_root, options.wait)
+        _verify_containers(
+            runner, containers, project, options.non_root, options.wait,
+            one_shot=one_shot_services(result.data["services"]),
+        )
         manifest["status"] = "running"
         manifest["containers"] = containers
         manifest["container_names"] = _container_names(runner, containers)
@@ -854,14 +952,10 @@ def deploy(
                 "sha256": hashlib.sha256(diagnostic).hexdigest(),
                 "bytes": len(diagnostic),
             }
+        if create_attempted:
             runner.run(
                 _compose_command(
-                    release,
-                    compose_rel,
-                    project,
-                    True,
-                    "down",
-                    "--remove-orphans",
+                    release, compose_rel, project, True, "down", "--remove-orphans"
                 ),
                 check=False,
             )

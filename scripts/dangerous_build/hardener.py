@@ -12,6 +12,7 @@ from typing import Any
 from apps.backend.runtime import AppDeployError, audit_project  # type: ignore
 
 from .compose import ComposeHardeningError, ServicePolicy, harden_compose
+from .compose_normalizer import ComposeNormalizationError, normalize_compose
 from .dockerfile import DockerfileHardeningError, WritablePath, harden_dockerfile
 from .transaction import PublicationError, publish, tree_digest
 
@@ -50,18 +51,32 @@ def _policies(args: Any, services: set[str]) -> dict[str, ServicePolicy]:
     }
 
 
-def _candidate_changes(source: Path, candidate: Path, args: Any) -> tuple[Path, ...]:
-    result = audit_project(
+def _candidate_changes(
+    source: Path, candidate: Path, args: Any
+) -> tuple[tuple[Path, ...], dict[str, Any]]:
+    selected = audit_project(
         source,
         args.compose_file,
         non_root=True,
         require_build=False,
     )
+    compose_relative = selected.compose.relative_to(source)
+    compose_source = source / compose_relative
+    normalized = normalize_compose(
+        compose_source.read_text(encoding="utf-8"), candidate, compose_relative
+    )
+    (candidate / compose_relative).write_text(normalized.text, encoding="utf-8")
+    result = audit_project(
+        candidate,
+        compose_relative.as_posix(),
+        non_root=True,
+        require_build=False,
+    )
     services = {str(name) for name in result.data["services"]}
     policies = _policies(args, services)
-    compose_relative = result.compose.relative_to(source)
-    compose_source = source / compose_relative
-    compose_fixed = harden_compose(compose_source.read_text(encoding="utf-8"), policies)
+    compose_fixed = harden_compose(
+        normalized.text, policies, candidate, compose_relative
+    )
     (candidate / compose_relative).write_text(compose_fixed, encoding="utf-8")
     changed: set[Path] = {compose_relative}
 
@@ -75,8 +90,8 @@ def _candidate_changes(source: Path, candidate: Path, args: Any) -> tuple[Path, 
             )
         dockerfile_policies[dockerfile] = policy
     for dockerfile, policy in dockerfile_policies.items():
-        relative = dockerfile.relative_to(source)
-        original = dockerfile.read_text(encoding="utf-8")
+        relative = dockerfile.relative_to(candidate)
+        original = (source / relative).read_text(encoding="utf-8")
         fixed = harden_dockerfile(
             original,
             uid=policy.uid,
@@ -86,7 +101,7 @@ def _candidate_changes(source: Path, candidate: Path, args: Any) -> tuple[Path, 
         if fixed != original:
             (candidate / relative).write_text(fixed, encoding="utf-8")
             changed.add(relative)
-    return tuple(sorted(changed))
+    return tuple(sorted(changed)), normalized.evidence
 
 
 def _write_preview(
@@ -146,7 +161,7 @@ def run_hardener(args: Any, gate_runner: GateRunner) -> tuple[int, dict[str, Any
         with tempfile.TemporaryDirectory(prefix="spanel-hardener-") as temporary:
             candidate = Path(temporary) / "candidate"
             _copy_checkout(source, candidate)
-            relatives = _candidate_changes(source, candidate, args)
+            relatives, normalization = _candidate_changes(source, candidate, args)
             gate = gate_runner(candidate, args)
             report: dict[str, Any] = {
                 "status": "blocked" if gate["status"] != "passed" else "validated",
@@ -156,6 +171,7 @@ def run_hardener(args: Any, gate_runner: GateRunner) -> tuple[int, dict[str, Any
                 "applied": False,
                 "backup": None,
                 "policy": policy,
+                "normalization": normalization,
             }
             if gate["status"] != "passed":
                 return 2, report
@@ -190,6 +206,7 @@ def run_hardener(args: Any, gate_runner: GateRunner) -> tuple[int, dict[str, Any
     except (
         AppDeployError,
         ComposeHardeningError,
+        ComposeNormalizationError,
         DockerfileHardeningError,
         HardeningError,
         PublicationError,

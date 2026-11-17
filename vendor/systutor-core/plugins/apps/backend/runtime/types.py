@@ -1,9 +1,11 @@
 """Shared runtime types and constants."""
 from __future__ import annotations
 
+import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 OWNER_LABEL = "io.spanel.app.owner"
@@ -58,6 +60,154 @@ class Completed:
     returncode: int
     stdout: str = ""
     stderr: str = ""
+
+
+def volume_is_host_bind(volume: object) -> bool:
+    """Whether a Compose volume entry mounts a host path.
+
+    A string without a colon is an anonymous *container* volume (for example
+    ``/app/node_modules``) and must not be mistaken for a host bind.
+    """
+    if isinstance(volume, dict):
+        if volume.get("type") == "bind":
+            return True
+        source = volume.get("source")
+        return isinstance(source, str) and source.startswith((".", "/", "~"))
+    if isinstance(volume, str):
+        parts = volume.split(":")
+        if len(parts) < 2:
+            return False
+        source = parts[0]
+        return (
+            source.startswith((".", "/", "~"))
+            or "/" in source
+            or "\\" in source
+        )
+    return False
+
+
+def readonly_release_file_bind(
+    volume: object,
+    release_root: Path,
+    compose_file: str | Path | None = None,
+) -> bool:
+    """Whether a Compose bind is the narrowly allowed release-local file mount."""
+    if isinstance(volume, dict) and volume.get("type") == "bind":
+        source, target = volume.get("source"), volume.get("target")
+        read_only = volume.get("read_only") is True
+    elif isinstance(volume, str):
+        parts = volume.split(":")
+        if len(parts) != 3:
+            return False
+        source, target, mode = parts
+        read_only = mode.lower() == "ro"
+    else:
+        return False
+    if (
+        not read_only
+        or not isinstance(source, str)
+        or not source.startswith("./")
+        or not isinstance(target, str)
+        or not target.startswith("/")
+        or any(
+            target == item or target.startswith(item + "/")
+            for item in MOUNT_BLOCKED
+        )
+    ):
+        return False
+    try:
+        root = release_root.resolve(strict=True)
+        relative = Path(compose_file) if compose_file is not None else None
+        if relative is not None and (
+            relative.is_absolute()
+            or ".." in relative.parts
+            or "\\" in str(compose_file)
+        ):
+            return False
+        compose_directory = (
+            (root / relative).parent.resolve(strict=True)
+            if relative is not None
+            else root
+        )
+        compose_directory.relative_to(root)
+        path = compose_directory / source[2:]
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(root)
+    except (OSError, ValueError):
+        return False
+    return (
+        resolved.is_file()
+        and path.name != "docker.sock"
+        and resolved.name != "docker.sock"
+    )
+
+
+def readonly_release_file(
+    item: object,
+    release_root: Path,
+    compose_file: str | Path,
+) -> bool:
+    """Validate one canonical signed pre-start file injection."""
+    if not isinstance(item, Mapping) or set(item) != {"source", "target"}:
+        return False
+    source, target = item.get("source"), item.get("target")
+    if (
+        not isinstance(source, str)
+        or not source
+        or "\\" in source
+        or Path(source).is_absolute()
+        or not isinstance(target, str)
+        or not target.startswith("/")
+        or str(PurePosixPath(target)) != target
+        or ".." in PurePosixPath(target).parts
+        or any(target == path or target.startswith(path + "/") for path in MOUNT_BLOCKED)
+    ):
+        return False
+    try:
+        root = release_root.resolve(strict=True)
+        compose = Path(compose_file)
+        if compose.is_absolute() or ".." in compose.parts or "\\" in str(compose_file):
+            return False
+        compose_directory = (root / compose).parent.resolve(strict=True)
+        compose_directory.relative_to(root)
+        candidate = compose_directory / source
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(root)
+        canonical = Path(os.path.relpath(resolved, compose_directory)).as_posix()
+    except (OSError, ValueError):
+        return False
+    return (
+        source == canonical
+        and resolved.is_file()
+        and candidate.name != "docker.sock"
+        and resolved.name != "docker.sock"
+    )
+
+
+def one_shot_services(services: object) -> set[str]:
+    """Services that complete an initialization task and then exit.
+
+    A service is one-shot when it explicitly opts in with
+    ``x-spanel-one-shot: true`` or when another service waits for it with
+    ``depends_on: {condition: service_completed_successfully}``.
+    """
+    if not isinstance(services, Mapping):
+        return set()
+    result: set[str] = set()
+    for name, config in services.items():
+        if not isinstance(name, str) or not isinstance(config, Mapping):
+            continue
+        if config.get("x-spanel-one-shot") is True:
+            result.add(name)
+        depends = config.get("depends_on")
+        if isinstance(depends, Mapping):
+            for dependency, spec in depends.items():
+                if (
+                    isinstance(spec, Mapping)
+                    and spec.get("condition") == "service_completed_successfully"
+                ):
+                    result.add(str(dependency))
+    return result
 
 
 @dataclass(frozen=True)

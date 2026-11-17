@@ -13,7 +13,13 @@ from pathlib import Path, PurePosixPath
 
 from ..hardening import HardeningPolicy
 from ..runtime.audit import audit_project
-from ..runtime.types import AppDeployError, AuditResult
+from ..runtime.types import (
+    AppDeployError,
+    AuditResult,
+    readonly_release_file,
+    volume_is_host_bind,
+)
+from ..symlinks import symlink_target
 from .store import discard_tree, load_artifact
 from .trusted import (
     ReleaseKeyRing,
@@ -54,7 +60,7 @@ def tree_digest(root: Path) -> str:
         digest.update(relative.as_posix().encode())
         digest.update(b"\0")
         if path.is_symlink():
-            digest.update(b"L" + os.readlink(path).encode())
+            digest.update(b"L" + symlink_target(path).encode())
         elif path.is_file():
             digest.update(b"F")
             with path.open("rb") as handle:
@@ -178,12 +184,31 @@ def _assert_compose_hardened(result: AuditResult) -> None:
             if str(config.get(key, "")).strip().lower() == "host":
                 raise ReleaseRejected("release compose uses a host namespace")
         for volume in config.get("volumes") or []:
-            if isinstance(volume, str) and volume.startswith(
-                (".", "/", "~")
+            if volume_is_host_bind(volume):
+                raise ReleaseRejected("release compose contains a host bind")
+        readonly_files = config.get("x-spanel-readonly-files")
+        if readonly_files is not None:
+            if not isinstance(readonly_files, list) or not readonly_files:
+                raise ReleaseRejected("release compose contains invalid file injection metadata")
+            compose_file = result.compose.relative_to(result.root)
+            if not all(
+                readonly_release_file(item, result.root, compose_file)
+                for item in readonly_files
             ):
-                raise ReleaseRejected("release compose contains a host bind")
-            if isinstance(volume, dict) and volume.get("type") == "bind":
-                raise ReleaseRejected("release compose contains a host bind")
+                raise ReleaseRejected("release compose contains invalid file injection metadata")
+            canonical = sorted(
+                readonly_files,
+                key=lambda item: (item["source"], item["target"]),
+            )
+            if readonly_files != canonical or len({
+                (item["source"], item["target"]) for item in readonly_files
+            }) != len(readonly_files):
+                raise ReleaseRejected("release compose contains invalid file injection metadata")
+        sysctls = config.get("sysctls") or {}
+        if sysctls != {} and sysctls != {
+            "net.ipv4.ip_unprivileged_port_start": "0"
+        }:
+            raise ReleaseRejected("release compose contains an unsafe sysctl")
         user = config.get("user")
         if user is not None:
             text = str(user).strip().lower()

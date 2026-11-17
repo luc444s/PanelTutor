@@ -56,6 +56,43 @@ def _last_user(lines: list[str], start: int, before: int) -> str | None:
     return value
 
 
+def _last_absolute_workdir(
+    lines: list[str], start: int, before: int
+) -> str | None:
+    value: str | None = None
+    for index in _logical_instruction_starts(lines, start):
+        if index >= before:
+            break
+        if _command(lines[index]) != "WORKDIR":
+            continue
+        parts = lines[index].strip().split(maxsplit=1)
+        candidate = parts[1].strip() if len(parts) == 2 else ""
+        value = (
+            candidate
+            if re.fullmatch(r"/[A-Za-z0-9._/+:-]+", candidate)
+            else None
+        )
+    return value
+
+
+def _own_final_stage_copies(
+    lines: list[str], start: int, before: int, owner: str
+) -> None:
+    for index in _logical_instruction_starts(lines, start):
+        if index >= before:
+            break
+        command = _command(lines[index])
+        if command not in {"ADD", "COPY"} or "--chown=" in lines[index]:
+            continue
+        lines[index] = re.sub(
+            rf"^(\s*{command})(\s+)",
+            rf"\1 --chown={owner}\2",
+            lines[index],
+            count=1,
+            flags=re.IGNORECASE,
+        )
+
+
 def harden_dockerfile(
     text: str,
     *,
@@ -77,6 +114,7 @@ def harden_dockerfile(
     stage = _final_stage_start(lines)
     insertion = _runtime_insertion(lines, stage)
     final_user = _last_user(lines, stage, insertion)
+    workdir = _last_absolute_workdir(lines, stage, insertion)
     requested = f"{uid}:{gid}"
     if final_user == requested and not writable_paths:
         return text
@@ -86,6 +124,9 @@ def harden_dockerfile(
         for item in writable_paths
     ]
     if final_user != requested:
+        _own_final_stage_copies(lines, stage, insertion, requested)
+        if workdir is not None:
+            additions.append(f"RUN chown {requested} {workdir}")
         additions.append(f"USER {requested}")
     if not additions:
         return text

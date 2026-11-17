@@ -10,6 +10,7 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
+from ..symlinks import symlink_target
 from .contracts import HardenedCandidate, HardeningPolicy, HardeningRejected
 
 MAX_STDOUT = 8 * 1024 * 1024
@@ -36,7 +37,7 @@ def _tree_digest(root: Path) -> str:
         digest.update(relative.as_posix().encode())
         digest.update(b"\0")
         if path.is_symlink():
-            digest.update(b"L" + os.readlink(path).encode())
+            digest.update(b"L" + symlink_target(path).encode())
         elif path.is_file():
             digest.update(b"F")
             with path.open("rb") as handle:
@@ -87,6 +88,7 @@ class CommandHardeningEngine:
         checkout: Path,
         compose_file: str | None,
         policy: HardeningPolicy,
+        normalization: object | None = None,
     ) -> HardenedCandidate:
         checkout = Path(checkout).resolve()
         if not checkout.is_dir():
@@ -163,6 +165,7 @@ class CommandHardeningEngine:
                 hardened_tree_sha256=_tree_digest(checkout),
                 compose=_compose_name(checkout, compose_file),
                 policy=policy,
+                normalization=normalization,
             )
         except (TypeError, ValueError):
             raise HardeningRejected("Hardener returned incomplete evidence") from None

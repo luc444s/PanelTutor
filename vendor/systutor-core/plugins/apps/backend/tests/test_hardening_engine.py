@@ -161,6 +161,14 @@ def applied() -> dict:
         "gate_after_apply": {"status": "reused", "evidence_reused": True},
         "source": "/secret/checkout",
         "backup": "/secret/backup",
+        "normalization": {
+            "schema": 1,
+            "source_sha256": "d" * 64,
+            "normalized_sha256": "e" * 64,
+            "rules": [],
+            "warnings": [],
+            "rejected": [],
+        },
     }
 
 
