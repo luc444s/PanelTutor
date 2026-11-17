@@ -9,8 +9,10 @@ never removes another tenant's isolation rules.
 from __future__ import annotations
 
 import os
+import pwd
 import shlex
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
 
@@ -134,9 +136,10 @@ class LocalExecutor(Executor):
     def ensure_dirs(self, cell_dir: str, uid: int, gid: int) -> None:
         base = Path(cell_dir)
         common = ["install", "-d", "-m", "0700", "-o", str(uid), "-g", str(gid)]
-        # dockerd-rootless.sh requires XDG_RUNTIME_DIR to exist and be owned
-        # by the cell user before it will start.
-        for target in (base, base / "apps", Path(f"/run/user/{uid}")):
+        # dockerd-rootless.sh requires XDG_RUNTIME_DIR and a writable HOME,
+        # both owned by the cell user, before it will start.
+        home = Path(pwd.getpwuid(uid).pw_dir)
+        for target in (base, base / "apps", Path(f"/run/user/{uid}"), home):
             self._run([*common, str(target)])
 
     def install_profile(self, name: str, content: str) -> None:
@@ -171,6 +174,16 @@ class LocalExecutor(Executor):
     def start_daemon(self, slug: str) -> int:
         unit = f"spanel-cell-{slug}"
         self._run(["systemctl", "start", unit])
+        # `systemctl start` returns before a crashing service dies, so confirm
+        # it is still active before reporting a PID (otherwise the cell would
+        # be marked ready with no daemon and no observable uid map).
+        for _ in range(10):
+            active = subprocess.run(
+                ["systemctl", "is-active", "--quiet", unit], check=False
+            ).returncode
+            if active != 0:
+                return 0
+            time.sleep(0.3)
         result = subprocess.run(
             ["systemctl", "show", "-p", "MainPID", "--value", unit],
             capture_output=True,
