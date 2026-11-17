@@ -121,6 +121,27 @@ class HostProbe:
         current = _path_text(Path(f"/proc/{pid}/attr/current")).strip()
         return current == profile or current.startswith(f"{profile} (")
 
+    def daemon_pid(self, main_pid: int) -> int:
+        """Resolve the dockerd child of rootlesskit's MainPID.
+
+        systemd reports the rootlesskit parent, whose uid_map is the identity
+        map.  The real per-cell mapping lives in the dockerd child, so evidence
+        must be read from there.
+        """
+        if main_pid <= 0:
+            return 0
+        children = _path_text(
+            Path(f"/proc/{main_pid}/task/{main_pid}/children")
+        ).split()
+        for child in children:
+            cmdline = _path_text(Path(f"/proc/{child}/cmdline")).replace("\0", " ")
+            if "dockerd" in cmdline:
+                try:
+                    return int(child)
+                except ValueError:
+                    continue
+        return main_pid
+
     def read_uid_map(self, pid: int) -> list[dict[str, int]]:
         return _parse_id_map(Path(f"/proc/{pid}/uid_map")) if pid > 0 else []
 

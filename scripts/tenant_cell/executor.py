@@ -183,23 +183,26 @@ class LocalExecutor(Executor):
         # `systemctl start` returns before a crashing service dies, so confirm
         # it is still active before reporting a PID (otherwise the cell would
         # be marked ready with no daemon and no observable uid map).
-        for _ in range(10):
+        for _ in range(30):
             active = subprocess.run(
                 ["systemctl", "is-active", "--quiet", unit], check=False
             ).returncode
-            if active != 0:
+            result = subprocess.run(
+                ["systemctl", "show", "-p", "MainPID", "--value", unit],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            try:
+                pid = int(result.stdout.strip())
+            except ValueError:
+                pid = 0
+            if active == 0 and pid > 0:
+                return pid
+            if active != 0 and pid == 0:
                 return 0
-            time.sleep(0.3)
-        result = subprocess.run(
-            ["systemctl", "show", "-p", "MainPID", "--value", unit],
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        try:
-            return int(result.stdout.strip())
-        except ValueError:
-            return 0
+            time.sleep(0.5)
+        return 0
 
     def stop_daemon(self, slug: str) -> None:
         self._run(["systemctl", "stop", f"spanel-cell-{slug}"])

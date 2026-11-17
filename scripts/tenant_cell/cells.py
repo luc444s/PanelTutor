@@ -53,7 +53,8 @@ class CellService:
         cell = reg["allocations"].get(slug)
         if cell is None:
             raise CellNotFound(slug)
-        pid = int(cell.get("daemon_pid", 0))
+        main_pid = int(cell.get("daemon_pid", 0))
+        pid = self.probe.daemon_pid(main_pid)
         return {
             "state": cell.get("state", "unknown"),
             "slug": slug,
