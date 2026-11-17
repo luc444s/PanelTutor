@@ -12,6 +12,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from ..hardening import HardeningPolicy
 from ..runtime.deployment import (
     _compose_command,
@@ -444,9 +446,31 @@ def deploy_scoped(
         )
         _stage_release(runner, result.root, staged, release.compose_path, override, env_file)
     compose_rel = release.compose_path
-    all_services = sorted(result.data["services"])
+    # Compose services behind an inactive profile are never started by
+    # `docker compose up` (they stay in `created`).  Exclude them from the
+    # deploy plan and from runtime verification, just like `docker compose
+    # config --format json` does.
+    active = set(result.data["services"])
+    try:
+        compose_data = yaml.safe_load(
+            (result.root / compose_rel).read_text(encoding="utf-8")
+        )
+        if isinstance(compose_data, Mapping):
+            declared = compose_data.get("services", {})
+            if isinstance(declared, Mapping):
+                filtered = {
+                    name
+                    for name, config in declared.items()
+                    if isinstance(name, str)
+                    and not (isinstance(config, Mapping) and config.get("profiles"))
+                }
+                if filtered:
+                    active = filtered
+    except (OSError, ValueError, yaml.YAMLError):
+        pass
+    all_services = sorted(name for name in result.data["services"] if name in active)
     effective = [item for item in plan.effective_services if item in all_services]
-    if len(effective) != len(plan.effective_services):
+    if any(item not in result.data["services"] for item in plan.effective_services):
         raise AppDeployError("plan references services outside the verified release")
     initial = not isinstance(previous_manifest, Mapping) or not previous_manifest
     previous = previous_manifest if isinstance(previous_manifest, Mapping) else {}
