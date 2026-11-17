@@ -9,6 +9,7 @@ never removes another tenant's isolation rules.
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -145,9 +146,17 @@ class LocalExecutor(Executor):
 
     def apply_network(self, spec: dict[str, Any]) -> None:
         if spec["mode"] == "skuid":
-            self._run(["nft", "add", "table", "inet", spec["table"]])
+            table = spec["table"]
+            self._run(["nft", "add", "table", "inet", table])
+            # An inet table has no built-in chains: declare the output hook
+            # before adding rules to it.
+            self._run([
+                "nft", "add", "chain", "inet", table, "output",
+                "{", "type", "filter", "hook", "output", "priority", "0",
+                ";", "policy", "accept", ";", "}",
+            ])
             for rule in spec.get("nft_rules", []):
-                self._run(["nft", *rule.split()])
+                self._run(["nft", *shlex.split(rule)])
         else:
             self._run(["ip", "netns", "add", spec["netns"]])
 

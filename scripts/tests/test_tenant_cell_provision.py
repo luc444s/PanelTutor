@@ -353,6 +353,29 @@ def test_two_tenants_get_distinct_userspaces(tmp_path) -> None:
     assert spec_a["cell_uid"] != spec_b["cell_uid"]
 
 
+def test_local_executor_creates_output_chain_before_rules(monkeypatch) -> None:
+    """The inet table needs an explicit output chain before any rule is added."""
+    from types import SimpleNamespace
+
+    from scripts.tenant_cell import executor
+
+    calls: list[list[str]] = []
+    monkeypatch.setenv("SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS", "1")
+    monkeypatch.setattr(
+        executor.subprocess,
+        "run",
+        lambda argv, **_kw: calls.append(list(argv)) or SimpleNamespace(returncode=0),
+    )
+    spec = network.build_network_spec("acme", {"index": 0, "uid": 60000}, "skuid")
+
+    executor.LocalExecutor().apply_network(spec)
+
+    assert calls[0][:4] == ["nft", "add", "table", "inet"]
+    assert calls[1][1:4] == ["add", "chain", "inet"]
+    assert calls[1][4] == spec["table"]
+    assert any("skuid" in " ".join(call) for call in calls[2:])
+
+
 def test_deprovision_removes_only_its_own_nft_table(tmp_path) -> None:
     exec_a, exec_b = FakeExecutor(pid=4001), FakeExecutor(pid=4002)
     svc_a = CellService(FakeProbe(), exec_a, tmp_path)
