@@ -1,0 +1,111 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Apps · estados</title>
+<style>
+  :root {
+    --bg: #fafafa; --fg: #18181b; --card: #ffffff; --border: #e4e4e7; --muted: #71717a;
+    --emerald: #047857; --emerald-bg: rgba(16,185,129,.10); --emerald-border: rgba(16,185,129,.30); --emerald-dot: #10b981;
+    --red: #b91c1c; --red-bg: rgba(239,68,68,.10); --red-border: rgba(239,68,68,.30); --red-dot: #ef4444;
+    --amber: #b45309; --amber-bg: rgba(245,158,11,.10); --amber-border: rgba(245,158,11,.30); --amber-dot: #f59e0b;
+    --neutral: #71717a; --neutral-bg: #f4f4f5; --neutral-border: #e4e4e7; --neutral-dot: #a1a1aa;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #09090b; --fg: #fafafa; --card: #18181b; --border: #27272a; --muted: #a1a1aa;
+      --emerald: #34d399; --red: #f87171; --amber: #fbbf24; --neutral: #a1a1aa;
+      --neutral-bg: #27272a; --neutral-border: #3f3f46;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 32px; background: var(--bg); color: var(--fg);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 32px 0 12px; }
+  p.lead { color: var(--muted); font-size: 13px; margin: 0 0 8px; }
+  .grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); max-width: 860px; }
+  .card { border: 1px solid var(--border); background: var(--card); border-radius: 8px; padding: 16px; }
+  .row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .card strong { font-size: 15px; }
+  .card p { margin: 8px 0 0; font-size: 13px; color: var(--muted); }
+  .badge { display: inline-flex; align-items: center; gap: 4px; border-radius: 999px;
+    border: 1px solid; padding: 2px 8px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+  .badge .dot { width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+  .positive { color: var(--emerald); background: var(--emerald-bg); border-color: var(--emerald-border); }
+  .negative { color: var(--red); background: var(--red-bg); border-color: var(--red-border); }
+  .transitional { color: var(--amber); background: var(--amber-bg); border-color: var(--amber-border); }
+  .neutral { color: var(--neutral); background: var(--neutral-bg); border-color: var(--neutral-border); }
+  .indicator { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; }
+  .indicator .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+  .spinner { width: 12px; height: 12px; border: 2px solid currentColor; border-right-color: transparent;
+    border-radius: 50%; animation: spin .8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .kv { display: grid; grid-template-columns: 120px 1fr; row-gap: 10px; font-size: 14px; max-width: 520px; }
+  .kv dt { color: var(--muted); margin: 0; }
+  .kv dd { margin: 0; }
+  .panel { border: 1px solid var(--border); background: var(--card); border-radius: 8px; padding: 24px; max-width: 860px; }
+  .services { display: grid; gap: 10px; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); max-width: 680px; }
+  .service { border: 1px solid var(--border); border-radius: 6px; padding: 12px; font-size: 14px; }
+  .service .row span:last-child { font-size: 12px; }
+  .service p { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+  <h1>Colores de estado en Apps</h1>
+  <p class="lead">Así se ven las clases que agregamos en <code>StatusIndicator.tsx</code>.</p>
+
+  <h2>1 · Cards de aplicaciones (<code>StatusBadge</code>)</h2>
+  <div class="grid">
+    <div class="card">
+      <div class="row"><strong>paneltutor</strong><span class="badge positive"><span class="dot"></span>running</span></div>
+      <p>github.com/systutor/paneltutor · main</p>
+    </div>
+    <div class="card">
+      <div class="row"><strong>mail-admin</strong><span class="badge transitional"><span class="spinner"></span>deploying</span></div>
+      <p>github.com/systutor/mail · main</p>
+    </div>
+    <div class="card">
+      <div class="row"><strong>crm-api</strong><span class="badge negative"><span class="dot"></span>failed</span></div>
+      <p>github.com/systutor/crm · main</p>
+    </div>
+    <div class="card">
+      <div class="row"><strong>legacy-app</strong><span class="badge negative"><span class="dot"></span>stopped</span></div>
+      <p>github.com/systutor/legacy · main</p>
+    </div>
+    <div class="card">
+      <div class="row"><strong>nueva-app</strong><span class="badge neutral"><span class="dot"></span>draft</span></div>
+      <p>github.com/systutor/nueva · main</p>
+    </div>
+  </div>
+
+  <h2>2 · Campo Status del detalle (<code>StatusIndicator</code>)</h2>
+  <div class="panel">
+    <dl class="kv">
+      <dt>Status</dt><dd><span class="indicator positive"><span class="dot"></span>running</span></dd>
+      <dt>Status</dt><dd><span class="indicator transitional"><span class="spinner"></span>deploying</span></dd>
+      <dt>Status</dt><dd><span class="indicator negative"><span class="dot"></span>failed</span></dd>
+      <dt>Status</dt><dd><span class="indicator neutral"><span class="dot"></span>draft</span></dd>
+      <dt>Source</dt><dd>GitHub · connected</dd>
+      <dt>Last deploy</dt><dd>16/11/2026, 16:05</dd>
+    </dl>
+  </div>
+
+  <h2>3 · Cards de servicios (<code>StatusIndicator</code>)</h2>
+  <div class="services">
+    <div class="service">
+      <div class="row"><strong>web</strong><span class="indicator positive" style="font-size:12px"><span class="dot"></span>running</span></div>
+      <p>nginx:1.27</p>
+    </div>
+    <div class="service">
+      <div class="row"><strong>worker</strong><span class="indicator transitional" style="font-size:12px"><span class="spinner"></span>deploying</span></div>
+      <p>app:latest</p>
+    </div>
+    <div class="service">
+      <div class="row"><strong>db</strong><span class="indicator negative" style="font-size:12px"><span class="dot"></span>unhealthy</span></div>
+      <p>postgres:16</p>
+    </div>
+  </div>
+</body>
+</html>

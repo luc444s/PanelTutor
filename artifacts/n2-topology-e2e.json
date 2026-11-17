@@ -1,0 +1,40 @@
+{
+  "admission": "isolation+probes+signature+real-build",
+  "application_id": "6ccddd5d-ff39-4a68-9829-c98db35c6dd2",
+  "application_slug": "trusted-e2e-f11ea2b26b",
+  "base_url": "https://spanel.lab",
+  "branch": "n2-topology",
+  "cleanup": "preserved",
+  "commit": "1ee53657a5f74c3e65e1b7c6b58dcacdcb0099ba",
+  "compose_file": "n2-compose.yml",
+  "duration_seconds": 39.02,
+  "hashes": {
+    "artifact_sha256": "c8f6b79dcd00251c12cb3321918c5966a02dc9fbc17a86b09e27e1458f0921d0",
+    "compose_sha256": "3c464f32be45f49384ef2f7505926e3543c7fd72d73b8220a498ef69ccdbf480",
+    "gate_sha256": "efd70b0cd1171497008bc3cf98b9bc34b88765995dfdddc84cefe36604e60519",
+    "hardened_tree_sha256": "1bdc056535839b8568a85ad3dcf474793b44a14ecfb6bcf800dda485f622236b",
+    "policy_sha256": "3b2d768d76263aa30b76041fe3ff4f35231248fd77ffa19bc29c11403a139cb3"
+  },
+  "release_id": "239eff6d-13ea-478a-add0-9abf42312ceb",
+  "repository": "luc444s/spanel-trusted-e2e",
+  "runtime": {
+    "probes": {
+      "functional_checks": 2,
+      "restart_counts": {
+        "backend": 0,
+        "db": 0,
+        "frontend": 0
+      },
+      "services": [
+        "backend",
+        "db",
+        "frontend"
+      ]
+    },
+    "users": {
+      "backend": "1000:1000",
+      "db": "1000:1000",
+      "frontend": "1000:1000"
+    }
+  }
+}
