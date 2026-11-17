@@ -600,6 +600,7 @@ def _inject_readonly_files(
     prepared = runner.run(["mkdir", "-p", str(private)], check=False)
     if prepared.returncode:
         raise AppDeployError("failed to prepare read-only file injection")
+    compose_directory = (release / "source" / compose_rel).parent
     for service in sorted(services):
         config = services[service]
         files = config.get("x-spanel-readonly-files") if isinstance(config, dict) else None
@@ -609,35 +610,42 @@ def _inject_readonly_files(
             readonly_release_file(item, release / "source", compose_rel) for item in files
         ):
             raise AppDeployError("read-only file injection metadata is invalid")
-        compose_directory = (release / "source" / compose_rel).parent
-        for item in files:
-            digest = hashlib.sha256(
-                f"{service}\0{item['source']}\0{item['target']}".encode()
-            ).hexdigest()
-            temporary = private / digest
-            copied = runner.run(
-                ["cp", "--", str(compose_directory / item["source"]), str(temporary)],
-                check=False,
-            )
-            if copied.returncode:
-                raise AppDeployError("failed to prepare read-only file injection")
-            try:
+        # `docker cp` never creates missing parent directories. Stage the whole
+        # target tree and copy it once, so targets like /healthchecks/x.sh work
+        # even when the image has no /healthchecks directory.
+        staging = private / "rootfs" / service
+        runner.run(["rm", "-rf", "--", str(staging)], check=False)
+        try:
+            for item in files:
                 file_mode = item.get("mode", "0444")
                 if file_mode not in {"0444", "0555"}:
                     raise AppDeployError("read-only file injection metadata is invalid")
+                destination = staging / Path(item["target"].lstrip("/"))
+                parent = runner.run(
+                    ["mkdir", "-p", str(destination.parent)], check=False
+                )
+                if parent.returncode:
+                    raise AppDeployError("failed to prepare read-only file injection")
+                copied = runner.run(
+                    ["cp", "--", str(compose_directory / item["source"]),
+                     str(destination)],
+                    check=False,
+                )
+                if copied.returncode:
+                    raise AppDeployError("failed to prepare read-only file injection")
                 chmod_result = runner.run(
-                    ["chmod", file_mode, str(temporary)], check=False
+                    ["chmod", file_mode, str(destination)], check=False
                 )
                 if chmod_result.returncode:
                     raise AppDeployError("failed to prepare read-only file injection")
-                injected = runner.run(
-                    ["docker", "cp", str(temporary), f"{containers[service]}:{item['target']}"],
-                    check=False,
-                )
-                if injected.returncode:
-                    raise AppDeployError("failed to inject a read-only release file")
-            finally:
-                runner.run(["rm", "-f", "--", str(temporary)], check=False)
+            injected = runner.run(
+                ["docker", "cp", f"{staging}/.", f"{containers[service]}:/"],
+                check=False,
+            )
+            if injected.returncode:
+                raise AppDeployError("failed to inject a read-only release file")
+        finally:
+            runner.run(["rm", "-rf", "--", str(staging)], check=False)
 
 
 def _verify_containers(

@@ -365,7 +365,7 @@ def test_file_injection_uses_mode_0444_and_separate_argv(tmp_path: Path) -> None
         ]}},
     )
     assert any(call[:2] == ["chmod", "0444"] for call in runner.calls)
-    assert any(call[:2] == ["docker", "cp"] and call[-1] == "cid1:/etc/proxy.cfg"
+    assert any(call[:2] == ["docker", "cp"] and call[-1] == "cid1:/"
                for call in runner.calls)
 
 
@@ -390,7 +390,7 @@ def test_file_injection_preserves_executable_mode(tmp_path: Path) -> None:
         ]}},
     )
     assert any(call[:2] == ["chmod", "0555"] for call in runner.calls)
-    assert any(call[:2] == ["docker", "cp"] and call[-1] == "cid1:/healthchecks/check.sh"
+    assert any(call[:2] == ["docker", "cp"] and call[-1] == "cid1:/"
                for call in runner.calls)
 
 
