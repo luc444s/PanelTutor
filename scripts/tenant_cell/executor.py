@@ -199,8 +199,8 @@ class LocalExecutor(Executor):
                 pid = 0
             if active == 0 and pid > 0:
                 return pid
-            if active != 0 and pid == 0:
-                return 0
+            # Do not bail on a transient "activating"/pid=0 right after start:
+            # systemd reports those for a moment even for healthy services.
             time.sleep(0.5)
         return 0
 
