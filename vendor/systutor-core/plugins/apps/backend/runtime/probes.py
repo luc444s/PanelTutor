@@ -120,24 +120,56 @@ def _process_users(runner: Runner, container_id: str) -> list[str]:
         raise ProbeFailed("effective process users are uninspectable") from None
 
 
+def _signed_compose(
+    release_root: Path | None,
+    compose_rel: str | None,
+) -> dict[str, Any]:
+    """Load the signed Compose from either the release root or its source tree."""
+    if release_root is None or not compose_rel:
+        return {}
+    for candidate in (release_root / compose_rel, release_root / "source" / compose_rel):
+        try:
+            payload = yaml.safe_load(candidate.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, yaml.YAMLError):
+            continue
+        return payload if isinstance(payload, dict) else {}
+    return {}
+
+
 def _signed_networks(
     release_root: Path | None,
     compose_rel: str | None,
 ) -> dict[str, dict[str, Any]]:
     """Read the signed Compose network declarations, if available."""
-    if release_root is None or not compose_rel:
-        return {}
-    try:
-        payload = yaml.safe_load((release_root / compose_rel).read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, yaml.YAMLError):
-        return {}
-    networks = payload.get("networks") if isinstance(payload, dict) else None
+    networks = _signed_compose(release_root, compose_rel).get("networks")
     if not isinstance(networks, dict):
         return {}
     return {
         str(name): (options if isinstance(options, dict) else {})
         for name, options in networks.items()
     }
+
+
+def _signed_service_networks(
+    release_root: Path | None,
+    compose_rel: str | None,
+    project: str,
+) -> dict[str, list[str]]:
+    """Map each service to its project-scoped networks in the signed Compose."""
+    services = _signed_compose(release_root, compose_rel).get("services")
+    if not isinstance(services, dict):
+        return {}
+    result: dict[str, list[str]] = {}
+    for raw_name, raw_config in services.items():
+        declared = raw_config.get("networks") if isinstance(raw_config, dict) else None
+        if isinstance(declared, list):
+            names = [str(item) for item in declared if isinstance(item, str)]
+        elif isinstance(declared, dict):
+            names = [str(item) for item in declared]
+        else:
+            names = []
+        result[str(raw_name)] = [f"{project}_{name}" for name in names]
+    return result
 
 
 def _signed_network_options(
@@ -460,9 +492,18 @@ def run_probes(
         for service, values in isolation.items()
     }
     target_service = target[0] if target else None
+    candidates: list[str] = []
     if target_service and service_networks.get(target_service):
         candidates = list(service_networks[target_service])
-    else:
+    elif target_service:
+        # A scoped deploy may only inspect the services it changed.  The probe
+        # target can be outside that set, so fall back to the signed topology.
+        candidates = list(
+            _signed_service_networks(release, compose_rel, project).get(
+                target_service, []
+            )
+        )
+    if not candidates:
         candidates = sorted({
             name for values in service_networks.values() for name in values
         })

@@ -235,6 +235,52 @@ def test_run_probes_accepts_image_healthcheck_by_default(tmp_path) -> None:
     assert any(call[:2] == ["docker", "run"] for call in runner.calls)
 
 
+def test_probe_target_network_comes_from_signed_topology_when_scoped_out(tmp_path) -> None:
+    """A partial deploy that only touched db must still probe via frontend_net."""
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "compose.yml").write_text(
+        "\n".join([
+            "services:",
+            "  frontend: {networks: [frontend_net]}",
+            "  db: {networks: [database_net]}",
+            "networks:",
+            "  frontend_net: {internal: true}",
+            "  database_net: {internal: true}",
+        ]),
+        encoding="utf-8",
+    )
+    payload = container(NetworkSettings={"Networks": {"proj_database_net": {}}})
+    payload["HostConfig"]["NetworkMode"] = "proj_database_net"
+
+    class ScopedRunner(FakeRunner):
+        def run(self, argv, **kwargs):
+            if argv[:2] == ["docker", "compose"] and "config" in argv:
+                return Completed(0, json.dumps({
+                    "services": {
+                        "frontend": {"image": "img"},
+                        "db": {"image": "img"},
+                    }
+                }))
+            return super().run(argv, **kwargs)
+
+    runner = ScopedRunner(payload)
+    evidence = run_probes(
+        runner,
+        release=tmp_path,
+        compose_rel="compose.yml",
+        project="proj",
+        services=["db"],
+        containers={"db": "cid1"},
+        environ=env(),
+        target=("frontend", 8000),
+        sleep=lambda _seconds: None,
+    )
+    assert evidence["network"] == "proj_frontend_net"
+    argv = next(call for call in runner.calls if call[:2] == ["docker", "run"])
+    assert argv[argv.index("--network") + 1] == "proj_frontend_net"
+
+
 def test_run_probes_accepts_running_service_without_healthcheck(tmp_path) -> None:
     payload = container()
     payload["State"].pop("Health")

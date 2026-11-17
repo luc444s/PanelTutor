@@ -6,11 +6,17 @@
 
 ## STATUS
 
-Propuesta abierta 2026-11-17. N1 (`bb40f57`) se conserva: corrige la
-destrucción de redes en el normalizador, pero su alcance termina ahí. El
-hardener (`scripts/dangerous_build/compose.py:131-133,209`) sigue aplanando
-toda la topología a una única red `default internal: true`, de modo que el
-release firmado **no** conserva las redes de la aplicación.
+Implementada y validada en `spanel.lab` (2026-11-17). N1 (`bb40f57`) se
+conserva: corrige la destrucción de redes en el normalizador, pero su alcance
+termina ahí. El hardener (`scripts/dangerous_build/compose.py`) aplanaba toda
+la topología a una única red `default internal: true`; N2 lo corrige y el
+release firmado conserva las redes de la aplicación.
+
+Durante el E2E se encontró y corrigió un fallo adicional: en un deploy
+parcial, el probe funcional solo inspeccionaba los servicios cambiados y
+podía elegir una red donde el target del probe no resolvía. Ahora, cuando el
+target está fuera del conjunto inspeccionado, la red se deriva de la topología
+firmada. Cubierto por un test de regresión.
 
 ## PRINCIPIO — Network Security Contract v2
 
