@@ -302,7 +302,19 @@ def harden_compose(
                     "target": target,
                 })
                 continue
-            kept.append(volume)
+            # The platform owns these volumes: it creates them with the signed
+            # non-root user and a 0700 mode.  Docker copies the image mountpoint
+            # metadata over the volume root on first use, which would replace
+            # that ownership (and break non-root initdb).  Disable the copy-up.
+            entry = dict(volume) if isinstance(volume, dict) else {}
+            entry["type"] = "volume"
+            entry["source"] = source
+            entry["target"] = target
+            options = entry.get("volume")
+            options = dict(options) if isinstance(options, dict) else {}
+            options["nocopy"] = True
+            entry["volume"] = options
+            kept.append(entry)
         for item in policy.writable_paths:
             if item.path == "/tmp":
                 continue

@@ -134,7 +134,16 @@ def test_new_volume_is_labeled_initialized_and_helper_is_isolated() -> None:
     assert any("--cap-add" in call and "CHOWN" in call for call in helper_calls)
     chown_call = next(call for call in helper_calls if "chown" in call)
     assert chown_call[chown_call.index("--user") + 1] == "0:0"
-    inspection_calls = [call for call in helper_calls if call is not chown_call]
+    chmod_calls = [call for call in helper_calls if "chmod" in call]
+    assert len(chmod_calls) == 1
+    chmod_call = chmod_calls[0]
+    assert chmod_call[chmod_call.index("--user") + 1] == "0:0"
+    assert "--cap-add" in chmod_call and "FOWNER" in chmod_call
+    assert "0700" in chmod_call and "/volume" in chmod_call
+    privileged_calls = {id(chown_call), id(chmod_call)}
+    inspection_calls = [
+        call for call in helper_calls if id(call) not in privileged_calls
+    ]
     assert all(
         call[call.index("--user") + 1] == "65534:65534"
         for call in inspection_calls

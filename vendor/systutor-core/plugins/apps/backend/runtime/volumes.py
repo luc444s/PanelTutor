@@ -110,17 +110,20 @@ def _helper_command(
     entrypoint: str,
     *command: str,
     cap_chown: bool = False,
+    cap_fowner: bool = False,
 ) -> list[str]:
     # Docker clears permitted/effective capabilities for a non-root ``--user``
-    # even when CHOWN is added.  Initialization therefore runs as UID 0 with
-    # CHOWN as its only capability; inspection helpers remain non-root.
-    helper_user = "0:0" if cap_chown else user
+    # even when CHOWN/FOWNER are added.  Initialization therefore runs as UID 0
+    # with only the required capability; inspection helpers remain non-root.
+    helper_user = "0:0" if cap_chown or cap_fowner else user
     argv = [
         "docker", "run", "--rm", "--network", "none", "--read-only",
         "--cap-drop", "ALL", "--user", helper_user, "-v", f"{name}:/volume",
     ]
     if cap_chown:
         argv.extend(("--cap-add", "CHOWN"))
+    if cap_fowner:
+        argv.extend(("--cap-add", "FOWNER"))
     return [*argv, "--entrypoint", entrypoint, image, *command]
 
 
@@ -319,3 +322,16 @@ def prepare_runtime_volumes(
             or _volume_owner(runner, volume.name, volume.services) != volume.user
         ):
             raise AppDeployError(f"volume {volume.name} could not be initialized")
+        # Upstream images such as postgres run initdb as the signed non-root
+        # user with all capabilities dropped.  initdb refuses a data directory
+        # that is not 0700 and cannot chmod it without CAP_FOWNER, so the
+        # platform must hand over a ready-to-use mode at creation time.
+        secured = runner.run(
+            _helper_command(
+                image, volume.name, _HELPER_USER, "chmod",
+                "0700", "/volume", cap_fowner=True,
+            ),
+            check=False,
+        )
+        if secured.returncode:
+            raise AppDeployError(f"volume {volume.name} mode could not be initialized")
