@@ -31,6 +31,28 @@ def test_alias_validation_and_port_normalization(tmp_path: Path) -> None:
     }
 
 
+def test_directory_bind_becomes_signed_file_injections(tmp_path: Path) -> None:
+    checks = tmp_path / "healthchecks"
+    checks.mkdir()
+    script = checks / "postgres.sh"
+    script.write_text("#!/bin/sh\npg_isready\n", encoding="utf-8")
+    script.chmod(0o755)
+    result = normalize_compose(
+        'services:\n  db:\n    volumes: ["./healthchecks:/healthchecks"]\n',
+        tmp_path,
+    )
+    service = yaml.safe_load(result.text)["services"]["db"]
+    assert "volumes" not in service
+    assert service["x-spanel-readonly-files"] == [{
+        "source": "healthchecks/postgres.sh",
+        "target": "/healthchecks/postgres.sh",
+        "mode": "0555",
+    }]
+    assert "normalize_bind_directory_injected" in {
+        item["code"] for item in result.evidence["warnings"]
+    }
+
+
 def test_duplicate_invalid_and_reserved_aliases_are_discarded(tmp_path: Path) -> None:
     result = normalize_compose(
         """services:
