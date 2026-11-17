@@ -536,7 +536,7 @@ structural_constraints:
 - Requirement: ejecutar repos Compose raros sin modificar el repo ni sus YAML.
 - owner: Apps platform implementation agent
 - approver: human requester (explicit implementation authorization, 2026-11-16)
-- Commit: pending
+- Commit: `622783e`
 - Deployment: aceptado en `spanel.lab` — POS `luc444s/pos@6d3c951`, release
   `65d2e37a-a750-46dc-80c9-f0a0ef855ba4`, 6 servicios, probes verdes,
   verificación de firma válida, redeploy y cleanup completo (258 s).

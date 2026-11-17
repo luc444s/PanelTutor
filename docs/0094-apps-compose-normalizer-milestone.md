@@ -145,11 +145,11 @@ Resultado actual: **25 + 89 tests**, Ruff limpio, `git diff --check` limpio.
 
 ## Pendientes
 
-- [ ] Commit de los cambios locales (0091–0094) sin mezclar trabajo ajeno.
-- [ ] Eliminar volúmenes huérfanos del lab: `spanel_apps_state` (5.9 GB) y
-      `spanel_pgdata` (49 MB); ambos sin contenedores y creados por la
-      invocación incompleta.
-- [ ] Limpiar imágenes `spanel-app-*` de pruebas y cachés (ver informe de disco).
+- [x] Commit y push de los cambios (`622783e` en `origin/main`).
+- [x] Eliminar volúmenes huérfanos del lab (`spanel_apps_state` 5.9 GB y
+      `spanel_pgdata` 49 MB) — hecho; el host pasó de 6.8 GB a 15 GB libres.
+- [x] Limpiar imágenes `spanel-app-*` de pruebas y cachés (trivy, pip,
+      playwright) — 9 imágenes y ~1.6 GB de caché eliminados.
 - [ ] Implementar los guardrails de arriba.
 
 ## Referencias
