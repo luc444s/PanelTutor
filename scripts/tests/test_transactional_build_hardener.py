@@ -138,6 +138,7 @@ networks:
         harden_compose(
             original,
             {"web": ServicePolicy(10001, 10001, (WritablePath("/app/data"),))},
+            authorized_external_networks=frozenset({"frontend"}),
         )
     )
     service = fixed["services"]["web"]
@@ -154,9 +155,12 @@ networks:
     assert service["runtime"] == "runc"
     assert service["read_only"] is False
     assert "deploy" not in service
-    assert "networks" not in service
+    assert service["networks"] == {"frontend": {}, "backend": {}}
     assert service["environment"]["API_TOKEN"] == "literal"
-    assert fixed["networks"] == {"default": {"internal": True}}
+    assert fixed["networks"] == {
+        "frontend": {"external": True},
+        "backend": {"internal": True},
+    }
     assert service["volumes"][0] == {
         "type": "volume",
         "source": service["volumes"][0]["source"],

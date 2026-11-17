@@ -10,6 +10,7 @@ from types import MappingProxyType
 from typing import Any
 
 _SERVICE = re.compile(r"[A-Za-z0-9_.-]{1,128}\Z")
+_NETWORK_KEY = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 _MAX_SERVICES = 64
 _MAX_WRITABLE_PATHS = 256
@@ -120,16 +121,27 @@ class HardeningPolicy:
     writable_paths: tuple[WritablePathPolicy, ...] = ()
     runtime_users: tuple[RuntimeUserEvidence, ...] = ()
     runtime_volumes: tuple[RuntimeVolumePolicy, ...] = ()
+    authorized_external_networks: tuple[str, ...] = ()
+    egress_networks: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         users = tuple(self.service_users)
         paths = tuple(self.writable_paths)
         runtime_users = tuple(self.runtime_users)
         runtime_volumes = tuple(self.runtime_volumes)
+        authorized_external = tuple(self.authorized_external_networks)
+        egress = tuple(self.egress_networks)
         object.__setattr__(self, "service_users", users)
         object.__setattr__(self, "writable_paths", paths)
         object.__setattr__(self, "runtime_users", runtime_users)
         object.__setattr__(self, "runtime_volumes", runtime_volumes)
+        object.__setattr__(self, "authorized_external_networks", authorized_external)
+        object.__setattr__(self, "egress_networks", egress)
+        for names in (authorized_external, egress):
+            if any(not _NETWORK_KEY.fullmatch(name) for name in names):
+                raise ValueError("network policy contains an invalid network name")
+            if len(names) != len(set(names)):
+                raise ValueError("network policy contains duplicate networks")
         if not users or len(users) > _MAX_SERVICES:
             raise ValueError("hardening policy requires between 1 and 64 services")
         if len(paths) > _MAX_WRITABLE_PATHS:
@@ -158,7 +170,8 @@ class HardeningPolicy:
     @classmethod
     def from_dict(cls, value: object) -> HardeningPolicy:
         if not isinstance(value, Mapping) or not set(value).issubset({
-            "service_users", "writable_paths", "runtime_users", "runtime_volumes"
+            "service_users", "writable_paths", "runtime_users", "runtime_volumes",
+            "authorized_external_networks", "egress_networks",
         }) or not {"service_users", "writable_paths"}.issubset(value):
             raise ValueError("hardening policy is invalid")
         raw_users = value["service_users"]
@@ -201,7 +214,16 @@ class HardeningPolicy:
                 item["name"], tuple(item["services"]), item["user"],
                 item["initialize"], item["external"],
             ))
-        return cls(tuple(users), tuple(paths), tuple(evidence), tuple(volumes))
+        external = value.get("authorized_external_networks", [])
+        egress = value.get("egress_networks", [])
+        if not isinstance(external, list) or not isinstance(egress, list):
+            raise ValueError("network policy is invalid")
+        if any(not isinstance(name, str) for name in (*external, *egress)):
+            raise ValueError("network policy is invalid")
+        return cls(
+            tuple(users), tuple(paths), tuple(evidence), tuple(volumes),
+            tuple(external), tuple(egress),
+        )
 
     def as_dict(self) -> dict[str, Any]:
         result = {
@@ -235,6 +257,12 @@ class HardeningPolicy:
                 }
                 for item in self.runtime_volumes
             ]
+        if self.authorized_external_networks:
+            result["authorized_external_networks"] = list(
+                self.authorized_external_networks
+            )
+        if self.egress_networks:
+            result["egress_networks"] = list(self.egress_networks)
         return result
 
 

@@ -62,8 +62,13 @@ def _candidate_changes(
     )
     compose_relative = selected.compose.relative_to(source)
     compose_source = source / compose_relative
+    authorized_external = frozenset(getattr(args, "authorized_external_network", ()) or ())
+    egress = frozenset(getattr(args, "egress_network", ()) or ())
     normalized = normalize_compose(
-        compose_source.read_text(encoding="utf-8"), candidate, compose_relative
+        compose_source.read_text(encoding="utf-8"),
+        candidate,
+        compose_relative,
+        authorized_external_networks=authorized_external,
     )
     (candidate / compose_relative).write_text(normalized.text, encoding="utf-8")
     result = audit_project(
@@ -75,7 +80,12 @@ def _candidate_changes(
     services = {str(name) for name in result.data["services"]}
     policies = _policies(args, services)
     compose_fixed = harden_compose(
-        normalized.text, policies, candidate, compose_relative
+        normalized.text,
+        policies,
+        candidate,
+        compose_relative,
+        authorized_external_networks=authorized_external,
+        egress_networks=egress,
     )
     (candidate / compose_relative).write_text(compose_fixed, encoding="utf-8")
     changed: set[Path] = {compose_relative}

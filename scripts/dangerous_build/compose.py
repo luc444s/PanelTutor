@@ -57,11 +57,123 @@ def _managed_volume(service: str, path: str) -> str:
     return f"spanel-{safe}-{digest}"
 
 
+_NETWORK_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
+
+
+def _hardened_networks(
+    data: dict[str, Any],
+    authorized_external: frozenset[str],
+    egress: frozenset[str],
+) -> dict[str, dict[str, Any]]:
+    """Preserve declared networks, applying the explicit network policy."""
+    declared = data.get("networks")
+    if declared is None:
+        declared = {}
+    if not isinstance(declared, dict):
+        raise ComposeHardeningError("Compose networks must be a mapping")
+    names = {str(name) for name in declared}
+    unknown = sorted((authorized_external | egress) - names)
+    if unknown:
+        raise ComposeHardeningError(
+            "network policy references undeclared networks: " + ", ".join(unknown)
+        )
+    if not declared:
+        return {"default": {"internal": True}}
+    result: dict[str, dict[str, Any]] = {}
+    for raw_name, raw_options in declared.items():
+        name = str(raw_name)
+        if _NETWORK_NAME.fullmatch(name) is None:
+            raise ComposeHardeningError(f"invalid network name: {name}")
+        options = dict(raw_options) if isinstance(raw_options, dict) else {}
+        external = bool(options.get("external"))
+        if external and name not in authorized_external:
+            raise ComposeHardeningError(f"external network {name} is not authorized")
+        if options.get("name") and not (external and name in authorized_external):
+            raise ComposeHardeningError(f"network {name} declares a fixed name")
+        if str(options.get("driver", "")).lower() == "host":
+            raise ComposeHardeningError(f"network {name} uses the host driver")
+        if external:
+            if "internal" in options:
+                raise ComposeHardeningError(
+                    f"external network {name} cannot declare internal"
+                )
+        else:
+            value = options.get("internal", True)
+            if value not in (True, False):
+                raise ComposeHardeningError(f"network {name} internal must be boolean")
+            if value is False and name not in egress:
+                raise ComposeHardeningError(
+                    f"network {name} allows egress but is not authorized"
+                )
+            options["internal"] = value
+        result[name] = options
+    return result
+
+
+def _hardened_service_networks(
+    config: dict[str, Any],
+    aliases: list[str],
+    declared: dict[str, dict[str, Any]],
+    service: str,
+) -> dict[str, dict[str, Any]] | None:
+    """Keep every declared attachment and merge the normalized aliases."""
+    raw = config.get("networks")
+    if raw is None:
+        return {"default": {"aliases": list(aliases)}} if aliases else None
+    if isinstance(raw, str):
+        raw = [raw]
+    if isinstance(raw, (list, dict)) and not raw:
+        return raw  # type: ignore[return-value]
+    if isinstance(raw, list):
+        if not all(isinstance(item, str) for item in raw):
+            raise ComposeHardeningError(f"service {service} has an invalid network list")
+        targets: dict[str, dict[str, Any]] = {str(item): {} for item in raw}
+    elif isinstance(raw, dict):
+        targets = {}
+        for raw_name, raw_options in raw.items():
+            name = str(raw_name)
+            if isinstance(raw_options, dict):
+                targets[name] = dict(raw_options)
+            elif raw_options is None:
+                targets[name] = {}
+            else:
+                raise ComposeHardeningError(
+                    f"service {service} network {name} is not a mapping"
+                )
+    else:
+        raise ComposeHardeningError(f"service {service} has invalid networks")
+    for name, options in targets.items():
+        if name not in declared:
+            raise ComposeHardeningError(
+                f"service {service} references undeclared network {name}"
+            )
+        current = options.get("aliases")
+        if current is None:
+            aliases_for_network: list[str] = []
+        elif isinstance(current, str):
+            aliases_for_network = [current]
+        elif isinstance(current, list) and all(isinstance(item, str) for item in current):
+            aliases_for_network = list(current)
+        else:
+            raise ComposeHardeningError(
+                f"service {service} network {name} has invalid aliases"
+            )
+        for alias in aliases:
+            if alias not in aliases_for_network:
+                aliases_for_network.append(alias)
+        if aliases_for_network:
+            options["aliases"] = aliases_for_network
+    return targets
+
+
 def harden_compose(
     text: str,
     policies: dict[str, ServicePolicy],
     checkout_root: Path | None = None,
     compose_file: str | Path | None = None,
+    *,
+    authorized_external_networks: frozenset[str] = frozenset(),
+    egress_networks: frozenset[str] = frozenset(),
 ) -> str:
     try:
         data = yaml.safe_load(text)
@@ -70,6 +182,9 @@ def harden_compose(
     if not isinstance(data, dict) or not isinstance(data.get("services"), dict):
         raise ComposeHardeningError("Compose must contain a services mapping")
 
+    hardened_networks = _hardened_networks(
+        data, authorized_external_networks, egress_networks
+    )
     generated_volumes: dict[str, dict[str, Any]] = {}
     for service, config in data["services"].items():
         if not isinstance(config, dict):
@@ -124,13 +239,22 @@ def harden_compose(
             "volumes_from",
         ):
             config.pop(key, None)
-        for key in ("network_mode", "pid", "ipc", "uts", "userns", "cgroup"):
+        if config.get("network_mode") is not None:
+            raise ComposeHardeningError(
+                f"service {service} uses network_mode {config['network_mode']!r}; "
+                "network_mode is not permitted"
+            )
+        for key in ("pid", "ipc", "uts", "userns", "cgroup"):
             config.pop(key, None)
         config.pop("extra_hosts", None)
         config.pop("deploy", None)
-        config.pop("networks", None)
-        if normalized_aliases:
-            config["networks"] = {"default": {"aliases": normalized_aliases}}
+        service_networks = _hardened_service_networks(
+            config, normalized_aliases, hardened_networks, str(service)
+        )
+        if service_networks is None:
+            config.pop("networks", None)
+        else:
+            config["networks"] = service_networks
         if readonly_files:
             config["x-spanel-readonly-files"] = readonly_files
         if normalized_sysctl:
@@ -206,7 +330,7 @@ def harden_compose(
                 f"service {service} uses Compose secrets; migrate them to the managed external env interface"
             )
 
-    data["networks"] = {"default": {"internal": True}}
+    data["networks"] = hardened_networks
 
     volumes = data.get("volumes")
     if not isinstance(volumes, dict):

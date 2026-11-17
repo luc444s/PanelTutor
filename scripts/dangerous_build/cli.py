@@ -1333,6 +1333,20 @@ def build_parser() -> argparse.ArgumentParser:
         type=_parse_writable_path,
         metavar="SERVICE=/PATH:MODE",
     )
+    harden.add_argument(
+        "--authorized-external-network",
+        action="append",
+        default=[],
+        metavar="NETWORK",
+        help="authorize a Compose network declared as external: true",
+    )
+    harden.add_argument(
+        "--egress-network",
+        action="append",
+        default=[],
+        metavar="NETWORK",
+        help="authorize a Compose network declared as internal: false",
+    )
     harden.set_defaults(func=cmd_harden)
     return parser
 

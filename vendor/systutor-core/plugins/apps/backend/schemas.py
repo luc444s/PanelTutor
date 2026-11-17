@@ -122,6 +122,8 @@ class HardeningRequest(BaseModel):
 
     service_users: dict[str, HardeningRuntimeUser] = Field(min_length=1, max_length=64)
     writable_paths: list[HardeningWritablePath] = Field(default_factory=list, max_length=256)
+    authorized_external_networks: list[str] = Field(default_factory=list, max_length=64)
+    egress_networks: list[str] = Field(default_factory=list, max_length=64)
 
     @model_validator(mode="after")
     def valid_policy(self):
@@ -138,6 +140,10 @@ class HardeningRequest(BaseModel):
                 WritablePathPolicy(item.service, item.path, item.mode)
                 for item in self.writable_paths
             ),
+            (),
+            (),
+            tuple(self.authorized_external_networks),
+            tuple(self.egress_networks),
         )
 
 

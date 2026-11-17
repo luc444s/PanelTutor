@@ -26,6 +26,7 @@ def audit_project(
     *,
     non_root: bool = False,
     require_build: bool = False,
+    authorized_external_networks: frozenset[str] = frozenset(),
 ) -> AuditResult:
     warnings: list[str] = []
     root = validate_checkout(root, warnings)
@@ -283,7 +284,11 @@ def audit_project(
         if not isinstance(entries, dict):
             raise AppDeployError(f"Compose {section} must be a mapping")
         for name, config in entries.items():
-            if isinstance(config, dict) and config.get("external"):
+            network_authorized = (
+                section == "networks"
+                and str(name) in authorized_external_networks
+            )
+            if isinstance(config, dict) and config.get("external") and not network_authorized:
                 _finding(
                     findings,
                     "error",
@@ -294,7 +299,7 @@ def audit_project(
                     "External resources have uncertain ownership.",
                     "Use a project-owned non-external resource.",
                 )
-            if isinstance(config, dict) and config.get("name"):
+            if isinstance(config, dict) and config.get("name") and not network_authorized:
                 _finding(
                     findings,
                     "error",

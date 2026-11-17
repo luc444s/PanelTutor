@@ -100,6 +100,10 @@ class CommandHardeningEngine:
             argv.extend(("--service-user", f"{item.service}={item.uid}:{item.gid}"))
         for item in policy.writable_paths:
             argv.extend(("--writable-path", f"{item.service}={item.path}:{item.mode}"))
+        for name in policy.authorized_external_networks:
+            argv.extend(("--authorized-external-network", name))
+        for name in policy.egress_networks:
+            argv.extend(("--egress-network", name))
         child_env = dict(self.environ if self.environ is not None else os.environ)
         for name in tuple(child_env):
             upper = name.upper()

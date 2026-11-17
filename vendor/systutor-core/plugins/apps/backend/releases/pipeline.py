@@ -70,7 +70,14 @@ def create_release(
     normalization: Mapping[str, Any] | None = None,
 ) -> TrustedRelease:
     checkout = Path(checkout)
-    audit = audit_project(checkout, candidate.compose, non_root=True)
+    audit = audit_project(
+        checkout,
+        candidate.compose,
+        non_root=True,
+        authorized_external_networks=frozenset(
+            policy.as_dict().get("authorized_external_networks", [])
+        ),
+    )
     if audit.errors:
         raise ReleaseRejected("hardened tree has blocking audit errors")
     if tree_digest(checkout) != candidate.hardened_tree_sha256:

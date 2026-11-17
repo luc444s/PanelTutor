@@ -174,10 +174,25 @@ def _override(
             managed_volumes[name] = {"labels": {OWNER_LABEL: project}}
         if managed_volumes:
             output["volumes"] = managed_volumes
-    network_names = {"default", *(data.get("networks") or {})}
-    output["networks"] = {
-        name: {"labels": {OWNER_LABEL: project}} for name in network_names
-    }
+    declared_networks = data.get("networks") or {}
+    network_entries: dict[str, Any] = {}
+    for name, raw in declared_networks.items():
+        config = raw if isinstance(raw, dict) else {}
+        entry: dict[str, Any] = {"labels": {OWNER_LABEL: project}}
+        external = config.get("external")
+        if external is True or isinstance(external, dict):
+            entry["external"] = True
+            if config.get("name"):
+                entry["name"] = config["name"]
+        else:
+            entry["internal"] = config.get("internal") is not False
+        network_entries[str(name)] = entry
+    if not network_entries:
+        network_entries["default"] = {
+            "internal": True,
+            "labels": {OWNER_LABEL: project},
+        }
+    output["networks"] = network_entries
     return yaml.safe_dump(output, sort_keys=True)
 
 

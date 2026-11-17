@@ -248,7 +248,14 @@ def verify_release(
         # 9. administered policy.
         declared = _verify_policy(release, policy)
         # 10. static audit from the verified tree.
-        result = audit_project(tree, release.compose_path, non_root=True)
+        result = audit_project(
+            tree,
+            release.compose_path,
+            non_root=True,
+            authorized_external_networks=frozenset(
+                declared.get("authorized_external_networks", [])
+            ),
+        )
         if result.errors:
             raise ReleaseRejected("release audit found blocking errors")
         # 11. resolved/static Compose must not expose the host.

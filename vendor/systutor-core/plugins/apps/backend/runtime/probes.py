@@ -16,6 +16,8 @@ from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 from typing import Any
 
+import yaml
+
 from .deployment import _compose_command
 from .docker_audit import _is_definitely_non_root_user
 from .probe_defaults import DEFAULT_PROBE_IMAGE
@@ -118,12 +120,44 @@ def _process_users(runner: Runner, container_id: str) -> list[str]:
         raise ProbeFailed("effective process users are uninspectable") from None
 
 
+def _signed_networks(
+    release_root: Path | None,
+    compose_rel: str | None,
+) -> dict[str, dict[str, Any]]:
+    """Read the signed Compose network declarations, if available."""
+    if release_root is None or not compose_rel:
+        return {}
+    try:
+        payload = yaml.safe_load((release_root / compose_rel).read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError):
+        return {}
+    networks = payload.get("networks") if isinstance(payload, dict) else None
+    if not isinstance(networks, dict):
+        return {}
+    return {
+        str(name): (options if isinstance(options, dict) else {})
+        for name, options in networks.items()
+    }
+
+
+def _signed_network_options(
+    signed: Mapping[str, dict[str, Any]],
+    network: str,
+) -> dict[str, Any] | None:
+    for name, options in signed.items():
+        if network == name or network.endswith("_" + name):
+            return options
+    return None
+
+
 def check_isolation(
     runner: Runner,
     containers: Mapping[str, str],
     release_root: Path | None = None,
+    compose_rel: str | None = None,
 ) -> dict[str, Any]:
     evidence: dict[str, Any] = {}
+    signed = _signed_networks(release_root, compose_rel)
     for service, container_id in containers.items():
         values = _inspect_container(runner, container_id)
         state, host, config = values["state"], values["host"], values["config"]
@@ -199,7 +233,8 @@ def check_isolation(
             raise ProbeFailed(f"service {service} has root processes")
         networks = _network_names_from_config(values)
         if not networks:
-            raise ProbeFailed(f"service {service} has no internal network")
+            raise ProbeFailed(f"service {service} has no network")
+        topology: dict[str, bool] = {}
         for network in networks:
             internal = runner.run(
                 [
@@ -212,11 +247,22 @@ def check_isolation(
                 ],
                 check=False,
             )
-            if internal.returncode or internal.stdout.strip().lower() != "true":
-                raise ProbeFailed(f"service {service} network is not internal")
+            is_internal = (
+                not internal.returncode
+                and internal.stdout.strip().lower() == "true"
+            )
+            if not is_internal:
+                declared = _signed_network_options(signed, network)
+                if declared is None or declared.get("internal") is not False:
+                    raise ProbeFailed(
+                        f"service {service} network {network} is not internal "
+                        "and is not authorized for egress"
+                    )
+            topology[network] = is_internal
         evidence[service] = {
             "user": str(config.get("User")),
             "networks": networks,
+            "network_internal": topology,
             "processes": len(users),
             "runtime": "runc",
             "writable_rootfs": True,
@@ -407,13 +453,28 @@ def run_probes(
         if service not in completed
     }
     assert_compose_healthchecks(runner, release, compose_rel, project, services)
-    isolation = check_isolation(runner, active, release)
-    networks: set[str] = set()
-    for values in isolation.values():
-        networks.update(values["networks"])
-    if len(networks) != 1:
-        raise ProbeFailed("the release must use exactly one internal network")
-    network = next(iter(networks))
+    isolation = check_isolation(runner, active, release, compose_rel)
+    signed = _signed_networks(release, compose_rel)
+    service_networks = {
+        service: sorted(values["networks"])
+        for service, values in isolation.items()
+    }
+    target_service = target[0] if target else None
+    if target_service and service_networks.get(target_service):
+        candidates = list(service_networks[target_service])
+    else:
+        candidates = sorted({
+            name for values in service_networks.values() for name in values
+        })
+    if not candidates:
+        raise ProbeFailed("no release network is available for the functional probe")
+
+    def _egress(network: str) -> bool:
+        options = _signed_network_options(signed, network)
+        return bool(options and options.get("internal") is False)
+
+    internal = [name for name in candidates if not _egress(name)]
+    network = sorted(internal or candidates)[0]
     functional: list[dict[str, Any]] = []
     restart_counts: dict[str, int] = {}
     interval = window / checks if checks else 0
@@ -452,6 +513,8 @@ def run_probes(
             sleep(interval)
     return {
         "isolation": isolation,
+        "network": network,
+        "service_networks": service_networks,
         "functional": {
             "image": image,
             "checks": functional,
