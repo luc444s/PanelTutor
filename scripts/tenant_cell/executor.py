@@ -78,9 +78,15 @@ def systemd_unit(slug: str, uid: int, cgroup_path: str) -> str:
         f"Group={name}\n"
         f"Environment=XDG_RUNTIME_DIR=/run/user/{uid}\n"
         f"Environment=DOCKER_HOST=unix://{socket}\n"
+        # Detached netns runs dockerd outside the userns net namespace, where
+        # it cannot create the bridge; rootlesskit's own netns + port driver
+        # provide connectivity and loopback publishing instead.
+        "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_DETACH_NETNS=false\n"
         "Delegate=yes\n"
+        # nf_tables iptables inside the userns is denied on this host; the
+        # rootlesskit port driver publishes loopback ports without iptables.
         f"ExecStart=/usr/bin/dockerd-rootless.sh --data-root {cell_dir} "
-        f"--host unix://{socket}\n"
+        f"--host unix://{socket} --iptables=false --ip6tables=false\n"
         "Restart=on-failure\n"
         "\n"
         "[Install]\n"

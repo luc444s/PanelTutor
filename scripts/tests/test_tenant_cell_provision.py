@@ -362,6 +362,18 @@ def test_two_tenants_get_distinct_userspaces(tmp_path) -> None:
     assert spec_a["cell_uid"] != spec_b["cell_uid"]
 
 
+def test_systemd_unit_uses_rootlesskit_netns_and_no_host_iptables() -> None:
+    from scripts.tenant_cell.executor import systemd_unit
+
+    unit = systemd_unit("acme", 60000, "/system.slice/spanel-cell-acme.scope")
+
+    assert "DOCKERD_ROOTLESS_ROOTLESSKIT_DETACH_NETNS=false" in unit
+    assert "--iptables=false" in unit
+    assert "--ip6tables=false" in unit
+    assert "Delegate=yes" in unit
+    assert "XDG_RUNTIME_DIR=/run/user/60000" in unit
+
+
 def test_local_executor_creates_output_chain_before_rules(monkeypatch) -> None:
     """The inet table needs an explicit output chain before any rule is added."""
     from types import SimpleNamespace
