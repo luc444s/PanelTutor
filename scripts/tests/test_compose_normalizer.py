@@ -62,6 +62,36 @@ def test_discards_unsafe_aliases_and_binds(tmp_path: Path) -> None:
     assert codes == {"normalize_alias_discarded", "normalize_bind_discarded"}
 
 
+def test_directory_bind_becomes_signed_file_injections(tmp_path: Path) -> None:
+    healthchecks = tmp_path / "healthchecks"
+    healthchecks.mkdir()
+    script = healthchecks / "postgres.sh"
+    script.write_text("#!/bin/sh\npg_isready\n", encoding="utf-8")
+    script.chmod(0o755)
+    (healthchecks / "README").write_text("docs", encoding="utf-8")
+    source = """services:
+  db:
+    volumes: ["./healthchecks:/healthchecks"]
+"""
+    result = normalize_compose(source, tmp_path)
+    service = yaml.safe_load(result.text)["services"]["db"]
+    assert "volumes" not in service
+    assert service["x-spanel-readonly-files"] == [
+        {
+            "source": "healthchecks/README",
+            "target": "/healthchecks/README",
+        },
+        {
+            "source": "healthchecks/postgres.sh",
+            "target": "/healthchecks/postgres.sh",
+            "mode": "0555",
+        },
+    ]
+    codes = {item["code"] for item in result.evidence["warnings"]}
+    assert "normalize_bind_directory_injected" in codes
+    assert "normalize_bind_discarded" not in codes
+
+
 def test_nested_compose_resolves_binds_from_its_directory(tmp_path: Path) -> None:
     compose_dir = tmp_path / "deploy"
     compose_dir.mkdir()

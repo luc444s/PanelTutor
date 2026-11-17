@@ -215,8 +215,9 @@ def harden_compose(
             if isinstance(readonly_files, list)
             and all(
                 isinstance(item, dict)
-                and set(item) == {"source", "target"}
+                and set(item) in ({"source", "target"}, {"source", "target", "mode"})
                 and all(isinstance(value, str) for value in item.values())
+                and item.get("mode", "0444") in {"0444", "0555"}
                 for item in readonly_files
             )
             else []

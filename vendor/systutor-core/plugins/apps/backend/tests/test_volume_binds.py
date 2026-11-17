@@ -43,6 +43,14 @@ def test_only_canonical_safe_release_file_metadata_is_allowed(tmp_path: Path) ->
         {"source": "config", "target": "/var/run/app.conf"},
         tmp_path, "compose.yml",
     )
+    assert readonly_release_file(
+        {"source": "config", "target": "/etc/app.conf", "mode": "0555"},
+        tmp_path, "compose.yml",
+    )
+    assert not readonly_release_file(
+        {"source": "config", "target": "/etc/app.conf", "mode": "0777"},
+        tmp_path, "compose.yml",
+    )
 
 
 def test_release_file_uses_nested_compose_directory_and_cannot_escape(

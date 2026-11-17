@@ -369,6 +369,31 @@ def test_file_injection_uses_mode_0444_and_separate_argv(tmp_path: Path) -> None
                for call in runner.calls)
 
 
+def test_file_injection_preserves_executable_mode(tmp_path: Path) -> None:
+    release = tmp_path / "app" / "releases" / "op-1"
+    source = release / "source"
+    source.mkdir(parents=True)
+    source.joinpath("compose.yml").write_text("services: {}\n", encoding="utf-8")
+    source.joinpath("check.sh").write_text("#!/bin/sh\ntrue\n", encoding="utf-8")
+    runner = FakeRunner({})
+    release_deploy._inject_readonly_files(
+        runner,
+        release,
+        "compose.yml",
+        {"db": "cid1"},
+        {"db": {"x-spanel-readonly-files": [
+            {
+                "source": "check.sh",
+                "target": "/healthchecks/check.sh",
+                "mode": "0555",
+            }
+        ]}},
+    )
+    assert any(call[:2] == ["chmod", "0555"] for call in runner.calls)
+    assert any(call[:2] == ["docker", "cp"] and call[-1] == "cid1:/healthchecks/check.sh"
+               for call in runner.calls)
+
+
 def test_copy_failure_runs_down_cleanup(monkeypatch, tmp_path: Path) -> None:
     release, runner, published = prepare_deploy(monkeypatch, tmp_path)
 

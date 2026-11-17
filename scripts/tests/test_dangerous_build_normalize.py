@@ -399,7 +399,12 @@ def test_ephemeral_writable_paths_use_tmpfs_instead_of_volumes() -> None:
         )
     )
     service = hardened["services"]["database"]
-    assert service["volumes"] == ["database-data:/var/lib/postgresql/data"]
+    assert service["volumes"] == [{
+        "type": "volume",
+        "source": "database-data",
+        "target": "/var/lib/postgresql/data",
+        "volume": {"nocopy": True},
+    }]
     assert "/var/run/postgresql:rw,noexec,nosuid,nodev,mode=0775,uid=70,gid=70" in service["tmpfs"]
     assert not any("postgresql" in name for name in hardened.get("volumes", {}))
 
@@ -432,6 +437,32 @@ def test_hardener_preserves_only_normalized_compatibility(tmp_path: Path) -> Non
         "net.ipv4.ip_unprivileged_port_start": "0"
     }
     assert "ports" not in service
+
+
+def test_hardener_preserves_executable_directory_injections(tmp_path: Path) -> None:
+    sys.path.insert(0, str(ROOT / "scripts"))
+    from dangerous_build.compose import ServicePolicy, harden_compose
+    from dangerous_build.compose_normalizer import normalize_compose
+
+    checks = tmp_path / "healthchecks"
+    checks.mkdir()
+    script = checks / "postgres.sh"
+    script.write_text("#!/bin/sh\npg_isready\n", encoding="utf-8")
+    script.chmod(0o755)
+    normalized = normalize_compose(
+        'services:\n  db:\n    volumes: ["./healthchecks:/healthchecks"]\n',
+        tmp_path,
+    )
+    data = yaml.safe_load(
+        harden_compose(normalized.text, {"db": ServicePolicy(1000, 1000)}, tmp_path)
+    )
+    service = data["services"]["db"]
+    assert "volumes" not in service
+    assert service["x-spanel-readonly-files"] == [{
+        "source": "healthchecks/postgres.sh",
+        "target": "/healthchecks/postgres.sh",
+        "mode": "0555",
+    }]
 
 
 def test_hardener_resolves_bind_from_nested_compose_directory(tmp_path: Path) -> None:

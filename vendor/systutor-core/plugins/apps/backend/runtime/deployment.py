@@ -622,8 +622,13 @@ def _inject_readonly_files(
             if copied.returncode:
                 raise AppDeployError("failed to prepare read-only file injection")
             try:
-                mode = runner.run(["chmod", "0444", str(temporary)], check=False)
-                if mode.returncode:
+                file_mode = item.get("mode", "0444")
+                if file_mode not in {"0444", "0555"}:
+                    raise AppDeployError("read-only file injection metadata is invalid")
+                chmod_result = runner.run(
+                    ["chmod", file_mode, str(temporary)], check=False
+                )
+                if chmod_result.returncode:
                     raise AppDeployError("failed to prepare read-only file injection")
                 injected = runner.run(
                     ["docker", "cp", str(temporary), f"{containers[service]}:{item['target']}"],

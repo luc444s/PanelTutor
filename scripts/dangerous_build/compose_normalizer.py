@@ -16,6 +16,9 @@ _SAFE_SYSCTL = "net.ipv4.ip_unprivileged_port_start"
 _SENSITIVE_TARGETS = ("/", "/proc", "/sys", "/dev", "/var/run")
 _ALIAS_MARKER = "x-spanel-normalized-aliases"
 _READONLY_FILES_MARKER = "x-spanel-readonly-files"
+_EXECUTABLE_FILE_MODE = "0555"
+_MAX_INJECT_FILES = 256
+_MAX_INJECT_BYTES = 1024 * 1024
 
 
 class ComposeNormalizationError(ValueError):
@@ -118,8 +121,59 @@ def _safe_file(source: str, checkout_root: Path, compose_directory: Path) -> str
     return relative
 
 
-def _readonly_file(source: str, target: str) -> dict[str, str]:
-    return {"source": source, "target": str(PurePosixPath(target))}
+def _readonly_file(source: str, target: str, mode: str | None = None) -> dict[str, str]:
+    item = {"source": source, "target": str(PurePosixPath(target))}
+    # Only executable files need an explicit mode; non-executable files keep the
+    # original two-key shape so previously signed releases stay valid.
+    if mode == _EXECUTABLE_FILE_MODE:
+        item["mode"] = mode
+    return item
+
+
+def _safe_tree(
+    source: str, checkout_root: Path, compose_directory: Path
+) -> list[tuple[str, str, str]] | None:
+    """Expand a checkout-relative directory bind into signed file injections.
+
+    Returns ``(compose_relative_source, path_inside_target, mode)`` triples.
+    The platform never honours host binds, so even a writable directory bind is
+    converted to read-only file injections (it was discarded entirely before).
+    """
+    if not source.startswith("./") or not source or "\\" in source:
+        return None
+    candidate = compose_directory / source
+    try:
+        root = checkout_root.resolve(strict=True)
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(root)
+    except (OSError, ValueError):
+        return None
+    if not resolved.is_dir() or resolved.name == "docker.sock":
+        return None
+    files: list[tuple[str, str, str]] = []
+    total = 0
+    for path in sorted(resolved.rglob("*")):
+        if len(files) >= _MAX_INJECT_FILES:
+            return None
+        try:
+            if path.is_symlink():
+                path.resolve(strict=True).relative_to(root)
+            if not path.is_file() or path.name == "docker.sock":
+                continue
+            total += path.stat().st_size
+        except (OSError, ValueError):
+            continue
+        if total > _MAX_INJECT_BYTES:
+            return None
+        mode = (
+            _EXECUTABLE_FILE_MODE if os.access(path, os.X_OK) else "0444"
+        )
+        files.append((
+            path.relative_to(compose_directory).as_posix(),
+            path.relative_to(resolved).as_posix(),
+            mode,
+        ))
+    return files or None
 
 
 def _external_networks(data: dict[str, Any]) -> set[str]:
@@ -306,15 +360,17 @@ def normalize_compose(
             if not isinstance(item, dict):
                 continue
             source, target = item.get("source"), item.get("target")
+            mode = item.get("mode")
             path = (
                 _safe_file(source, root, compose_directory)
                 if isinstance(source, str)
                 and isinstance(target, str)
                 and _target_is_safe(target)
+                and mode in {None, _EXECUTABLE_FILE_MODE}
                 else None
             )
             if path is not None:
-                injections.append(_readonly_file(path, target))
+                injections.append(_readonly_file(path, target, mode))
 
         kept: list[object] = []
         for volume in config.get("volumes") or []:
@@ -328,15 +384,32 @@ def normalize_compose(
                 if source.startswith("./") and read_only and _target_is_safe(target)
                 else None
             )
-            if canonical_source is None:
-                warnings.append(_warning(
-                    "normalize_bind_discarded",
-                    name,
-                    "host bind is not a read-only regular checkout file",
-                ))
+            if canonical_source is not None:
+                injections.append(_readonly_file(canonical_source, target))
+                applied["N2"].add(name)
                 continue
-            injections.append(_readonly_file(canonical_source, target))
-            applied["N2"].add(name)
+            tree = (
+                _safe_tree(source, root, compose_directory)
+                if source.startswith("./") and _target_is_safe(target)
+                else None
+            )
+            if tree is not None:
+                for file_source, suffix, mode in tree:
+                    injections.append(_readonly_file(
+                        file_source, str(PurePosixPath(target) / suffix), mode,
+                    ))
+                warnings.append(_warning(
+                    "normalize_bind_directory_injected",
+                    name,
+                    "read-only directory bind became signed file injections",
+                ))
+                applied["N2"].add(name)
+                continue
+            warnings.append(_warning(
+                "normalize_bind_discarded",
+                name,
+                "host bind is not a read-only regular checkout file",
+            ))
         if kept:
             config["volumes"] = kept
         else:

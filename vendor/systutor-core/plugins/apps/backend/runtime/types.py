@@ -148,7 +148,11 @@ def readonly_release_file(
     compose_file: str | Path,
 ) -> bool:
     """Validate one canonical signed pre-start file injection."""
-    if not isinstance(item, Mapping) or set(item) != {"source", "target"}:
+    if not isinstance(item, Mapping) or set(item) not in (
+        {"source", "target"}, {"source", "target", "mode"}
+    ):
+        return False
+    if "mode" in item and item["mode"] not in {"0444", "0555"}:
         return False
     source, target = item.get("source"), item.get("target")
     if (
