@@ -163,7 +163,7 @@ structural_constraints:
 - Requirement: A.SPEC 0096 Fase 1 — doctor + provision/status/deprovision.
 - owner: lucas
 - approver: lucas
-- Commit: 07744e3
+- Commit: a644ce5
 - Deployment: lab laptop `spanel.lab` (Fase 1, tras aprobación)
 
 ## Definition of Done
