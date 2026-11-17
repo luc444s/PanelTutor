@@ -67,7 +67,7 @@ def policy(*users: tuple[str, int, int, str]) -> HardeningPolicy:
 def test_declared_user_precedence_without_inventing_a_default() -> None:
     explicit = policy(("web", 2000, 2001, "policy"))
     resolved = resolve_hardening_policy(
-        explicit, {"web": {"user": "3000:3001"}}, {"web": "4000:4001"}
+        explicit, {"web": {"user": "3000:3001"}}
     )
     assert resolved.as_dict()["runtime_users"]["web"]["source"] == "policy"
     compose = automatic_hardening_policy(

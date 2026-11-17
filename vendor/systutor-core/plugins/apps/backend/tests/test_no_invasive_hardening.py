@@ -76,6 +76,18 @@ def _fixed_commit(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(pipeline_module, "_git_commit", lambda _root: "a" * 40)
 
 
+def test_image_specific_writable_paths_are_no_longer_generated() -> None:
+    """Postgres/MySQL chmod paths were hardener-only; they must not reappear."""
+
+    policy = automatic_hardening_policy(
+        {"db": {"image": "postgres:16"}, "mysql": {"image": "mariadb:11"}}, {}
+    )
+    data = policy.as_dict()
+    assert data["service_users"] == {}
+    assert data["writable_paths"] == []
+    assert "runtime_volumes" not in data
+
+
 def test_release_signs_the_checkout_without_rewriting_any_file(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

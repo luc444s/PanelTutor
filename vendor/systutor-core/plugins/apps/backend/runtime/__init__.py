@@ -20,7 +20,6 @@ from .source import (
     clone_repo,
     compose_candidates,
     discover_compose,
-    dockerfile_base_images,
     dockerfile_runtime_user,
 )
 from .source_adapter import SourceAdaptation, materialize_source_adapter
@@ -64,7 +63,6 @@ __all__ = [
     "compose_candidates",
     "deploy",
     "discover_compose",
-    "dockerfile_base_images",
     "dockerfile_runtime_user",
     "lifecycle",
     "materialize_source_adapter",

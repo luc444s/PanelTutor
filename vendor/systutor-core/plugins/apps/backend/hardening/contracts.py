@@ -275,7 +275,6 @@ class HardeningPolicy:
 def automatic_hardening_policy(
     services: object,
     dockerfile_users: Mapping[str, str | None] | None = None,
-    dockerfile_images: Mapping[str, tuple[str, ...]] | None = None,
 ) -> HardeningPolicy:
     """Record only users the application itself declares.
 
@@ -288,7 +287,6 @@ def automatic_hardening_policy(
     if not isinstance(services, Mapping):
         raise ValueError("inspected services are invalid")
     dockerfile_users = dockerfile_users or {}
-    dockerfile_images = dockerfile_images or {}
     users = []
     evidence = []
     for service in sorted(services):
@@ -306,7 +304,7 @@ def automatic_hardening_policy(
         evidence.append(RuntimeUserEvidence(name, value, value, source))
     return HardeningPolicy(
         tuple(users),
-        _automatic_writable_paths(services, dockerfile_images),
+        (),
         runtime_users=tuple(evidence),
     )
 
@@ -329,13 +327,11 @@ def resolve_hardening_policy(
     policy: HardeningPolicy,
     services: object,
     dockerfile_users: Mapping[str, str | None] | None = None,
-    dockerfile_images: Mapping[str, tuple[str, ...]] | None = None,
 ) -> HardeningPolicy:
     """Fill omitted services from the checkout while keeping explicit values."""
     if not isinstance(services, Mapping):
         raise ValueError("inspected services are invalid")
     dockerfile_users = dockerfile_users or {}
-    dockerfile_images = dockerfile_images or {}
     declared = {item.service: (item.uid, item.gid) for item in policy.service_users}
     sources = {item.service: "policy" for item in policy.service_users}
     unknown = sorted(set(declared).difference(services))
@@ -362,10 +358,7 @@ def resolve_hardening_policy(
             RuntimeUserPolicy(service, uid, gid)
             for service, (uid, gid) in sorted(declared.items())
         ),
-        _merge_writable_paths(
-            policy.writable_paths,
-            _automatic_writable_paths(services, dockerfile_images),
-        ),
+        policy.writable_paths,
         tuple(
             RuntimeUserEvidence(
                 service, f"{uid}:{gid}", f"{uid}:{gid}", sources[service]
@@ -373,39 +366,3 @@ def resolve_hardening_policy(
             for service, (uid, gid) in sorted(declared.items())
         ),
     )
-
-
-def _image_repository(value: object) -> str:
-    image = str(value or "").strip().lower()
-    image = image.split("@", 1)[0]
-    name = image.rsplit("/", 1)[-1]
-    return name.split(":", 1)[0]
-
-
-def _automatic_writable_paths(
-    services: Mapping[object, object],
-    dockerfile_images: Mapping[str, tuple[str, ...]],
-) -> tuple[WritablePathPolicy, ...]:
-    paths: list[WritablePathPolicy] = []
-    for raw_service in sorted(services, key=str):
-        service = str(raw_service)
-        config = services[raw_service]
-        config = config if isinstance(config, Mapping) else {}
-        images = (config.get("image"), *dockerfile_images.get(service, ()))
-        repositories = {_image_repository(image) for image in images}
-        if "postgres" in repositories:
-            paths.append(
-                WritablePathPolicy(service, "/var/run/postgresql", "0775")
-            )
-        if repositories.intersection({"mariadb", "mysql"}):
-            paths.append(WritablePathPolicy(service, "/run/mysqld", "0775"))
-    return tuple(paths)
-
-
-def _merge_writable_paths(
-    explicit: tuple[WritablePathPolicy, ...],
-    automatic: tuple[WritablePathPolicy, ...],
-) -> tuple[WritablePathPolicy, ...]:
-    result = {(item.service, item.path): item for item in automatic}
-    result.update({(item.service, item.path): item for item in explicit})
-    return tuple(result[key] for key in sorted(result))
