@@ -35,7 +35,8 @@ from ..runtime.deployment import (
     validate_env_file,
 )
 from ..runtime.lifecycle import _read_manifest
-from ..runtime.probes import run_probes
+from ..runtime.probes import check_tenant_rootless_isolation, run_probes
+from ..runtime.tenant_daemon import TenantDaemonConfig
 from ..runtime.transport import Runner
 from ..runtime.types import AppDeployError, DeployOptions, one_shot_services
 from ..runtime.volumes import prepare_runtime_volumes
@@ -396,8 +397,14 @@ def deploy_scoped(
     require_expiry: bool = True,
     staging_release: Path | None = None,
     probe_target: tuple[str, int] | None = None,
+    tenant_rootless: TenantDaemonConfig | None = None,
 ) -> dict[str, Any]:
-    """Execute exactly the planned subset and publish state only when green."""
+    """Execute exactly the planned subset and publish state only when green.
+
+    ``tenant_rootless`` is optional and additive: when supplied, the isolation
+    probes of A.SPEC 0096 run as an additional authoritative gate on top of the
+    existing probes (I6, I13).  The hardened path never passes it.
+    """
 
     try:
         policy = HardeningPolicy.from_dict(release.body["policy"])
@@ -728,6 +735,10 @@ def deploy_scoped(
             target=resolved_probe_target,
             one_shot=one_shot,
         )
+        if tenant_rootless is not None:
+            probes["tenant_rootless"] = check_tenant_rootless_isolation(
+                runner, merged_containers, tenant_rootless
+            )
         manifest.update({
             "status": "running",
             "containers": dict(sorted(merged_containers.items())),

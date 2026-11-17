@@ -36,6 +36,8 @@ from .releases import (
     release_store_root,
     verify_release,
 )
+from .runtime.runner_factory import resolve_runtime
+from .runtime.tenant_daemon import TenantDaemonConfig
 from .schemas import (
     ActionRequest,
     ApplicationCreate,
@@ -307,9 +309,34 @@ def list_applications(
         ApplicationView.model_validate(application).model_copy(update={
             "tenant_id": application.tenant_id,
             "tenant_name": tenant_names.get(application.tenant_id),
+            "runtime_profile": resolve_runtime(os.environ, application.tenant_id),
         })
         for application in applications
     ]
+
+
+@router.get("/runtime/profile")
+def runtime_profile(
+    db: Session = Depends(get_db_session),
+    context: TenantContext = Depends(get_current_tenant_context),
+    _user: User = Depends(require_permission("apps.applications.read")),
+) -> dict:
+    """Expose the effective isolation profile and private socket of a tenant.
+
+    Read-only: it never contacts a daemon and never falls back to the shared
+    socket (A.SPEC 0096, I1/I8).
+    """
+    del db
+    tenant = context.current_tenant_id
+    profile = resolve_runtime(os.environ, tenant)
+    result: dict[str, object] = {"profile": profile, "tenant": tenant}
+    if profile == "tenant-rootless":
+        config = TenantDaemonConfig.for_tenant(tenant)
+        result["socket"] = str(config.socket)
+        result["docker_host"] = config.docker_host
+        result["apparmor_profile"] = config.profile
+        result["fail_closed"] = True
+    return result
 
 
 @router.get("/applications/{application_id}")

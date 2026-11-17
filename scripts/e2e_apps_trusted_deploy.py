@@ -568,6 +568,42 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+# --- tenant-rootless expectations (A.SPEC 0096) ----------------------------
+# Pure helpers shared with the live E2E.  They assert the shape of the
+# per-deploy evidence without contacting a daemon; the lab-only steps
+# (two tenants, runsc, AppArmor, nftables) remain a documented GAP.
+
+
+def tenant_rootless_expectations(environ: dict[str, str] | None = None) -> dict[str, Any]:
+    env = dict(os.environ if environ is None else environ)
+    profile = env.get("SPANEL_APPS_RUNTIME", "hardened").strip() or "hardened"
+    return {
+        "profile": profile,
+        "enabled": profile == "tenant-rootless",
+        "required_evidence": [
+            "tenant", "socket", "profile", "runtime", "apparmor_label",
+            "uid_mapping", "hashes", "containers", "preflight", "probes",
+        ],
+    }
+
+
+def assert_tenant_rootless_evidence(manifest: dict[str, Any], tenant: str) -> None:
+    """Validate the evidence carried by a tenant-rootless deployment manifest."""
+    evidence = manifest.get("tenant_rootless")
+    if not isinstance(evidence, dict):
+        raise E2EError("tenant-rootless evidence is missing from the manifest")
+    expected = tenant_rootless_expectations()
+    for key in expected["required_evidence"]:
+        if key not in evidence:
+            raise E2EError(f"tenant-rootless evidence is missing {key}")
+    if evidence.get("tenant") != tenant:
+        raise E2EError("tenant-rootless evidence has the wrong tenant")
+    if evidence.get("runtime") != "runsc":
+        raise E2EError("tenant-rootless evidence is not runsc")
+    if evidence.get("profile") != "tenant-rootless":
+        raise E2EError("tenant-rootless evidence has the wrong profile")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if not args.base_url:

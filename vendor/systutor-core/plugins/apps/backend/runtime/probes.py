@@ -21,6 +21,7 @@ import yaml
 from .deployment import _compose_command
 from .docker_audit import _is_definitely_non_root_user
 from .probe_defaults import DEFAULT_PROBE_IMAGE
+from .tenant_daemon import TenantDaemonConfig
 from .transport import Runner
 from .types import AppDeployError
 
@@ -566,3 +567,161 @@ def run_probes(
             "restart_counts": restart_counts,
         },
     }
+
+
+# ---------------------------------------------------------------------------
+# tenant-rootless profile (A.SPEC 0096).  These helpers are additive: the
+# hardened checks above are untouched and remain the default (I8).
+# ---------------------------------------------------------------------------
+
+_TENANT_APPARMOR_RE = re.compile(r"^spanel-tenant-[a-z0-9_-]{1,63}(\s+\(enforce\))?\Z")
+
+
+def _tenant_effective_users(runner: Runner, container_id: str) -> list[str]:
+    result = runner.run(["docker", "top", container_id, "-eo", "pid,uid"], check=False)
+    if result.returncode:
+        raise ProbeFailed("cannot inspect effective process users")
+    rows = [line.split() for line in result.stdout.splitlines() if line.strip()]
+    try:
+        index = [item.lower() for item in rows[0]].index("uid")
+        return [row[index] for row in rows[1:]]
+    except (IndexError, ValueError):
+        raise ProbeFailed("effective process users are uninspectable") from None
+
+
+def _tenant_port_bindings(value: Mapping[str, Any]) -> dict[str, object]:
+    bindings = value.get("PortBindings") or {}
+    return bindings if isinstance(bindings, Mapping) else {}
+
+
+def _tenant_bind_sources(value: Mapping[str, Any]) -> list[str]:
+    sources: list[str] = []
+    # _inspect_container normalises inspect payloads into lowercase keys,
+    # including "mounts" (see _container above).
+    for mount in value.get("mounts") or []:
+        if not isinstance(mount, Mapping) or mount.get("Type") != "bind":
+            continue
+        source = mount.get("Source")
+        if isinstance(source, str):
+            sources.append(source)
+    return sources
+
+
+def check_tenant_rootless_isolation(
+    runner: Runner,
+    containers: Mapping[str, str],
+    config: TenantDaemonConfig,
+) -> dict[str, Any]:
+    """Probe the tenant-rootless envelope for every container (I1-I6, I10, I13).
+
+    Any violation raises :class:`ProbeFailed`, which the deploy pipeline treats
+    as an authoritative rollback signal.  There is no downgrade to ``runc`` or
+    to the shared daemon.
+    """
+    evidence: dict[str, Any] = {}
+    expected = config.profile
+    for service, container_id in containers.items():
+        values = _inspect_container(runner, container_id)
+        state, host = values["state"], values["host"]
+        apparmor = str(values.get("apparmor") or "")
+        if not _TENANT_APPARMOR_RE.fullmatch(apparmor) or not apparmor.startswith(expected):
+            raise ProbeFailed(
+                f"service {service} does not carry profile {expected} (enforce)"
+            )
+        if host.get("Runtime") != "runsc":
+            raise ProbeFailed(f"service {service} does not use runtime runsc")
+        if host.get("Privileged") is True:
+            raise ProbeFailed(f"service {service} is privileged")
+        if host.get("Devices"):
+            raise ProbeFailed(f"service {service} accesses host devices")
+        if str(host.get("PidMode", "")) == "host" or str(host.get("IpcMode", "")) == "host":
+            raise ProbeFailed(f"service {service} uses a host namespace")
+        if str(host.get("NetworkMode", "")) in {"host", "container:host"}:
+            raise ProbeFailed(f"service {service} uses the host network")
+        for source in _tenant_bind_sources(values):
+            if source.endswith("docker.sock"):
+                raise ProbeFailed(f"service {service} mounts a Docker socket")
+            if not source.startswith(str(config.data_root)) and not source.startswith("./"):
+                raise ProbeFailed(f"service {service} binds a path outside the tenant")
+        for published in _tenant_port_bindings(host).values():
+            entries = published if isinstance(published, list) else [published]
+            for entry in entries:
+                host_ip = str((entry or {}).get("HostIp", "")) if isinstance(entry, Mapping) else ""
+                if host_ip in {"", "0.0.0.0", "::"}:
+                    raise ProbeFailed(f"service {service} publishes on an unrestricted IP")
+        options = " ".join(
+            str(item).lower().replace(" ", "")
+            for item in (host.get("SecurityOpt") or [])
+        )
+        if "no-new-privileges" not in options:
+            raise ProbeFailed(f"service {service} allows privilege escalation")
+        if str(state.get("Status", "")).lower() != "running":
+            raise ProbeFailed(f"service {service} is not running")
+        restart_count = state.get("RestartCount", 0)
+        if not isinstance(restart_count, int) or restart_count != 0:
+            raise ProbeFailed(f"service {service} restarted; rolling back")
+        users = _tenant_effective_users(runner, container_id)
+        if not users or any(
+            user == "root" or (user.isdigit() and int(user) == 0) for user in users
+        ):
+            raise ProbeFailed(f"service {service} has host UID 0 processes")
+        evidence[service] = {
+            "apparmor": apparmor,
+            "runtime": "runsc",
+            "uid_mapping": users,
+            "restart_count": restart_count,
+            "networks": values.get("networks") or [],
+        }
+    return evidence
+
+
+def rootless_daemon_evidence(
+    runner: Runner,
+    config: TenantDaemonConfig,
+    *,
+    security_options: str,
+) -> dict[str, Any]:
+    """Validate and encapsulate the daemon-level rootless postcondition."""
+    if "name=rootless" not in security_options:
+        raise ProbeFailed("tenant daemon is not rootless")
+    return {
+        "rootless": True,
+        "socket": str(config.socket),
+        "profile": config.profile,
+        "security_options": security_options[:512],
+    }
+
+
+def build_rootless_evidence(
+    *,
+    config: TenantDaemonConfig,
+    runtime: str,
+    isolation: Mapping[str, Any],
+    daemon: Mapping[str, Any],
+    preflight: Mapping[str, Any],
+    compose_sha256: str,
+    image_digests: Mapping[str, str],
+    signature: str,
+) -> dict[str, Any]:
+    """Assemble the per-deploy JSON evidence required by the contract."""
+    evidence: dict[str, Any] = {
+        "tenant": config.tenant,
+        "socket": str(config.socket),
+        "docker_host": config.docker_host,
+        "profile": runtime,
+        "runtime": "runsc",
+        "apparmor_label": daemon.get("profile", config.profile),
+        "uid_mapping": {
+            service: value.get("uid_mapping") for service, value in isolation.items()
+        },
+        "hashes": {
+            "compose_sha256": compose_sha256,
+            "image_digests": dict(image_digests),
+            "signature": signature,
+        },
+        "containers": dict(isolation),
+        "daemon": dict(daemon),
+        "preflight": dict(preflight),
+        "probes": {"pass": True, "rollback": False},
+    }
+    return evidence

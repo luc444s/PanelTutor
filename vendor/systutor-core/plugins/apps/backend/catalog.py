@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from datetime import UTC, datetime
 from uuid import uuid4
@@ -25,6 +26,7 @@ from .models import (
     Operation,
 )
 from .operations import ACTIVE
+from .runtime.runner_factory import resolve_runtime
 from .runtime.types import SECRET_NAME_RE
 from .schemas import ApplicationCreate, SourceUpdate
 from .settings import AppsSettings
@@ -447,6 +449,7 @@ def application_detail(db: Session, tenant_id: str, application_id: str) -> dict
         "compose_file": app.compose_file, "domain": app.domain,
         "ingress_service": app.ingress_service, "ingress_port": app.ingress_port,
         "status": app.status,
+        "runtime_profile": resolve_runtime(os.environ, app.tenant_id),
         "source_installation_id": app.source_installation_id,
         "source_repository_id": app.source_repository_id,
         "source_status": app.source_status,

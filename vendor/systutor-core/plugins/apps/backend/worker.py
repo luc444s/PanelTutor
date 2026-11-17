@@ -55,6 +55,8 @@ from .runtime import (
     purge_orphaned_project,
     runtime_snapshot,
 )
+from .runtime.runner_factory import RUNTIME_TENANT_ROOTLESS, resolve_runtime, runner_for
+from .runtime.tenant_daemon import preflight as rootless_preflight
 from .runtime.volumes import resolve_runtime_volumes
 from .service import audit as record_apps_audit
 
@@ -73,10 +75,14 @@ class AppsWorker:
         route_cleanup: Callable[[Session, str, str], None] | None = None,
         route_refresh: Callable[[Session, str, str], None] | None = None,
         hardening_engine: Any = None,
+        runtime_resolver: Callable[..., str] | None = None,
+        rootless_preflight_hook: Callable[..., dict] | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.cipher = cipher
         self.runner_factory = runner_factory
+        self.runtime_resolver = runtime_resolver
+        self.rootless_preflight_hook = rootless_preflight_hook
         self.publisher = publisher
         self.github = github or UrllibGithubClient()
         self.route_cleanup = route_cleanup
@@ -161,6 +167,37 @@ class AppsWorker:
         value = os.environ.get("SPANEL_DOCKER_TRANSPORT", "local").strip()
         return value if value in {"local", "ssh"} else "local"
 
+    def _runtime_for_tenant(self, tenant_id: str) -> str:
+        """Effective runtime profile; ``hardened`` keeps the historical path."""
+        if self.runtime_resolver is not None:
+            return self.runtime_resolver(os.environ, tenant_id)
+        return resolve_runtime(os.environ, tenant_id)
+
+    def _runner_for_tenant(
+        self, tenant_id: str, transport: str, environ: dict[str, str] | None = None
+    ) -> Runner:
+        """Select the tenant socket for rootless, the legacy runner otherwise."""
+        return runner_for(
+            tenant_id,
+            os.environ if environ is None else environ,
+            transport=transport,
+            legacy_factory=self.runner_factory,
+        )
+
+    def _enforce_rootless_preflight(self, tenant_id: str, tenant: str) -> dict | None:
+        """Fail closed before any compose up when the tenant is rootless.
+
+        Injected as a hook so unit tests can prove the ordering without a real
+        host.  The default is the real fail-closed preflight.
+        """
+        if self._runtime_for_tenant(tenant_id) != RUNTIME_TENANT_ROOTLESS:
+            return None
+        from .runtime.tenant_daemon import TenantDaemonConfig
+
+        config = TenantDaemonConfig.for_tenant(tenant)
+        hook = self.rootless_preflight_hook or rootless_preflight
+        return hook(self._runner_for_tenant(tenant_id, self._transport()), config)
+
     def _source_operation(self, operation_id: str, application_id: str, kind: str) -> dict:
         from systutor.core.errors import AppError
 
@@ -168,6 +205,11 @@ class AppsWorker:
             operation = db.get(Operation, operation_id)
             operation_report = dict(operation.report or {}) if operation else {}
         if kind == "deploy":
+            with self.session_factory() as db:
+                _source_app = db.get(Application, application_id)
+                _source_tenant = _source_app.tenant_id if _source_app else None
+            if _source_tenant:
+                self._enforce_rootless_preflight(_source_tenant, _source_tenant)
             release_id = operation_report.get("hardened_operation_id")
             if isinstance(release_id, str) and release_id:
                 return self.execution.deploy_known_release(
@@ -541,7 +583,7 @@ class AppsWorker:
             # Un borrador (o una inspección/deploy fallido) no tiene runtime
             # publicado: se retiran los recursos etiquetados que sí existan y
             # los metadatos. Los volúmenes solo se eliminan al purgar datos.
-            runner = self.runner_factory(self._transport())
+            runner = self._runner_for_tenant(tenant_id, self._transport())
             purge_orphaned_project(runner, project, volumes=purge_data)
             project_root = release_store_root(runner.environ) / project
             if project_root.name == project:
@@ -569,7 +611,7 @@ class AppsWorker:
                 "output": "No active deployment; application metadata removed.",
             }
         command = "status" if kind == "refresh" else kind
-        runner = self.runner_factory(self._transport())
+        runner = self._runner_for_tenant(tenant_id, self._transport())
         result = lifecycle(
             LifecycleOptions(
                 command=command, project=project,
@@ -603,7 +645,7 @@ class AppsWorker:
                 release.parent.parent if release.parent.name == "releases" else release
             )
             if project_root.name == project:
-                runner = self.runner_factory(self._transport())
+                runner = self._runner_for_tenant(tenant_id, self._transport())
                 if runner.transport == "ssh":
                     runner.run(["rm", "-rf", "--", str(project_root)])
                 elif project_root.exists():

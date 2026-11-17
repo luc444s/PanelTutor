@@ -87,6 +87,8 @@ export type ApplicationCreate = {
 
 export type ApplicationDetail = Application & {
   runtime_project: string;
+  // A.SPEC 0096: hardened (default) or tenant-rootless (per tenant).
+  runtime_profile?: string;
   active_deployment: DeploymentDetail | null;
   services: string[];
   service_details: InspectedService[];

@@ -266,6 +266,8 @@ class ApplicationView(BaseModel):
     has_saved_environment: bool = False
     tenant_id: str | None = None
     tenant_name: str | None = None
+    # A.SPEC 0096: effective isolation profile inherited from the tenant.
+    runtime_profile: str = "hardened"
 
     model_config = {"from_attributes": True}
 

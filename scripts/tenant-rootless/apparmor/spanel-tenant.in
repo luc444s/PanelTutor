@@ -1,0 +1,40 @@
+# AppArmor profile for the rootless Docker daemon of a single tenant.
+# A.SPEC 0096.  Placeholders: @TENANT@, @DATA_ROOT@, @EXEC_ROOT@, @SOCKET@.
+#
+# Load with:  apparmor_parser -r -W spanel-tenant-@TENANT@
+# Start the daemon with: aa-exec -p spanel-tenant-@TENANT@ -- dockerd-rootless.sh ...
+#
+# The spike (spanel.lab 2026-11-17) established:
+#  - the daemon needs dbus, for cgroup StartTransientUnit;
+#  - deny rules must NOT use the "ix" qualifier (parser rejects it) -> "rwk";
+#  - rules are evaluated against the path AS SEEN BY THE CONTAINER, so the
+#    deny list below uses in-container paths, not host paths.
+profile spanel-tenant-@TENANT@ flags=(attach_disconnected,mediate_deleted) {
+  #include <abstractions/base>
+
+  # Capabilities and syscall families required by dockerd-rootless.sh.
+  capability,
+  network,
+  mount,
+  umount,
+  pivot_root,
+  ptrace,
+  signal,
+  unix,
+  file,
+  dbus,
+
+  # Tenant-owned storage and its private socket are writable.
+  owner @DATA_ROOT@/** rwklix,
+  @EXEC_ROOT@/** rwklix,
+  @SOCKET@ rwklix,
+
+  # Explicit deny list.  "rwk" only; no "ix" (I1, I2).
+  deny /etc/shadow rwk,
+  deny /etc/gshadow rwk,
+  deny /var/run/docker.sock rwk,
+  deny /run/docker.sock rwk,
+  deny /host/** rwk,
+  # The home of another tenant is never reachable from this container.
+  deny /srv/tenants/*/** rwk,
+}

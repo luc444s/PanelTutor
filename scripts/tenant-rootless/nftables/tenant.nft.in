@@ -1,0 +1,35 @@
+# nftables default-deny firewall for tenant @TENANT@ (A.SPEC 0096).
+# Managed by the HOST operator as root, never by the tenant.
+# The marker comment "spanel-tenant-@TENANT@" is used by runtime preflight to
+# fail closed when the rules are absent (I3, I10, I14).
+table inet spanel_tenant_@TENANT@ {
+  # spanel-tenant-@TENANT@ : preflight marker, do not remove.
+
+  set proxy_ip {
+    type ipv4_addr
+    elements = { @PROXY_IP@ }
+  }
+
+  chain input {
+    type filter hook input priority filter; policy drop;
+
+    # Loopback and established traffic are always allowed.
+    iif "lo" accept
+    ct state established,related accept
+
+    # Only the management proxy may reach this tenant's published ports.
+    ip saddr @proxy_ip tcp dport { @PUBLISHED_PORTS@ } ct state new accept
+
+    # Everything else, including other tenants, is dropped (default-deny).
+    drop
+  }
+
+  chain forward {
+    type filter hook forward priority filter; policy drop;
+
+    # Inter-tenant traffic is never forwarded.
+    ct state established,related accept
+    ip saddr @proxy_ip ip daddr @TENANT_IP@ ct state new accept
+    drop
+  }
+}

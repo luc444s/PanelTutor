@@ -143,6 +143,7 @@ export function ApplicationDetail({ application, deploying, canCreate, canManage
           <div><dt className="text-muted-foreground">{t("Compose")}</dt><dd><ComposeSelector application={current} disabled={pending || busy} /></dd></div>
           <div><dt className="text-muted-foreground">{t("Active commit")}</dt><dd><code>{activeDeployment?.commit ?? "—"}</code></dd></div>
           <div><dt className="text-muted-foreground">{t("Runtime project")}</dt><dd><code>{detail.data?.runtime_project ?? "—"}</code></dd></div>
+          <div><dt className="text-muted-foreground">{t("Isolation profile")}</dt><dd><code>{detail.data?.runtime_profile ?? "hardened"}</code></dd></div>
           <div><dt className="text-muted-foreground">{t("Last deploy")}</dt><dd>{lastDeploy ? new Date(lastDeploy).toLocaleString() : "—"}</dd></div>
         </dl>
         <div className="space-y-2">
