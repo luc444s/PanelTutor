@@ -80,6 +80,7 @@ def test_render_profile_grants_broad_image_agnostic_rootfs() -> None:
                  "/docker-entrypoint-initdb.d/ rwklix,",
                  "/docker-entrypoint-initdb.d/** rwklix,",
                  "/run/mysqld/ rwklix,", "/etc/mysql/ rwklix,",
+                 "/var/lib/postgresql/ rwklix,", "/var/lib/postgresql/** rwklix,",
                  "/home/ rwklix,", "/dev/tty rw,", "/ mrw,"):
         assert rule in profile
     for image_binary in (
@@ -185,6 +186,10 @@ def test_render_profile_keeps_capabilities_ptrace_and_mounts_scoped() -> None:
     )
     # GAP-0105-4: Gitea's bind mount propagates with MS_REC|MS_SLAVE.
     assert "mount options=(rw, rslave) -> /var/lib/spanel/cells/acme/**," in profile
+    assert (
+        "mount options=(rw, rbind) /var/tmp/** -> /var/lib/spanel/cells/acme/**,"
+        in profile
+    )
     assert "pivot_root /var/lib/spanel/cells/acme/**," in profile
     # No wildcard that allows mounting over another cell or the host.
     assert "mount /** -> /," not in profile

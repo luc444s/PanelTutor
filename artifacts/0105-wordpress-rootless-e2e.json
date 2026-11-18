@@ -1,0 +1,129 @@
+{
+  "artifact": "0105-wordpress-rootless-e2e",
+  "spec": "verificacion E2E adicional pedida por el usuario (no A.SPEC nueva)",
+  "subagent": 2,
+  "role": "SOLO laboratorio (sin cambios de codigo fuente, sin GENERATOR, sin parcheos de AppArmor/seccomp, sin commit de codigo)",
+  "date_utc": "2026-11-18T15:22:38Z",
+  "result": "PASS",
+  "commit_under_test": "9b129f9",
+  "despliegue": {
+    "fresh_tar": "tar --exclude __pycache__/*.pyc de scripts/spanel_tenant.py + scripts/tenant_cell; scp; rm -rf /var/tmp/spanel-e2e-0105 y re-extraer; chown -R 1000:1000",
+    "gate": "apparmor_parser -Q sobre render_profile('cell-e2e-wp1') -> rc=0 (10770 bytes)",
+    "cli_help_rc": 0,
+    "doctor_ready": true
+  },
+  "celda": {
+    "slug": "cell-e2e-wp1",
+    "index": 64,
+    "uid": 60064,
+    "state": "ready",
+    "aa_status": "spanel-cell-cell-e2e-wp1 = enforce (verificado con aa-status --json)",
+    "cgroup_driver": "systemd",
+    "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-wp1/cell-seccomp.json",
+    "docker_info": "SecurityOptions: seccomp / Profile: /var/lib/spanel/cells/cell-e2e-wp1/cell-seccomp.json, rootless, Cgroup Driver systemd (WARNING: daemon is not using the default seccomp profile)",
+    "loopback_address": "127.65.1.1",
+    "publish_port": 20064,
+    "relay_port": 40064
+  },
+  "compose": {
+    "project": "e2e0105wp",
+    "file": "/var/tmp/spanel-e2e-0105/wp/compose.yaml",
+    "rc": 0,
+    "services": ["db", "wordpress"],
+    "network": {
+      "name": "e2e0105wp_wpnet",
+      "driver": "bridge",
+      "defined_by": "compose (seccion networks)",
+      "note": "Red bridge privada dentro del daemon rootless. MariaDB NO publica puertos (solo 3306/tcp interno). WordPress publicado unicamente en 127.65.1.1:20064:80. Sin --network host."
+    },
+    "contenedores": [
+      "e2e0105wp-db-1 (mariadb:10.11) Up (healthy) 3306/tcp",
+      "e2e0105wp-wordpress-1 (wordpress:6.4-php8.2-apache) Up 127.65.1.1:20064->80/tcp"
+    ],
+    "imagenes": "docker save del daemon host + docker load en el daemon rootless de la celda (wordpress:6.4-php8.2-apache, mariadb:10.11)",
+    "variables": {
+      "MARIADB_ROOT_PASSWORD": "wp_root_0105 (efimera de laboratorio)",
+      "MARIADB_DATABASE": "wp_e2e",
+      "MARIADB_USER": "wp_user",
+      "MARIADB_PASSWORD": "wp_pass_0105 (efimera de laboratorio)",
+      "WORDPRESS_DB_HOST": "db",
+      "WORDPRESS_DB_NAME": "wp_e2e",
+      "WORDPRESS_DB_USER": "wp_user",
+      "WORDPRESS_DB_PASSWORD": "wp_pass_0105"
+    },
+    "volumen_db": "/var/lib/spanel/cells/cell-e2e-wp1/wpdb:/var/lib/mysql",
+    "config_extra_app": {
+      "valor": "WORDPRESS_CONFIG_EXTRA: define('WP_HTTP_BLOCK_EXTERNAL', true); define('WP_HOME', 'http://wp-e2e.lab:9080'); define('WP_SITEURL', 'http://wp-e2e.lab:9080');",
+      "por_que": "Configuracion de la APP (no de AppArmor/seccomp ni codigo del repo). Con la config por defecto, WordPress tardaba ~6.0s en generar /wp-admin/install.php porque intenta peticiones HTTP externas (api.wordpress.org) en un laboratorio sin salida directa; el relay tiene un timeout de upstream de 5.0s y cerraba la conexion ('Empty reply from server'). Al bloquear las llamadas externas, la pagina tarda 0.83s y pasa por el relay. Ademas fija el site URL al puerto publico 9080 para que el redirect apunte al link correcto.",
+      "es_parche_de_perfil_o_seccomp": false,
+      "observacion_para_el_dueno": "El relay (scripts/tenant_cell/relay.py) mantiene el timeout de 5s en el socket de upstream tras socket.create_connection(); una app con respuesta >5s recibe 'Empty reply from server'. No se modifies en esta ronda (regla: no tocar codigo). Si se quiere robustez, considerar upstream.settimeout(None) despues de conectar."
+    }
+  },
+  "verificacion": {
+    "docker_ps": "ambos contenedores Up (db healthy, wordpress Up)",
+    "db_connectivity_from_wordpress_por_nombre_de_servicio": {
+      "comando": "docker exec e2e0105wp-wordpress-1 php -r '$m=@new mysqli(\"db\",\"wp_user\",\"wp_pass_0105\",\"wp_e2e\"); echo $m->connect_error ? \"DB_ERROR\" : \"DB_OK via service name db\";'",
+      "resultado": "DB_OK via service name db"
+    },
+    "db_logs": "mariadbd: ready for connections. Version: '10.11.19-MariaDB-ubu2204'; Server socket created on 0.0.0.0:3306",
+    "wordpress_logs": "WordPress not found in /var/www/html - copying now... Complete! WordPress has been successfully copied to /var/www/html; wp-config-docker.php copiado; Apache/2.4.57 (Debian) PHP/8.2.17 configured -- resuming normal operations",
+    "curl_loopback_uid1000": {
+      "root": "GET http://127.65.1.1:20064/ -> HTTP 302 -> Location http://127.65.1.1:20064/wp-admin/install.php (comportamiento estandar de WordPress sin instalar)",
+      "installer": "GET -L http://127.65.1.1:20064/ -> HTTP 200, 7547 bytes, title '<title>WordPress &rsaquo; Installation</title>', 4 apariciones de 'WordPress'"
+    },
+    "denied": {
+      "baseline": 220,
+      "new_filtrando_por_slug_y_fsuid": 0,
+      "detalle": "0 entradas DENIED con 'cell-e2e-wp1' o fsuid=60064 antes/despues"
+    }
+  },
+  "publicacion": {
+    "relay_endpoint": {
+      "slug": "cell-e2e-wp1",
+      "loopback_address": "127.65.1.1",
+      "publish_port": 20064,
+      "relay_port": 40064,
+      "bind": "172.25.0.1",
+      "allowed_sources": ["172.25.0.3"]
+    },
+    "relay_listener": "172.25.0.1:40064 -> pid 547039 (uid 1000)",
+    "route_file": "/home/lucas/mailadmin/scripts/traefik-lab/dynamic/spanel-route-0105-wp.yml",
+    "route_marker": "# managed-by: spanel",
+    "route_rule": "Host(`wp-e2e.lab`) || Host(`wp-e2e.lab:9080`) (se amplio para aceptar el Host con puerto que genera el redirect de WordPress)",
+    "entrypoint": "web",
+    "servers_url": "http://172.25.0.1:40064",
+    "hosts_entry": "127.0.0.1 wp-e2e.lab",
+    "traefik_restart": false,
+    "link": "http://wp-e2e.lab:9080/",
+    "verificacion_link": {
+      "curl_exacto": "curl -H 'Host: wp-e2e.lab' http://127.0.0.1:9080/ -> HTTP 302 -> Location http://wp-e2e.lab:9080/wp-admin/install.php (redirect estandar de WordPress a la pagina de instalacion)",
+      "curl_con_L": "curl -L -H 'Host: wp-e2e.lab' http://127.0.0.1:9080/ -> HTTP 200, 7529 bytes, url final http://wp-e2e.lab:9080/wp-admin/install.php",
+      "body_contains_wordpress": 4,
+      "title": "<title>WordPress &rsaquo; Installation</title>",
+      "sha256": "7db71224772cc3f4748c42bafc1960fbe6e5ce7e1a99f88924d738af21947079",
+      "link_real": "http://wp-e2e.lab:9080/ -> HTTP 200 (pagina de instalacion de WordPress)"
+    }
+  },
+  "links_vivos_finales": {
+    "http://rootless-e2e.lab:9080/": 200,
+    "http://editores-e2e.lab:9080/": 200,
+    "http://gitea-e2e.lab:9080/": 200,
+    "http://stack-editores-e2e.lab:9080/": 200,
+    "http://wp-e2e.lab:9080/": 200,
+    "relay_pid": 547039
+  },
+  "integridad": {
+    "source_code_modified": false,
+    "apparmor_o_seccomp_parcheados": false,
+    "generator_run": false,
+    "committed_code": false,
+    "artifact_path": "/data/data/com.termux/files/home/Proyectos/mailadmin/artifacts/0105-wordpress-rootless-e2e.json"
+  },
+  "final_summary": {
+    "resultado": "PASS",
+    "resumen": "WordPress 6.4 + MariaDB 10.11 corriendo en una celda rootless desechable (cell-e2e-wp1, uid 60064) con perfil AppArmor invertido en enforce y seccomp fail-closed, red bridge privada creada por compose, MariaDB sin puertos publicados y WordPress solo en el loopback de la celda. DB alcanzable por nombre de servicio 'db' (DB_OK). Link http://wp-e2e.lab:9080/ publicado por el relay y verificado HTTP 200 con la pagina de instalacion de WordPress. 0 DENIED nuevos. Los otros 4 links siguen 200.",
+    "denied_sin_parchear": 0,
+    "link": "http://wp-e2e.lab:9080/",
+    "nota": "El unico ajuste fue configuracion de la app WordPress (bloquear HTTP externo y fijar site URL al puerto 9080), no un parche de AppArmor, seccomp ni codigo del repo. Se documenta la observacion del timeout de 5s del relay para respuesta de app lenta."
+  }
+}

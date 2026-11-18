@@ -1,0 +1,112 @@
+{
+  "artifact": "0105-pos-rootless-e2e",
+  "spec": "verificacion E2E adicional pedida por el usuario (repo luc444s/pos) - continuacion con workarounds de imagenes",
+  "subagent": 2,
+  "role": "SOLO laboratorio (sin cambios de codigo mailadmin, sin GENERATOR, sin parcheos de AppArmor/seccomp, sin commit)",
+  "date_utc": "2026-11-18T15:46:03Z",
+  "result": "FAIL",
+  "commit_pos_bajo_prueba": "6d3c95138dd917a8deaaae52f692ed0598b12b56 (master)",
+  "commit_mailadmin": "9b129f9",
+  "motivo_fail": "Con las imagenes precargadas, el stack arranco parcialmente (db y redis healthy) pero el contenedor back murio en container init porque AppArmor denego el bind mount de /var/tmp/pos-e2e/src/back a /app (flags rw,rbind). Ademas aparecio un DENIED de open sobre /var/lib/postgresql/. Segun la regla, se reporta FAIL con los datos exactos y NO se parchea el perfil.",
+  "workaround_imagenes_permitido": {
+    "build_root_daemon": "docker compose -f docker-compose.yml -f docker-compose.dev.yml -f build-override.yml --env-file config.env build (en el daemon ROOT del lab, con DNS) -> rc=0; imagenes pos-back:latest, pos-front:latest, pos-ws-bridge:latest",
+    "build_log": "/var/tmp/pos-e2e/build-root.log",
+    "save": "docker save pos-back:latest pos-front:latest pos-ws-bridge:latest -o /var/tmp/pos-e2e/images.tar (1166519296 bytes)",
+    "pull_en_celda": "postgres:18-alpine3.23, redis:7-alpine, haproxy:2.8-alpine (pull OK en el daemon rootless)",
+    "load_en_celda": "docker load -i /var/tmp/pos-e2e/images.tar -> 3 imagenes cargadas",
+    "nota": "Los workarounds fueron SOLO de imagenes, autorizados por el usuario. No se toco ningun perfil ni codigo."
+  },
+  "preparacion": {
+    "cli_deploy": "tar fresco de scripts/spanel_tenant.py + scripts/tenant_cell a /var/tmp/spanel-e2e-0105, chown -R 1000:1000",
+    "gate": "apparmor_parser -Q sobre render_profile('cell-e2e-pos2') -> rc=0 (10808 bytes)",
+    "cli_help_y_doctor": "ok / ready",
+    "baseline_denied": 205,
+    "pos_src": "/var/tmp/pos-e2e/src (clon luc444s/pos, config.env ya creada en ronda anterior)"
+  },
+  "celda": {
+    "slug": "cell-e2e-pos2",
+    "index": 66,
+    "uid": 60066,
+    "provision_rc": 0,
+    "state": "ready",
+    "aa_status": "spanel-cell-cell-e2e-pos2 = enforce (verificado antes del fallo)",
+    "cgroup_driver": "systemd",
+    "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-pos2/cell-seccomp.json",
+    "docker_info": "SecurityOptions: seccomp / Profile: /var/lib/spanel/cells/cell-e2e-pos2/cell-seccomp.json, rootless, Cgroup Driver systemd",
+    "loopback_address": "127.67.1.1",
+    "publish_port": 20066,
+    "relay_port": 40066,
+    "cleanup": "celda fallida retirada (tombstone), usuario/linger/subuid/subgid/dirs/perfil/unidad eliminados"
+  },
+  "compose_runtime": {
+    "override_file": "/var/tmp/pos-e2e/runtime-override.yml",
+    "override_resumen": "build: !reset null + image: en back/front/ws-bridge; ports: !override [] en db y redis; haproxy ports: !override 127.67.1.1:20066:4202",
+    "comando": "docker compose -p pos_e2e_0105b -f docker-compose.yml -f docker-compose.dev.yml -f /var/tmp/pos-e2e/runtime-override.yml --env-file config.env up -d (SIN --build)",
+    "config_rc": 0,
+    "merged_config_verificado": "6 servicios, 0 claves build, images pos-back/pos-front/pos-ws-bridge + postgres:18-alpine3.23 + redis:7-alpine + haproxy:2.8-alpine, unico puerto publicado 127.67.1.1:20066->4202, red pos2_net",
+    "up_rc": 1,
+    "up_log": "/var/tmp/pos-e2e/up-pos2.log"
+  },
+  "estado_servicios": {
+    "db": "Up (healthy)",
+    "redis": "Up (healthy)",
+    "back": "Created - murio en container init (mount denied)",
+    "ws-bridge": "Created (no arranco; depende de back/redis)",
+    "front": "Created (no arranco; depende de back/db/redis/ws-bridge)",
+    "haproxy": "Created (no arranco; depende de front/back/ws-bridge)",
+    "total_up": "2/6"
+  },
+  "denied_nuevos": {
+    "baseline": 205,
+    "total": 2,
+    "lineas_exactas": [
+      "[1384852.008656] audit: type=1400 apparmor=\"DENIED\" operation=\"open\" class=\"file\" profile=\"spanel-cell-cell-e2e-pos2\" name=\"/var/lib/postgresql/\" pid=2043385 comm=\"bash\" requested_mask=\"r\" denied_mask=\"r\" fsuid=60066 ouid=4450981",
+      "[1384862.668127] audit: type=1400 apparmor=\"DENIED\" operation=\"mount\" class=\"mount\" info=\"failed flags match\" error=-13 profile=\"spanel-cell-cell-e2e-pos2\" name=\"/var/lib/spanel/cells/cell-e2e-pos2/rootfs/overlayfs/.../app/\" pid=2044208 comm=\"runc:[2:INIT]\" srcname=\"/var/tmp/pos-e2e/src/back/\" flags=\"rw, rbind\""
+    ],
+    "interpretacion": "La regla mount del perfil invertido no cubre el bind de un directorio fuera del arbol /var/lib/spanel/cells/<slug>/** (aqui /var/tmp/pos-e2e/src/back -> /app) con flags rw,rbind. La regla de open sobre /var/lib/postgresql/ (ouid=4450981, subuid) tampoco esta cubierta; fue no fatal (db quedo healthy) pero es un DENIED nuevo."
+  },
+  "error_runtime_exacto": "Error response from daemon: failed to create task for container: failed to create shim task: OCI runtime create failed: runc create failed: unable to start container process: error during container init: error mounting \"/var/tmp/pos-e2e/src/back\" to rootfs at \"/app\": mount src=/var/tmp/pos-e2e/src/back, dst=/app, dstFd=/proc/thread-self/fd/11, flags=MS_BIND|MS_REC: permission denied",
+  "verificacion_no_realizada": {
+    "health_back_ws_front": "no ejecutable (back caido, dependientes no arrancaron)",
+    "red_interna_por_nombre_de_servicio": "no ejecutable mas alla de db/redis healthy",
+    "curl_pos": "no ejecutable",
+    "link_pos": null,
+    "route_yaml_creado": false,
+    "hosts_entry_creado": false,
+    "nota": "No se publico pos-e2e.lab: sin servicio vivo, publicarlo seria inventar exito."
+  },
+  "links_vivos_finales": {
+    "http://rootless-e2e.lab:9080/": {"raw": 200, "followed": 200},
+    "http://editores-e2e.lab:9080/": {"raw": 200, "followed": 200},
+    "http://gitea-e2e.lab:9080/": {"raw": 200, "followed": 200},
+    "http://stack-editores-e2e.lab:9080/": {"raw": 200, "followed": 200},
+    "http://wp-e2e.lab:9080/": {"raw": 301, "followed": 200, "nota": "redirect estandar de WordPress a /wp-admin/install.php; link vivo"},
+    "relay_pid": 547039,
+    "relay_intacto": true
+  },
+  "prohibidos_intocados": [
+    "cell-g",
+    "cell-h",
+    "Traefik (config estatica / restart)",
+    "phpMyAdmin",
+    "MariaDB del host",
+    "WordPress del host",
+    "produccion vmi3461574",
+    "/opt/stacks"
+  ],
+  "integridad": {
+    "source_code_mailadmin_modificado": false,
+    "apparmor_o_seccomp_parcheados": false,
+    "generator_run": false,
+    "committed_code": false,
+    "artifact_path": "/data/data/com.termux/files/home/Proyectos/mailadmin/artifacts/0105-pos-rootless-e2e.json"
+  },
+  "final_summary": {
+    "resultado": "FAIL",
+    "resumen": "El workaround de imagenes funciono (build en daemon root + load en la celda) y la topologia compose era correcta, pero aparecieron 2 DENIED nuevos de AppArmor: el fatal es el bind mount de /var/tmp/pos-e2e/src/back -> /app (flags rw,rbind) que impide arrancar el servicio back; el otro es open /var/lib/postgresql/. Solo 2/6 servicios quedaron Up. No se parcheo nada: se reporta FAIL con el dato exacto para correccion en codigo.",
+    "siguiente_paso_para_el_dueno": "Ampliar el perfil AppArmor generado para (1) permitir binds rw,rbind de los build contexts del tenant hacia el rootfs de la celda y (2) cubrir /var/lib/postgresql/ (y similares datadirs de imagen con subuid); verificar con apparmor_parser -Q y repetir E2E.",
+    "link_pos": null,
+    "denied_sin_parchear": 2,
+    "links_0104_y_0105_alive": true
+  }
+}
