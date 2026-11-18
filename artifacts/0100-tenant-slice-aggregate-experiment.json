@@ -1,0 +1,69 @@
+{
+  "artifact": "0100-tenant-slice-aggregate-experiment",
+  "date": "2026-11-17",
+  "scope": "experimento de laboratorio, slice tenant-lab.slice. NO se modificaron WordPress, MariaDB, phpMyAdmin, Traefik, cell-g ni cell-h.",
+  "goal": "Validar que un slice personalizado de systemd puede agregar límites de recursos de contenedores rootful y de un user manager rootless bajo un mismo ancestro, respetando la jerarquía por defecto (el slice apareció automáticamente bajo tenant.slice).",
+  "slice": {
+    "unit": "/etc/systemd/system/tenant-lab.slice",
+    "control_group": "/tenant.slice/tenant-lab.slice",
+    "properties": "MemoryMax=512M (536870912), CPUQuota=50% (cpu.max '50000 100000'), TasksMax=128",
+    "note": "systemd colocó el slice personalizado bajo tenant.slice automáticamente; no se movió user.slice ni se creó una jerarquía artificial."
+  },
+  "rootful_side": {
+    "command": "docker run -d --name tenant-slice-probe --cgroup-parent=tenant-lab.slice alpine sleep 300",
+    "container_cgroup": "/tenant.slice/tenant-lab.slice/docker-<id>.scope",
+    "container_own_limits": "memory.max=max, cpu.max='max 100000', pids.max=7811 (no se pidieron límites propios)",
+    "aggregate_enforcement": {
+      "cpu": "busy-loop 3s: usage_usec delta 1542875 (~0.51 vCPU) — CPUQuota del slice aplicado",
+      "memory": "asignación de 1GiB: memory.events max=32894, memory.current se mantuvo en ~466944 B (estrangulamiento, sin OOM por swap) — MemoryMax del slice aplicado",
+      "pids": "fork de 150 procesos: 'Resource temporarily unavailable', pids.current=127 con pids.max=128 — TasksMax del slice aplicado"
+    }
+  },
+  "rootless_side": {
+    "setup": "usuario de prueba tenantlab uid/gid 61000 con linger; drop-in /etc/systemd/system/user@61000.service.d/tenant-slice.conf con Slice=tenant-lab.slice; unidad de usuario tenantlab-probe.service (sleep infinity)",
+    "user_manager_control_group": "/tenant.slice/tenant-lab.slice/user@61000.service",
+    "user_process_cgroup": "/tenant.slice/tenant-lab.slice/user@61000.service/app.slice/tenantlab-probe.service",
+    "aggregate_enforcement": {
+      "cpu": "systemd-run --user --scope con busy-loop 3s: slice usage_usec delta 1546675 (~0.515 vCPU) — el proceso rootless carga al mismo slice"
+    }
+  },
+  "round2": {
+    "objective": "Cerrar dos huecos: (1) cargas rootful y rootless CONCURRENTES no pueden superar juntas el presupuesto; (2) medición de memoria consistente con el proceso vivo.",
+    "cpu_concurrency": {
+      "setup": "Mismo slice, CPUQuota=50%. Contenedor rootful python:3.12-alpine bajo --cgroup-parent y scope rootless bajo user@61000.service, con busy-loops simultáneos.",
+      "rootless_alone_3s_usec": 1521365,
+      "rootful_alone_3s_usec": 1552449,
+      "both_concurrent_4s_slice_usec": 2182923,
+      "expected_if_half_vcpu": "~2000000 us en 4s; si no hubiera agregación serían ~4000000 us",
+      "per_scope_during_overlap_usec": {"rootless": 745561, "rootful": 745611},
+      "verdict": "El consumo conjunto se mantuvo en ~0.55 vCPU, no 1.0. Cada scope recibió aproximadamente la mitad. Ambos scopes existieron y estuvieron activos al mismo tiempo."
+    },
+    "memory_consistent_sampling": {
+      "setup": "Dos asignadores Python (uno en el contenedor rootful, otro en un scope del user manager) que escriben todas las páginas y mantienen la asignación mientras se muestrea el cgroup del slice.",
+      "balanced_run_220M_each": {
+        "slice_memory_current": 503111680,
+        "rootful_scope_current": 247263232,
+        "rootless_scope_current": 239636480,
+        "memory_peak": 536870912,
+        "memory_swap_current": 45056,
+        "memory_events_local_max": 432,
+        "oom_kill": 0,
+        "process_states": "ambos State:S (sleeping) sosteniendo la asignación",
+        "verdict": "Ambos lados se contabilizan en el mismo ancestro: la suma de los scopes explica el memory.current del slice. Ya no es una medición posterior a la carga."
+      },
+      "overload_run_300M_each": {
+        "slice_memory_current": [503128064, 536776704, 536719360],
+        "memory_peak": 536870912,
+        "memory_swap_current": [45056, 110977024, 123850752],
+        "memory_events_local_max": [432, 1050, 1089],
+        "oom_kill": 0,
+        "process_states": "State:R (running) durante la asignación, luego State:S (sleeping) reteniendo memoria",
+        "verdict": "Con más de 512 MiB solicitados, memory.current se topó en el límite, swap.current creció a ~118 MiB y memory.events.local.max subió a 1089 sin OOM-kill: estrangulamiento medible con los procesos vivos."
+      }
+    },
+    "note": "Los primeros intentos fallaron por dos causas de instrumentación: un atajo de shell con variable no ejecutaba el systemd-run rootless, y systemd-run --scope bloquea salvo que se agrupe en background (o se use --no-block). Las cifras finales usan el patrón correcto y scopes verificados vía cgroup.procs."
+  },
+  "conclusion": "La opción 2 es viable: contenedores rootful (--cgroup-parent) y procesos de un user manager rootless (Slice= drop-in) pueden compartir un slice personalizado con MemoryMax/CPUQuota/TasksMax, y el kernel aplica los límites agregados a ambos, INCLUSO con cargas concurrentes. No hizo falta modificar la jerarquía por defecto de user.slice.",
+  "next_steps": "Definir A.SPEC 0100 del plan por tenant (CLI plan set/show, enforcement, admission control) en el plugin host spanel/Apps, con tests, sin tocar systutor-core. Fase futura: migrar WP/MariaDB/phpMyAdmin a rootless (opción 1).",
+  "cleanup": "Contenedores de prueba, usuario tenantlab, drop-in, unidad de usuario y tenant-lab.slice eliminados al finalizar ambas rondas; verificado: Traefik, phpMyAdmin y MariaDB siguen Up, slice inactive, uid 61000 eliminado y solo user@1000/user@60008 activos. Evidencia conservada en este archivo y en /home/lucas/tenant-slice-experiment-20261117/ en el lab."
+}

@@ -22,9 +22,11 @@ from scripts.tenant_cell.cells import (
     CellNotFound,
     CellService,
     Executor,
+    MigrationVerificationFailed,
     ProvisionRefused,
 )
 from scripts.tenant_cell.doctor import HostProbe
+from scripts.tenant_cell.executor import DELEGATE_CONTROLLERS, systemd_unit
 
 # Real uid_map from the host: inner UID 0 maps to the cell's real UID (60000),
 # NOT to the first subuid -- the mapping must be observed, never assumed.
@@ -81,6 +83,12 @@ class FakeProbe(HostProbe):
             return "netns"
         return "none"
 
+    def service_main_pid(self, slug: str) -> int:
+        return 4242
+
+    def user_service_main_pid(self, slug: str, uid: int) -> int:
+        return 4242
+
     def profile_effective(self, pid: int, profile: str) -> bool:
         return bool(self.effective)
 
@@ -116,8 +124,13 @@ class FakeExecutor(Executor):
     def ensure_user_manager(self, name, uid):
         self._rec("ensure_user_manager", name=name, uid=uid)
 
-    def write_daemon_config(self, cell_dir, uid, gid):
-        self._rec("write_daemon_config", cell_dir=cell_dir, uid=uid, gid=gid)
+    def write_daemon_config(self, cell_dir, uid, gid, driver="cgroupfs"):
+        self._rec(
+            "write_daemon_config", cell_dir=cell_dir, uid=uid, gid=gid, driver=driver
+        )
+
+    def ensure_delegation(self):
+        self._rec("ensure_delegation")
 
     def install_profile(self, name, content):
         self._rec("install_profile", name=name, content=content)
@@ -125,15 +138,56 @@ class FakeExecutor(Executor):
     def apply_network(self, spec):
         self._rec("apply_network", spec=spec)
 
-    def install_systemd_unit(self, slug, uid, cgroup_path):
-        self._rec("install_systemd_unit", slug=slug, uid=uid, cgroup_path=cgroup_path)
+    def install_systemd_unit(self, slug, uid, cgroup_path, driver="cgroupfs"):
+        self._rec(
+            "install_systemd_unit", slug=slug, uid=uid, cgroup_path=cgroup_path,
+            driver=driver,
+        )
 
-    def start_daemon(self, slug):
-        self._rec("start_daemon", slug=slug)
+    def start_daemon(self, slug, uid=0, driver="cgroupfs"):
+        self._rec("start_daemon", slug=slug, uid=uid, driver=driver)
         return self.pid
 
-    def stop_daemon(self, slug):
-        self._rec("stop_daemon", slug=slug)
+    def stop_daemon(self, slug, uid=0, driver="cgroupfs"):
+        self._rec("stop_daemon", slug=slug, uid=uid, driver=driver)
+
+    def install_user_unit(self, slug, uid, cgroup_path):
+        self._rec("install_user_unit", slug=slug, uid=uid, cgroup_path=cgroup_path)
+
+    def remove_user_unit(self, slug, uid):
+        self._rec("remove_user_unit", slug=slug, uid=uid)
+
+    def start_user_daemon(self, slug, uid):
+        self._rec("start_user_daemon", slug=slug, uid=uid)
+        return self.pid
+
+    def stop_user_daemon(self, slug, uid):
+        self._rec("stop_user_daemon", slug=slug, uid=uid)
+
+    def user_daemon_pid(self, slug, uid):
+        return self.pid
+
+    def backup_files(self, slug, files, backup_dir):
+        self._rec("backup_files", slug=slug, files=files, backup_dir=backup_dir)
+        return {path: f"{backup_dir}/{path.split('/')[-1]}" for path in files}
+
+    def restore_files(self, saved):
+        self._rec("restore_files", saved=saved)
+
+    def run_limit_probe(self, slug, uid):
+        self._rec("run_limit_probe", slug=slug, uid=uid)
+        return {
+            "ok": True,
+            "slug": slug,
+            "driver": "systemd",
+            "cgroup_path": "/user.slice/user-60000.slice/user@60000.service/x.scope",
+            "memory_max": "134217728",
+            "cpu_max": "50000 100000",
+            "pids_max": "64",
+            "cpu_delta_usec": 1_500_000,
+            "memory_throttled": True,
+            "pids_current": 63,
+        }
 
     def remove_network(self, spec):
         self._rec("remove_network", spec=spec)
@@ -141,8 +195,8 @@ class FakeExecutor(Executor):
     def remove_profile(self, name):
         self._rec("remove_profile", name=name)
 
-    def remove_systemd_unit(self, slug):
-        self._rec("remove_systemd_unit", slug=slug)
+    def remove_systemd_unit(self, slug, uid=0, driver="cgroupfs"):
+        self._rec("remove_systemd_unit", slug=slug, uid=uid, driver=driver)
 
     def names(self) -> list[str]:
         return [name for name, _ in self.calls]
@@ -187,7 +241,12 @@ def test_provision_creates_cell_with_host_observed_uid_map(tmp_path) -> None:
     assert result["apparmor"]["profile"] == "spanel-cell-acme"
     assert result["apparmor"]["hash"] == apparmor.profile_hash("acme")
     assert result["apparmor"]["effective"] is True
-    assert result["cgroup_path"] == "/system.slice/spanel-cell-acme.scope"
+    # A.SPEC 0099: new cells use the systemd driver and a user-unit scope.
+    assert result["cgroup_driver"] == "systemd"
+    assert result["cgroup_path"] == (
+        "/user.slice/user-60000.slice/user@60000.service/"
+        "user.slice/spanel-cell-acme.scope"
+    )
     # The socket is created by the cell user path, never the global docker.sock.
     assert "/var/run/docker.sock" not in result["socket_path"]
     assert "ensure_user" in executor.names()
@@ -359,7 +418,13 @@ def test_network_spec_targets_dedicated_loopback_and_skuid() -> None:
 
 
 def test_cell_is_degraded_when_daemon_failed_to_start(tmp_path) -> None:
-    svc, _, _ = _service(tmp_path, executor=FakeExecutor(pid=0))
+    class DeadUserManager(FakeProbe):
+        def user_service_main_pid(self, slug: str, uid: int) -> int:
+            return 0
+
+    svc, _, _ = _service(
+        tmp_path, executor=FakeExecutor(pid=0), probe=DeadUserManager()
+    )
 
     result = svc.provision("acme")
 
@@ -487,3 +552,141 @@ def test_netns_fallback_when_probe_reports_no_skuid(tmp_path) -> None:
     )
     assert applied_spec["mode"] == "netns"
     assert applied_spec["netns"] == "spanel-acme"
+
+
+# --- A.SPEC 0099: systemd cgroup driver -------------------------------------
+
+
+def test_new_cell_defaults_to_systemd_driver_and_user_unit(tmp_path) -> None:
+    svc, _, executor = _service(tmp_path)
+
+    result = svc.provision("acme")
+
+    assert result["cgroup_driver"] == "systemd"
+    assert "ensure_delegation" in executor.names()
+    config = next(
+        kw for name, kw in executor.calls if name == "write_daemon_config"
+    )
+    assert config["driver"] == "systemd"
+    unit_kw = next(
+        kw for name, kw in executor.calls if name == "install_systemd_unit"
+    )
+    assert unit_kw["driver"] == "systemd"
+    start_kw = next(kw for name, kw in executor.calls if name == "start_daemon")
+    assert start_kw["driver"] == "systemd"
+
+
+def test_systemd_unit_template_uses_user_bus_and_aa_exec() -> None:
+    unit = systemd_unit("acme", 60000, "/some/path", "systemd")
+
+    assert "AppArmorProfile=" not in unit  # a user manager cannot set it
+    assert "User=" not in unit
+    assert "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/60000/bus" in unit
+    assert "XDG_RUNTIME_DIR=/run/user/60000" in unit
+    assert "/usr/bin/aa-exec -p spanel-cell-acme -- /usr/bin/dockerd-rootless.sh" in unit
+    assert "native.cgroupdriver" not in unit  # driver lives in daemon.json
+    assert "WantedBy=default.target" in unit
+
+
+def test_legacy_unit_template_is_unchanged() -> None:
+    unit = systemd_unit("acme", 60000, "/some/path", "cgroupfs")
+
+    assert "User=spanel-acme" in unit
+    assert "AppArmorProfile=spanel-cell-acme" in unit
+    assert "WantedBy=multi-user.target" in unit
+
+
+def test_apparmor_profile_has_systemd_rules_without_format_placeholders() -> None:
+    profile = apparmor.render_profile("acme")
+
+    assert "dbus (send, receive) bus=session," in profile
+    assert "bus=system" not in profile  # only the user/session bus is granted
+    assert "/proc/[0-9]*/sessionid r," in profile
+    assert "user@[0-9]*.service/** rwkl," in profile
+    assert "/proc/[0-9]*/stat r," in profile
+    assert "/proc/[0-9]*/cmdline r," in profile
+
+
+def test_doctor_accepts_explicit_delegate_controllers() -> None:
+    from scripts.tenant_cell.doctor import delegate_controllers_ok
+
+    assert delegate_controllers_ok("[Service]\nDelegate=yes\n") is True
+    assert delegate_controllers_ok("[Service]\nDelegate=cpu cpuset io memory pids\n") is True
+    assert delegate_controllers_ok("[Service]\nDelegate=pids memory cpu\n") is False
+    assert delegate_controllers_ok("[Service]\nDelegate=no\n") is False
+
+
+def _legacy_cell(tmp_path) -> None:
+    alloc.allocate(str(tmp_path), "acme")
+    alloc.update_allocation(
+        str(tmp_path), "acme", cgroup_driver="cgroupfs", state="ready"
+    )
+
+
+def test_repair_does_not_downgrade_a_systemd_cell(tmp_path) -> None:
+    svc, _, executor = _service(tmp_path)
+    svc.provision("acme")
+    executor.calls.clear()
+
+    result = svc.repair("acme")
+
+    assert result["cgroup_driver"] == "systemd"
+    config = next(
+        kw for name, kw in executor.calls if name == "write_daemon_config"
+    )
+    assert config["driver"] == "systemd"
+
+
+def test_migrate_legacy_cell_verifies_limits(tmp_path) -> None:
+    _legacy_cell(tmp_path)
+    svc, _, executor = _service(tmp_path)
+
+    result = svc.migrate("acme", "systemd")
+
+    assert result["cgroup_driver"] == "systemd"
+    assert result["migration"]["from"] == "cgroupfs"
+    assert result["migration"]["verification"]["ok"] is True
+    assert "run_limit_probe" in executor.names()
+    assert "backup_files" in executor.names()
+    record = audit.read_audit(tmp_path)[-1]
+    assert record["verb"] == "migrate"
+    assert record["exit_code"] == 0
+
+
+def test_migrate_rolls_back_when_kernel_limits_are_not_applied(tmp_path) -> None:
+    _legacy_cell(tmp_path)
+
+    class FailingProbe(FakeExecutor):
+        def run_limit_probe(self, slug, uid):
+            self._rec("run_limit_probe", slug=slug, uid=uid)
+            return {"ok": False, "error": "limits not applied"}
+
+    svc, _, executor = _service(tmp_path, executor=FailingProbe())
+
+    with pytest.raises(MigrationVerificationFailed):
+        svc.migrate("acme", "systemd")
+
+    assert alloc.cgroup_driver(
+        alloc.load_registry(tmp_path)["allocations"]["acme"]
+    ) == "cgroupfs"
+    assert "restore_files" in executor.names()
+    assert "start_daemon" in executor.names()
+    record = audit.read_audit(tmp_path)[-1]
+    assert record["exit_code"] == 1
+    assert record["rolled_back"] is True
+
+
+def test_verify_limits_is_refused_for_legacy_cells(tmp_path) -> None:
+    _legacy_cell(tmp_path)
+    svc, _, executor = _service(tmp_path)
+
+    result = svc.verify_limits("acme")
+
+    assert result["ok"] is False
+    assert "run_limit_probe" not in executor.names()
+
+
+def test_delegate_controllers_cover_the_five_required() -> None:
+    assert set(DELEGATE_CONTROLLERS.split()) == {
+        "cpu", "cpuset", "io", "memory", "pids"
+    }

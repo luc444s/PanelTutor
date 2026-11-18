@@ -16,8 +16,21 @@ import time
 from pathlib import Path
 from typing import Any
 
+from .alloc import DEFAULT_CGROUP_DRIVER, LEGACY_CGROUP_DRIVER
+
 _SYSTEMD_DIR = Path("/etc/systemd/system")
+_USER_SYSTEMD_DIR = Path("/etc/systemd/user")
+_DELEGATE_CONF = _SYSTEMD_DIR / "user@.service.d" / "delegate.conf"
 _CELL_ROOT = "/var/lib/spanel/cells"
+
+# A.SPEC 0099: the user manager must be able to hand these controllers to the
+# cell's dockerd. systemd 255 keeps its own payload in DelegateSubgroup=init.scope
+# so the user@ service cgroup stays empty (cgroup v2 no-internal-process rule).
+DELEGATE_CONTROLLERS = "cpu cpuset io memory pids"
+PROBE_CONTAINER = "spanel-cgroup-probe"
+PROBE_MEMORY = 128 * 1024 * 1024
+PROBE_NANO_CPUS = 500_000_000
+PROBE_PIDS_LIMIT = 64
 
 
 class Executor:
@@ -40,13 +53,56 @@ class Executor:
     def apply_network(self, spec: dict[str, Any]) -> None:
         raise NotImplementedError
 
-    def install_systemd_unit(self, slug: str, uid: int, cgroup_path: str) -> None:
+    def install_systemd_unit(
+        self,
+        slug: str,
+        uid: int,
+        cgroup_path: str,
+        driver: str = LEGACY_CGROUP_DRIVER,
+    ) -> None:
         raise NotImplementedError
 
     def start_daemon(self, slug: str) -> int:
         raise NotImplementedError
 
-    def stop_daemon(self, slug: str) -> None:
+    def stop_daemon(
+        self,
+        slug: str,
+        uid: int = 0,
+        driver: str = LEGACY_CGROUP_DRIVER,
+    ) -> None:
+        raise NotImplementedError
+
+    # A.SPEC 0099 additions. Default implementations raise so an executor that
+    # does not support the systemd layout fails loudly instead of silently
+    # writing the wrong driver to disk.
+    def ensure_delegation(self) -> None:
+        raise NotImplementedError
+
+    def install_user_unit(self, slug: str, uid: int, cgroup_path: str) -> None:
+        raise NotImplementedError
+
+    def remove_user_unit(self, slug: str, uid: int) -> None:
+        raise NotImplementedError
+
+    def start_user_daemon(self, slug: str, uid: int) -> int:
+        raise NotImplementedError
+
+    def stop_user_daemon(self, slug: str, uid: int) -> None:
+        raise NotImplementedError
+
+    def user_daemon_pid(self, slug: str, uid: int) -> int:
+        raise NotImplementedError
+
+    def backup_files(
+        self, slug: str, files: list[str], backup_dir: str
+    ) -> dict[str, str]:
+        raise NotImplementedError
+
+    def restore_files(self, saved: dict[str, str]) -> None:
+        raise NotImplementedError
+
+    def run_limit_probe(self, slug: str, uid: int) -> dict[str, Any]:
         raise NotImplementedError
 
     def remove_network(self, spec: dict[str, Any]) -> None:
@@ -55,18 +111,60 @@ class Executor:
     def remove_profile(self, name: str) -> None:
         raise NotImplementedError
 
-    def remove_systemd_unit(self, slug: str) -> None:
+    def remove_systemd_unit(
+        self,
+        slug: str,
+        uid: int = 0,
+        driver: str = LEGACY_CGROUP_DRIVER,
+    ) -> None:
         raise NotImplementedError
 
 
-def systemd_unit(slug: str, uid: int, cgroup_path: str) -> str:
-    """Render the systemd unit for one cell (fixed template, validated slug)."""
+def systemd_unit(
+    slug: str,
+    uid: int,
+    cgroup_path: str,
+    driver: str = LEGACY_CGROUP_DRIVER,
+) -> str:
+    """Render the cell unit for the requested cgroup driver (validated slug).
+
+    ``cgroupfs`` keeps the legacy system unit. ``systemd`` renders a user unit:
+    the daemon runs inside ``user@<uid>.service`` so its cgroup has no internal
+    processes and the delegated controllers can be handed to container scopes.
+    """
     from .alloc import validate_slug
 
     slug = validate_slug(slug)
     name = f"spanel-{slug}"
     cell_dir = f"{_CELL_ROOT}/{slug}"
     socket = f"{cell_dir}/docker.sock"
+    if driver == DEFAULT_CGROUP_DRIVER:
+        # AppArmor is attached with aa-exec: a user manager cannot use the
+        # system unit's AppArmorProfile= directive. The user bus lets runc read
+        # OwnerUID (rootless detection) and create scopes via systemd.
+        return (
+            "[Unit]\n"
+            f"Description=Spanel rootless Docker cell {slug} (user unit)\n"
+            "After=network.target\n"
+            "\n"
+            "[Service]\n"
+            "Type=simple\n"
+            "Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin\n"
+            f"Environment=XDG_RUNTIME_DIR=/run/user/{uid}\n"
+            f"Environment=DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/{uid}/bus\n"
+            f"Environment=DOCKER_HOST=unix://{socket}\n"
+            "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_DETACH_NETNS=false\n"
+            "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_SLIRP4NETNS_SANDBOX=false\n"
+            f"ExecStart=/usr/bin/aa-exec -p spanel-cell-{slug} -- "
+            "/usr/bin/dockerd-rootless.sh "
+            f"--data-root {cell_dir} "
+            f"--host unix://{socket} --config-file={cell_dir}/daemon.json "
+            "--iptables=false --ip6tables=false\n"
+            "Restart=on-failure\n"
+            "\n"
+            "[Install]\n"
+            "WantedBy=default.target\n"
+        )
     return (
         "[Unit]\n"
         f"Description=Spanel rootless Docker cell {slug}\n"
@@ -170,12 +268,213 @@ class LocalExecutor(Executor):
                 return
             time.sleep(0.5)
 
-    def write_daemon_config(self, cell_dir: str, uid: int, gid: int) -> None:
-        # systemd cgroup driver needs the system dbus, which the cell user
-        # cannot reach; cgroupfs writes directly into its delegated slice.
-        config = '{"exec-opts": ["native.cgroupdriver=cgroupfs"]}\n'
+    def write_daemon_config(
+        self,
+        cell_dir: str,
+        uid: int,
+        gid: int,
+        driver: str = LEGACY_CGROUP_DRIVER,
+    ) -> None:
+        # A.SPEC 0099: cgroupfs silently ignores container limits on cgroup v2
+        # when the daemon lives in a cgroup that already has processes. The
+        # systemd driver is used together with the user unit and the user bus.
+        config = f'{{"exec-opts": ["native.cgroupdriver={driver}"]}}\n'
         self._write_file_once(Path(cell_dir) / "daemon.json", config)
         self._run(["chown", f"{uid}:{gid}", f"{cell_dir}/daemon.json"])
+
+    def ensure_delegation(self) -> None:
+        """Host-wide, idempotent controller delegation for user managers."""
+        self._write_file_once(
+            _DELEGATE_CONF, f"[Service]\nDelegate={DELEGATE_CONTROLLERS}\n"
+        )
+
+    def install_user_unit(self, slug: str, uid: int, cgroup_path: str) -> None:
+        path = _USER_SYSTEMD_DIR / f"spanel-cell-{slug}.service"
+        self._write_file_once(
+            path, systemd_unit(slug, uid, cgroup_path, DEFAULT_CGROUP_DRIVER)
+        )
+        self._run_user(uid, ["systemctl", "--user", "daemon-reload"])
+        self._run_user(uid, ["systemctl", "--user", "enable", f"spanel-cell-{slug}"])
+
+    def remove_user_unit(self, slug: str, uid: int) -> None:
+        unit = f"spanel-cell-{slug}"
+        self._run_user(uid, ["systemctl", "--user", "disable", unit])
+        self._ensure_gate()
+        (_USER_SYSTEMD_DIR / f"{unit}.service").unlink(missing_ok=True)
+        self._run_user(uid, ["systemctl", "--user", "daemon-reload"])
+
+    def _user_env(self, uid: int) -> dict[str, str]:
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{uid}/bus"
+        return env
+
+    def _run_user(self, uid: int, argv: list[str], **kwargs: Any) -> Any:
+        self._ensure_gate()
+        return subprocess.run(
+            argv, env=self._user_env(uid), text=True, check=False, **kwargs
+        )
+
+    def start_user_daemon(self, slug: str, uid: int) -> int:
+        unit = f"spanel-cell-{slug}"
+        self._run_user(uid, ["systemctl", "--user", "start", unit])
+        for _ in range(30):
+            active = self._run_user(
+                uid, ["systemctl", "--user", "is-active", "--quiet", unit]
+            )
+            pid = self.user_daemon_pid(slug, uid)
+            if active.returncode == 0 and pid > 0:
+                return pid
+            time.sleep(0.5)
+        return 0
+
+    def stop_user_daemon(self, slug: str, uid: int) -> None:
+        self._run_user(
+            uid, ["systemctl", "--user", "stop", f"spanel-cell-{slug}"]
+        )
+
+    def user_daemon_pid(self, slug: str, uid: int) -> int:
+        result = self._run_user(
+            uid,
+            [
+                "systemctl", "--user", "show", "-p", "MainPID", "--value",
+                f"spanel-cell-{slug}",
+            ],
+            capture_output=True,
+        )
+        try:
+            return int(result.stdout.strip())
+        except (ValueError, AttributeError):
+            return 0
+
+    def run_limit_probe(self, slug: str, uid: int) -> dict[str, Any]:
+        """Run a bounded container with limits and read the *kernel* cgroup.
+
+        This is the acceptance gate for a systemd-driver migration: ``docker
+        run`` returning 0 is not enough. Everything is cleaned up in ``finally``.
+        """
+        socket = f"{_CELL_ROOT}/{slug}/docker.sock"
+        env = dict(os.environ)
+        env["DOCKER_HOST"] = f"unix://{socket}"
+
+        def docker(argv: list[str], stdin: str | None = None) -> Any:
+            return subprocess.run(
+                ["docker", *argv],
+                env=env,
+                input=stdin,
+                text=True,
+                capture_output=True,
+                check=False,
+                timeout=90,
+            )
+
+        def cgroup_file(path: Path, name: str) -> str:
+            try:
+                return (path / name).read_text(encoding="utf-8").strip()
+            except OSError:
+                return ""
+
+        evidence: dict[str, Any] = {"slug": slug, "driver": "systemd"}
+        docker(["rm", "-f", PROBE_CONTAINER])
+        try:
+            started = docker([
+                "run", "-d", "--name", PROBE_CONTAINER,
+                "--memory", "128m", "--cpus", "0.5", "--pids-limit", "64",
+                "alpine", "sleep", "300",
+            ])
+            if started.returncode:
+                evidence.update(ok=False, error=(started.stderr or started.stdout)[:400])
+                return evidence
+            pid_s = docker(["inspect", "-f", "{{.State.Pid}}", PROBE_CONTAINER]).stdout.strip()
+            try:
+                pid = int(pid_s)
+            except ValueError:
+                evidence.update(ok=False, error=f"bad container pid: {pid_s!r}")
+                return evidence
+            raw = Path(f"/proc/{pid}/cgroup").read_text(encoding="utf-8")
+            cgroup = next(
+                (line.split(":", 2)[2] for line in raw.splitlines() if line.startswith("0::")),
+                "",
+            )
+            path = Path("/sys/fs/cgroup") / cgroup.lstrip("/")
+            evidence["cgroup_path"] = cgroup
+            evidence["memory_max"] = cgroup_file(path, "memory.max")
+            evidence["cpu_max"] = cgroup_file(path, "cpu.max")
+            evidence["pids_max"] = cgroup_file(path, "pids.max")
+
+            def usage_usec() -> int:
+                text = cgroup_file(path, "cpu.stat")
+                for line in text.splitlines():
+                    if line.startswith("usage_usec "):
+                        try:
+                            return int(line.split()[1])
+                        except (ValueError, IndexError):
+                            return 0
+                return 0
+
+            before = usage_usec()
+            docker(["exec", PROBE_CONTAINER, "timeout", "3", "sh", "-c", "while :; do :; done"])
+            evidence["cpu_delta_usec"] = usage_usec() - before
+
+            docker([
+                "exec", PROBE_CONTAINER, "sh", "-c",
+                "x=a; i=0; while [ $i -lt 28 ]; do x=\"$x$x\"; i=$((i+1)); done",
+            ])
+            events = cgroup_file(path, "memory.events")
+            evidence["memory_events"] = events
+            evidence["memory_throttled"] = any(
+                (line.startswith("max ") and line.split()[1] != "0")
+                or (line.startswith("oom_kill ") and line.split()[1] != "0")
+                for line in events.splitlines()
+            )
+
+            docker([
+                "exec", PROBE_CONTAINER, "sh", "-c",
+                "i=0; while [ $i -lt 100 ]; do sleep 30 2>/dev/null & i=$((i+1)); done",
+            ])
+            try:
+                evidence["pids_current"] = int(cgroup_file(path, "pids.current") or 0)
+            except ValueError:
+                evidence["pids_current"] = 0
+
+            evidence["ok"] = (
+                evidence["memory_max"] == str(PROBE_MEMORY)
+                and evidence["cpu_max"] == "50000 100000"
+                and evidence["pids_max"] == str(PROBE_PIDS_LIMIT)
+                and 0 < evidence["cpu_delta_usec"] < 2_200_000
+                and evidence["memory_throttled"]
+                and 0 < evidence["pids_current"] <= PROBE_PIDS_LIMIT
+            )
+            return evidence
+        finally:
+            docker(["rm", "-f", PROBE_CONTAINER])
+
+    def backup_files(
+        self, slug: str, files: list[str], backup_dir: str
+    ) -> dict[str, str]:
+        """Copy the pre-migration artifacts of one cell before any change."""
+        import shutil
+
+        self._ensure_gate()
+        target = Path(backup_dir)
+        target.mkdir(parents=True, exist_ok=True)
+        saved: dict[str, str] = {}
+        for source in files:
+            path = Path(source)
+            if not path.exists():
+                continue
+            dest = target / path.name
+            shutil.copy2(path, dest)
+            saved[source] = str(dest)
+        return saved
+
+    def restore_files(self, saved: dict[str, str]) -> None:
+        """Undo a migration by copying backed-up artifacts back in place."""
+        import shutil
+
+        self._ensure_gate()
+        for source, backup in saved.items():
+            shutil.copy2(backup, source)
 
     def install_profile(self, name: str, content: str) -> None:
         self._ensure_gate()
@@ -202,13 +501,29 @@ class LocalExecutor(Executor):
         else:
             self._run(["ip", "netns", "add", spec["netns"]])
 
-    def install_systemd_unit(self, slug: str, uid: int, cgroup_path: str) -> None:
+    def install_systemd_unit(
+        self,
+        slug: str,
+        uid: int,
+        cgroup_path: str,
+        driver: str = LEGACY_CGROUP_DRIVER,
+    ) -> None:
+        if driver == DEFAULT_CGROUP_DRIVER:
+            self.install_user_unit(slug, uid, cgroup_path)
+            return
         path = _SYSTEMD_DIR / f"spanel-cell-{slug}.service"
-        self._write_file_once(path, systemd_unit(slug, uid, cgroup_path))
+        self._write_file_once(path, systemd_unit(slug, uid, cgroup_path, driver))
         self._run(["systemctl", "daemon-reload"])
         self._run(["systemctl", "enable", f"spanel-cell-{slug}"])
 
-    def start_daemon(self, slug: str) -> int:
+    def start_daemon(
+        self,
+        slug: str,
+        uid: int = 0,
+        driver: str = LEGACY_CGROUP_DRIVER,
+    ) -> int:
+        if driver == DEFAULT_CGROUP_DRIVER:
+            return self.start_user_daemon(slug, uid)
         unit = f"spanel-cell-{slug}"
         self._run(["systemctl", "start", unit])
         # `systemctl start` returns before a crashing service dies, so confirm
@@ -235,7 +550,15 @@ class LocalExecutor(Executor):
             time.sleep(0.5)
         return 0
 
-    def stop_daemon(self, slug: str) -> None:
+    def stop_daemon(
+        self,
+        slug: str,
+        uid: int = 0,
+        driver: str = LEGACY_CGROUP_DRIVER,
+    ) -> None:
+        if driver == DEFAULT_CGROUP_DRIVER:
+            self.stop_user_daemon(slug, uid)
+            return
         self._run(["systemctl", "stop", f"spanel-cell-{slug}"])
 
     def remove_network(self, spec: dict[str, Any]) -> None:
@@ -248,7 +571,15 @@ class LocalExecutor(Executor):
     def remove_profile(self, name: str) -> None:
         self._run(["apparmor_parser", "-R", str(Path("/etc/apparmor.d") / name)])
 
-    def remove_systemd_unit(self, slug: str) -> None:
+    def remove_systemd_unit(
+        self,
+        slug: str,
+        uid: int = 0,
+        driver: str = LEGACY_CGROUP_DRIVER,
+    ) -> None:
+        if driver == DEFAULT_CGROUP_DRIVER:
+            self.remove_user_unit(slug, uid)
+            return
         unit = f"spanel-cell-{slug}"
         self._run(["systemctl", "disable", unit])
         path = _SYSTEMD_DIR / f"{unit}.service"

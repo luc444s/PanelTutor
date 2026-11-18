@@ -17,6 +17,19 @@ REGISTRY_NAME = "registry.json"
 DEFAULT_BASE_UID = 60000
 DEFAULT_BLOCK_SIZE = 65536
 
+# A.SPEC 0099: new cells use the systemd cgroup driver (with a user-unit
+# dockerd), because cgroupfs silently ignores container resource limits on a
+# cgroup v2 host. Allocations without the field are legacy cgroupfs cells and
+# are NEVER migrated implicitly.
+DEFAULT_CGROUP_DRIVER = "systemd"
+LEGACY_CGROUP_DRIVER = "cgroupfs"
+CGROUP_DRIVERS = (DEFAULT_CGROUP_DRIVER, LEGACY_CGROUP_DRIVER)
+
+
+def cgroup_driver(cell: dict[str, Any]) -> str:
+    """Driver persisted for a cell; missing means pre-0099 (legacy) cell."""
+    return str(cell.get("cgroup_driver", LEGACY_CGROUP_DRIVER))
+
 
 class InvalidSlug(ValueError):
     """Raised for any slug that does not match the contract regex."""
@@ -98,6 +111,7 @@ def allocate(data_root: str | Path, slug: str) -> dict[str, Any]:
         "subgid_base": base_uid + block + index * block,
         "state": "provisioning",
         "applied": {},
+        "cgroup_driver": DEFAULT_CGROUP_DRIVER,
     }
     allocations[slug] = alloc
     reg["next_index"] = index + 1

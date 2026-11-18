@@ -50,7 +50,10 @@ if _needs_flag_value_shim() and getattr(click.core, "UNSET", None) is not None:
 app = typer.Typer(
     name="spanel-tenant",
     add_completion=False,
-    help="Rootless per-tenant cell: doctor, provision, status, deprovision.",
+    help=(
+        "Rootless per-tenant cell: doctor, provision, status, repair, "
+        "migrate, verify, deprovision."
+    ),
 )
 
 DEFAULT_DATA_ROOT = "/var/lib/spanel"
@@ -147,6 +150,37 @@ def repair(
         lambda: _service(data_root).repair(slug), json_output, "repair"
     )
     _emit(result, json_output)
+
+
+@app.command()
+def migrate(
+    slug: str = typer.Option(..., "--slug", help="Validated tenant slug."),
+    driver: str = typer.Option(
+        alloc.DEFAULT_CGROUP_DRIVER, "--driver", help="Target cgroup driver."
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+    data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
+) -> None:
+    """Migrate one cell's cgroup driver with backup, verification and rollback."""
+    result = _execute(
+        lambda: _service(data_root).migrate(slug, driver), json_output, "migrate"
+    )
+    _emit(result, json_output)
+
+
+@app.command()
+def verify(
+    slug: str = typer.Option(..., "--slug", help="Validated tenant slug."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+    data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
+) -> None:
+    """Prove the kernel applies memory/CPU/PID limits for a systemd cell."""
+    result = _execute(
+        lambda: _service(data_root).verify_limits(slug), json_output, "verify"
+    )
+    _emit(result, json_output)
+    if not result.get("ok"):
+        raise typer.Exit(code=1)
 
 
 @app.command()

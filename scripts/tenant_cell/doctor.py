@@ -75,6 +75,21 @@ def _parse_id_map(path: Path) -> list[dict[str, int]]:
     return rows
 
 
+def delegate_controllers_ok(text: str) -> bool:
+    """True for either ``Delegate=yes`` or the explicit five-controller list."""
+    required = {"cpu", "cpuset", "io", "memory", "pids"}
+    if "Delegate=yes" in text:
+        return True
+    for line in text.splitlines():
+        line = line.strip()
+        if not line.startswith("Delegate="):
+            continue
+        controllers = set(line.split("=", 1)[1].replace(",", " ").split())
+        if required <= controllers:
+            return True
+    return False
+
+
 class HostProbe:
     """Read-only view of the host. Override any method in a fake for tests."""
 
@@ -82,8 +97,9 @@ class HostProbe:
         return "cgroup2" in _path_text(Path("/proc/self/mountinfo"))
 
     def systemd_delegate(self) -> bool:
+        """Accept the legacy boolean and the explicit A.SPEC 0099 controller list."""
         conf = Path("/etc/systemd/system/user@.service.d/delegate.conf")
-        return "Delegate=yes" in _path_text(conf)
+        return delegate_controllers_ok(_path_text(conf))
 
     def apparmor_enabled(self) -> bool:
         flag = _path_text(Path("/sys/module/apparmor/parameters/enabled")).strip()
@@ -127,6 +143,26 @@ class HostProbe:
         try:
             result = subprocess.run(
                 ["systemctl", "show", "-p", "MainPID", "--value", f"spanel-cell-{slug}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return int(result.stdout.strip())
+        except (ValueError, OSError):
+            return 0
+
+    def user_service_main_pid(self, slug: str, uid: int) -> int:
+        """MainPID of a systemd *user* unit (A.SPEC 0099 cells)."""
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{uid}/bus"
+        try:
+            result = subprocess.run(
+                [
+                    "systemctl", "--user", "show", "-p", "MainPID", "--value",
+                    f"spanel-cell-{slug}",
+                ],
+                env=env,
                 capture_output=True,
                 text=True,
                 check=False,

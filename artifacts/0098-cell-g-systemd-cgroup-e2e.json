@@ -1,0 +1,82 @@
+{
+  "artifact": "0098-cell-g-systemd-cgroup-e2e",
+  "date": "2026-11-17",
+  "scope": "laboratorio solamente, unidad cell-g. NO se modificaron cell-h, WordPress, Docker rootful ni produccion. NO se implementaron cuotas agregadas rootful+rootless.",
+  "goal": "Migrar el dockerd rootless de cell-g de unidad de sistema (driver cgroupfs, limites no aplicados) a unidad de usuario systemd con bus de usuario y driver native.cgroupdriver=systemd, preservando socket, data-root, UID/subuid, redes, volumenes y confinamiento AppArmor.",
+  "precondition_finding": {
+    "before": " Contenedor con --memory 128m --cpus 0.5 --pids-limit 64 corria en /system.slice/spanel-cell-cell-g.service con memory.max=max, cpu.max='max 100000', pids.max=7811; no existia cgroup por contenedor. Cargas: CPU ~1.0 vCPU, 256MiB asignados sin OOM, 100 forks OK.",
+    "root_cause": "El daemon corria en system.slice con 5 procesos en su propio cgroup; la regla no-internal-process de cgroup v2 hace que escribir cgroup.subtree_control falle con EIO aunque Delegate=yes y el directorio sea del usuario. Con cgroupfs, Docker no podia crear subcgroups con controladores y callaba."
+  },
+  "changes_applied": {
+    "daemon_json": "/var/lib/spanel/cells/cell-g/daemon.json = {\"exec-opts\": [\"native.cgroupdriver=systemd\"]}",
+    "delegate_conf": "/etc/systemd/system/user@.service.d/delegate.conf = [Service] Delegate=cpu cpuset io memory pids",
+    "user_unit": "/etc/systemd/user/spanel-cell-g.service (Type=simple, User manager de 60008, XDG_RUNTIME_DIR=/run/user/60008, DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/60008/bus, ExecStart=/usr/bin/aa-exec -p spanel-cell-cell-g -- /usr/bin/dockerd-rootless.sh ...)",
+    "system_unit": "spanel-cell-cell-g.service detenida y deshabilitada (no borrada)",
+    "apparmor_profile": "/etc/apparmor.d/spanel-cell-cell-g: se anadieron lecturas /proc/[0-9]*/{stat,cmdline,sessionid} para augment de credenciales D-Bus, regla 'dbus (send, receive) bus=session,' (bus de sesion permitido; bus de sistema sigue denegado) y escritura rwkl en /sys/fs/cgroup/user.slice/user-60008.slice/user@60008.service/ y /** para el subarbol delegado"
+  },
+  "delegation": {
+    "path": "/sys/fs/cgroup/user.slice/user-60008.slice/user@60008.service",
+    "cgroup_controllers": "cpuset cpu io memory pids",
+    "cgroup_subtree_control": "cpu memory pids (los demas quedan disponibles para el delegado, segun diseno de systemd; no se escribieron cgroups a mano)",
+    "DelegateSubgroup": "init.scope (del user@.service de sistema, no modificado)"
+  },
+  "verification": {
+    "docker_info": {
+      "CgroupDriver": "systemd",
+      "CgroupVersion": "2",
+      "SecurityOptions": ["rootless", "cgroupns"]
+    },
+    "test_container": {
+      "command": "docker run -d --name cgroup-test-systemd --memory 128m --cpus 0.5 --pids-limit 64 alpine sleep 300",
+      "container_pid": 3876980,
+      "cgroup_path": "/user.slice/user-60008.slice/user@60008.service/user.slice/docker-f1ed2cb280bbc8a21866fcd9bc114daa5c5294cf14cdf55ee13043226bf89c18.scope",
+      "own_cgroup": true,
+      "memory_max": 134217728,
+      "cpu_max": "50000 100000",
+      "pids_max": 64,
+      "cpuset_cpus_effective": "0-3",
+      "apparmor": "spanel-cell-cell-g (enforce)"
+    },
+    "load_tests": {
+      "memory": "Asignacion de 256MiB dentro del contenedor: memory.events max=1413 y oom_kill=1; memory.current topado en ~128MiB. Limite APLICADO por el kernel.",
+      "cpu": "Busy-loop de 3s: usage_usec 2098528 -> 3658235, delta 1559707 us (~0.52 vCPU). Limite APLICADO.",
+      "pids": "Fork de 100 procesos: fallo con 'Resource temporarily unavailable', pids.current=63 con pids.max=64. Limite APLICADO."
+    },
+    "socket_exclusivity": {
+      "owner": "spanel-cell-g:649956",
+      "mode": "srw-rw----",
+      "cell_g_access_rc": 0,
+      "cell_h_access_rc": 1,
+      "lucas_access_rc": 1
+    },
+    "cell_h_untouched": {
+      "systemd_unit": "spanel-cell-cell-h.service (activa, FragmentPath /etc/systemd/system/spanel-cell-cell-h.service)",
+      "daemon_json": "{\"exec-opts\": [\"native.cgroupdriver=cgroupfs\"]}",
+      "apparmor": "spanel-cell-cell-h (enforce)"
+    },
+    "restart_recovery": "Tras 'systemctl --user restart spanel-cell-g.service': unidad active, dockerd nuevo PID 3876174, CgroupDriver=systemd, y un contenedor nuevo vuelve a obtener memory.max=134217728, cpu.max=50000 100000, pids.max=64 y AppArmor enforce.",
+    "silent_ignore_check": "No hubo silenciamiento: los valores de HostConfig coinciden con los archivos del cgroup real y las cargas provocaron estrangulamiento/OOM/fallo de fork."
+  },
+  "success_criteria": {
+    "docker_info_systemd": true,
+    "memory_max_134217728": true,
+    "cpu_max_50000_100000": true,
+    "pids_max_64": true,
+    "container_in_own_cgroup": true,
+    "load_tests_confirm": true,
+    "apparmor_enforce_including_containers": true,
+    "socket_exclusive_to_cell_g": true,
+    "restart_and_recovery": true,
+    "cell_h_intact": true
+  },
+  "rollback": {
+    "backup_dir": "/home/lucas/cell-g-migration-backup-20261117",
+    "script": "/home/lucas/cell-g-migration-backup-20261117/rollback.sh",
+    "steps": "Parar/deshabilitar unidad de usuario; borrar /etc/systemd/user/spanel-cell-g.service y el symlink en ~/.config/systemd/user/default.target.wants/; restaurar daemon.json (cgroupfs), delegate.conf (Delegate=yes), unidad de sistema y perfil AppArmor desde el backup; apparmor_parser -r del perfil; systemctl daemon-reload; restart user@60008.service; enable --now spanel-cell-cell-g.service"
+  },
+  "notes": [
+    "La jerarquia de systemd NO se modificationo: user-60008.slice sigue colgando de user.slice y el user manager opera en user@60008.service.",
+    "runc decidio modo rootless leyendo OwnerUID=60008 via busctl --user; sin las reglas D-Bus y /proc en AppArmor, fallaba y caia al bus del sistema.",
+    "La meta de cuotas agregadas entre rootful y rootless queda para una fase posterior con un ancestro comun valido."
+  ]
+}

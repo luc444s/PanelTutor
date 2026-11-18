@@ -240,6 +240,20 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   # setns between processes of this same cell only; cross-tenant is denied.
   ptrace (read, readby) peer=spanel-cell-{slug},
 
+  # A.SPEC 0099 - systemd cgroup driver. AppArmor calls the systemd *user*
+  # bus "session" (not "user"); the system bus stays denied. busctl --user
+  # status is how runc reads OwnerUID to decide it is rootless, and augmenting
+  # those credentials reads /proc/<pid>/{{stat,cmdline,sessionid}}.
+  dbus (send, receive) bus=session,
+  /proc/[0-9]*/stat r,
+  /proc/[0-9]*/cmdline r,
+  /proc/[0-9]*/sessionid r,
+  # runc writes cgroup.subtree_control and the container's limit files inside
+  # the subtree delegated to this cell's uid. Scoped to this cell's uid so a
+  # cell cannot touch another tenant's cgroups (DAC enforces the same boundary).
+  /sys/fs/cgroup/user.slice/user-[0-9]*.slice/user@[0-9]*.service/ rwkl,
+  /sys/fs/cgroup/user.slice/user-[0-9]*.slice/user@[0-9]*.service/** rwkl,
+
   # Host resources that must never be reachable.
   audit deny /var/run/docker.sock rw,
   audit deny /run/secrets/** r,
