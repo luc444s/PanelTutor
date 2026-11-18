@@ -47,7 +47,7 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /bin/bash ix,
   /usr/bin/rootlesskit ix,
   /usr/bin/dockerd rix,
-  /usr/bin/containerd ix,
+  /usr/bin/containerd rix,
   /usr/sbin/runc rix,
   /usr/bin/docker-init ix,
   /usr/bin/git ix,
@@ -99,6 +99,9 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /proc/sys/net/ipv4/ip_forward rw,
   /proc/sys/net/ipv6/conf/** rw,
   /sys/fs/cgroup/system.slice/spanel-cell-{slug}.service/** r,
+  # rootlesskit/dockerd look up the delegated cgroup of the cell's uid.
+  /sys/fs/cgroup/user.slice/user-[0-9]*.slice/ r,
+  /sys/fs/cgroup/user.slice/user-[0-9]*.slice/** r,
 
   # /etc and /run writes happen only inside rootlesskit's private tmpfs
   # copy-up (--copy-up=/etc --copy-up=/run), never on the host mounts.
