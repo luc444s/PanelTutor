@@ -228,7 +228,7 @@ structural_constraints:
   (compatibilidad visual: spanel ve/gestiona los contenedores del tenant).
 - owner: lucas
 - approver: lucas
-- Commit: (pendiente; cambios en el working tree sobre `remove-hardener`)
+- Commit: `8ad6861` (implementación, tests, spec, plan y artefacto E2E)
 - Evidence: `artifacts/0107-tenant-resource-runtime-e2e.json` (PASS, 7/7 checks black-box).
 - Deployment: laboratorio `spanel.lab` (BD clonada desechable); sin producción.
 
