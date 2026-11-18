@@ -1,12 +1,15 @@
-"""AppArmor profile for a rootless cell (A.SPEC 0096/0097).
+"""AppArmor profile for a rootless cell (A.SPEC 0096/0097/0105).
 
-The profile is applied by systemd's ``AppArmorProfile=`` directive on the
-cell unit, so it is attached to the process at exec time regardless of which
-binary rootlesskit later executes. Every executable of the startup chain is
-listed with ``ix`` (inherits THIS profile): there are no transitions to
-unconfined. The broad capabilities and /etc//run write rules are required by
-rootlesskit's copy-up inside a private mount namespace; the host paths that
-matter (rootful socket, secrets, other cells) stay explicitly denied.
+Inverted model (0105): instead of enumerating every executable and path an image
+might need, the cell's *own* filesystem is granted broadly for read/execute and
+writes are scoped to the cell/image trees. The strict rules are reserved for the
+host and kernel interfaces (/proc, /sys, cgroups, devices, capabilities, dbus,
+mount/ptrace). This lets real images (nginx, php-fpm, MariaDB, node, Gitea) start
+without hand-patching the profile while keeping the host boundary explicit.
+
+The profile is bound to the daemon with ``aa-exec`` (systemd driver): all execs
+inherit it via ``ix`` so there is no transition to another profile. Writable
+``/etc``/``/run`` rules exist only for rootlesskit's private tmpfs copy-up.
 """
 
 from __future__ import annotations
@@ -19,6 +22,22 @@ from .alloc import validate_slug
 PROFILE_TEMPLATE = """#include <tunables/global>
 profile spanel-cell-{slug} flags=(attach_disconnected) {{
   #include <abstractions/base>
+
+  # --- Broad, image-agnostic rootfs grant (the inversion) -------------------
+  # Everything this cell owns -- its data-root, image layers and every rootfs
+  # mapped into it -- may be read and executed. `ix` makes each exec inherit
+  # this profile, so there is never a transition to a foreign profile. `m`
+  # permits PROT_EXEC mappings used by dynamic loaders and JITs (node, Go).
+  # Using `owner` keeps other tenants' files (different uid) out of reach even
+  # though dac_override is granted to rootlesskit below.
+  owner /** r/ix,
+  owner /** m,
+
+  # Root-owned host binaries/libraries/config are shared and read-only. They
+  # are not covered by `owner`, so grant them explicitly (still read/exec only).
+  /{{bin,sbin,usr,lib,lib64,opt,etc,srv,var/tmp,tmp,proc,sys,dev}}/** r/ix,
+  /{{bin,sbin,usr,lib,lib64,opt,etc,srv,var/tmp,tmp,proc,sys,dev}}/** m,
+  /run/user/[0-9]*/** r/ix,
 
   # Capabilities required by rootlesskit, the setuid id mappers, nsenter and
   # dockerd inside the cell's own user/mount/net namespaces.
@@ -38,64 +57,35 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   capability kill,
   capability setpcap,
 
-  # Every executable in the startup chain inherits this profile (ix).
-  /usr/bin/dockerd-rootless.sh rix,
-  /usr/sbin/nft ix,
-  /usr/sbin/xtables-nft-multi ix,
-  /usr/sbin/iptables ix,
-  /usr/sbin/ip6tables ix,
-  /bin/sh ix,
-  /bin/bash ix,
-  # Payload processes of a container inherit this profile. Shell and common
-  # init paths seen from inside the container mount namespace.
-  /usr/bin/dash rix,
-  /bin/dash rix,
-  /usr/bin/sh rix,
-  # Alpine/BusyBox payloads resolve /bin/sh to busybox inside the mount ns.
-  /bin/busybox ix,
-  /usr/bin/busybox ix,
-  /usr/bin/rootlesskit ix,
-  /usr/bin/dockerd rix,
-  /usr/bin/containerd rix,
-  /usr/bin/containerd-shim-runc-v2 rix,
-  # containerd forks unpigz to decompress OCI layers during pull/build.
-  /usr/bin/unpigz ix,
-  /usr/sbin/runc rix,
-  # runc re-execs its init through /proc/self/fd/N; inside the container's
-  # mount namespace AppArmor resolves that target to /runc.
-  /runc ix,
-  /usr/bin/docker-init ix,
-  /usr/bin/git ix,
-  /usr/bin/busctl ix,
-  /usr/bin/slirp4netns ix,
-  /usr/bin/pasta ix,
-  /usr/bin/grep ix,
-  /usr/bin/id ix,
-  /usr/bin/realpath ix,
-  /usr/bin/rm ix,
-  /usr/bin/mkdir ix,
-  /usr/bin/stat ix,
-  /usr/bin/nsenter ix,
-  /usr/bin/sysctl ix,
-  /usr/sbin/sysctl ix,
-  /usr/bin/selinuxenabled ix,
-  /usr/bin/chcon ix,
-  /usr/bin/getsubids ix,
-  /usr/bin/newuidmap ix,
-  /usr/bin/newgidmap ix,
-  /usr/bin/getent ix,
-  /usr/bin/mount ix,
-  /usr/bin/umount ix,
-  /usr/bin/ip ix,
-  /usr/bin/unshare ix,
-  # dockerd probes binfmt by executing generated helpers inside the cell tmp.
-  /var/lib/spanel/cells/{slug}/tmp/qemu-check*/** ix,
+  # --- Writes scoped to the cell / image trees ------------------------------
+  # No per-image path lists: any cache/log/config the image writes lands inside
+  # its own rootfs, which lives under the cell data-root or home directory.
+  /var/lib/spanel/cells/{slug}/ rwkl,
+  /var/lib/spanel/cells/{slug}/** rwkl,
+  owner /var/lib/spanel/cells/{slug}/docker.sock rw,
+  /home/spanel-{slug}/** rwkl,
+  /run/user/[0-9]*/ rwkl,
+  /run/user/[0-9]*/** rwkl,
+  /tmp/ rwkl,
+  /tmp/** rwkl,
 
-  # Runtime reads of proc/sys.
+  # /etc and /run writes happen only inside rootlesskit's private tmpfs
+  # copy-up (--copy-up=/etc --copy-up=/run), never on the host mounts. The
+  # .ro* paths are that private snapshot.
+  /etc/ rwkl,
+  /etc/** rwkl,
+  /run/ rwkl,
+  /run/** rwkl,
+  /etc/.ro* rwkl,
+  /etc/.ro*/ rwkl,
+  /run/.ro* rwkl,
+  /run/.ro*/ rwkl,
+  /etc/subuid r,
+  /etc/subgid r,
+
+  # --- /proc and /sys reads required by the daemon and containers ----------
   / r,
   /dev/net/tun rw,
-  /tmp/ r,
-  /tmp/** rwkl,
   /proc/ r,
   /proc/[0-9]*/ r,
   /proc/[0-9]*/ns/* r,
@@ -105,6 +95,7 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /proc/[0-9]*/loginuid r,
   /proc/[0-9]*/oom_score_adj rw,
   /proc/[0-9]*/status r,
+  /proc/[0-9]*/comm r,
   /proc/[0-9]*/task/[0-9]*/fd/ r,
   /proc/[0-9]*/task/[0-9]*/fd/* rw,
   /[0-9]*/task/[0-9]*/fd/ r,
@@ -143,31 +134,7 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /sys/fs/cgroup/user.slice/user-[0-9]*.slice/** r,
   /[0-9]*/stat r,
 
-  # /etc and /run writes happen only inside rootlesskit's private tmpfs
-  # copy-up (--copy-up=/etc --copy-up=/run), never on the host mounts.
-  /etc/{{passwd,group,nsswitch.conf,resolv.conf,hosts}} r,
-  /etc/login.defs r,
-  /etc/ rwkl,
-  /etc/** rwkl,
-  /run/ rwkl,
-  /run/** rwkl,
-  /etc/.ro* rwkl,
-  /etc/.ro*/ rwkl,
-  /run/.ro* rwkl,
-  /run/.ro*/ rwkl,
-  /etc/subuid r,
-  /etc/subgid r,
-
-  # Cell-owned data only (no broad /** grant: other cells are denied by default).
-  /var/lib/spanel/cells/{slug}/ rwkl,
-  /var/lib/spanel/cells/{slug}/** rwkl,
-  owner /var/lib/spanel/cells/{slug}/docker.sock rw,
-  /run/user/[0-9]*/ rwkl,
-  /run/user/[0-9]*/** rwkl,
-  /home/spanel-{slug}/** rwkl,
-
-  # Mount rules observed from a real rootlesskit boot. Targets are scoped to
-  # the cell's own tmpfs copy-up paths; cross-cell mounts are denied.
+  # --- mount rules: scoped to this cell's own trees, never over the host ----
   mount options=(rw, private) -> /,
   mount options=(rw, private) -> /var/lib/spanel/cells/{slug}/**,
   mount options=(rw, rprivate) -> /var/lib/spanel/cells/{slug}/**,
@@ -225,9 +192,9 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   umount /run/.ro*/**,
   pivot_root /var/lib/spanel/cells/{slug}/**,
   umount /var/lib/spanel/cells/{slug}/**,
-  # No blanket "deny mount -> cells/*/**" here: AppArmor's '*' also matches
-  # this cell and would override the allow rules above. Other cells are
-  # unreachable because no rule grants their paths.
+  # No blanket "deny mount -> cells/*/**": a '*' also matches this cell and
+  # would override the allow rules above. Other cells are unreachable because
+  # no mount rule grants their paths.
 
   # Container networking inside the cell's netns.
   network inet stream,
@@ -242,21 +209,27 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
 
   # A.SPEC 0099 - systemd cgroup driver. AppArmor calls the systemd *user*
   # bus "session" (not "user"); the system bus stays denied. busctl --user
-  # status is how runc reads OwnerUID to decide it is rootless, and augmenting
-  # those credentials reads /proc/<pid>/{{stat,cmdline,sessionid}}.
+  # status is how runc reads OwnerUID to decide it is rootless.
   dbus (send, receive) bus=session,
   /proc/[0-9]*/stat r,
   /proc/[0-9]*/cmdline r,
   /proc/[0-9]*/sessionid r,
   # runc writes cgroup.subtree_control and the container's limit files inside
-  # the subtree delegated to this cell's uid. Scoped to this cell's uid so a
-  # cell cannot touch another tenant's cgroups (DAC enforces the same boundary).
+  # the subtree delegated to this cell's uid. Scoped to this cell's uid.
   /sys/fs/cgroup/user.slice/user-[0-9]*.slice/user@[0-9]*.service/ rwkl,
   /sys/fs/cgroup/user.slice/user-[0-9]*.slice/user@[0-9]*.service/** rwkl,
 
-  # Host resources that must never be reachable.
+  # --- Explicit host/kernel denials -----------------------------------------
+  # Deny rules override any allow rule above (including the broad `owner` and
+  # read-only host grants). These are the interfaces that must never be reused.
   audit deny /var/run/docker.sock rw,
   audit deny /run/secrets/** r,
+  audit deny /run/systemd/private rw,
+  audit deny dbus bus=system,
+  audit deny /proc/kcore r,
+  audit deny /proc/[0-9]*/mem rw,
+  audit deny /sys/kernel/** w,
+  audit deny /dev/{{sd,vd,hd,nvme}}[a-z0-9]* rw,
 }}
 """
 

@@ -374,10 +374,9 @@ def test_apparmor_profile_uses_only_validated_slug() -> None:
     assert "spanel-cell-other" not in profile
     assert apparmor.profile_hash("acme") == apparmor.profile_hash("acme")
     assert apparmor.profile_hash("acme") != apparmor.profile_hash("other")
-    # containerd decompresses pulled layers through unpigz (regression: E2E in
-    # cell-g found pull blocked by an AppArmor exec denial for this binary).
-    assert "/usr/bin/unpigz ix," in profile
-    assert "qemu-check*/** ix," in profile
+    # A.SPEC 0105: unpigz, busybox and the qemu-check helpers are no longer
+    # enumerated -- the broad, image-agnostic rootfs grant covers them all.
+    assert "owner /** r/ix," in profile
     assert "options=(ro, rbind) /var/lib/spanel/cells/acme/**" in profile
     with pytest.raises(alloc.InvalidSlug):
         apparmor.render_profile("acme\n  deny /etc/** rw,")
@@ -391,7 +390,8 @@ def test_apparmor_profile_allows_rootless_build_and_exec() -> None:
     """
     profile = apparmor.render_profile("acme")
     assert "capability net_raw," in profile
-    assert "/bin/busybox ix," in profile
+    # Real-image shells (busybox/dash/sh) run via the broad rootfs grant now.
+    assert "owner /** r/ix," in profile
     assert "/proc/pressure/** r," in profile
     assert "/proc/self/{setgroups,uid_map,gid_map} rw," in profile
     assert "remount options in (ro, rw, nosuid, nodev, noexec, bind, rbind)" in profile
@@ -600,7 +600,8 @@ def test_apparmor_profile_has_systemd_rules_without_format_placeholders() -> Non
     profile = apparmor.render_profile("acme")
 
     assert "dbus (send, receive) bus=session," in profile
-    assert "bus=system" not in profile  # only the user/session bus is granted
+    assert "dbus (send, receive) bus=system," not in profile  # no system-bus grant
+    assert "deny dbus bus=system," in profile  # system bus explicitly denied
     assert "/proc/[0-9]*/sessionid r," in profile
     assert "user@[0-9]*.service/** rwkl," in profile
     assert "/proc/[0-9]*/stat r," in profile

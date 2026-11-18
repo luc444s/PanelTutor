@@ -8,6 +8,7 @@ never removes another tenant's isolation rules.
 
 from __future__ import annotations
 
+import json
 import os
 import pwd
 import shlex
@@ -23,6 +24,9 @@ _SYSTEMD_DIR = Path("/etc/systemd/system")
 _USER_SYSTEMD_DIR = Path("/etc/systemd/user")
 _DELEGATE_CONF = _SYSTEMD_DIR / "user@.service.d" / "delegate.conf"
 _CELL_ROOT = "/var/lib/spanel/cells"
+# A.SPEC 0105: shipped seccomp profile copied into each cell's data-root.
+_CELL_SECCOMP_SRC = Path(__file__).resolve().parent / "deploy" / "cell-seccomp.json"
+_CELL_SECCOMP_NAME = "cell-seccomp.json"
 
 # A.SPEC 0099: the user manager must be able to hand these controllers to the
 # cell's dockerd. systemd 255 keeps its own payload in DelegateSubgroup=init.scope
@@ -304,9 +308,21 @@ class LocalExecutor(PlanExecutorMixin, Executor):
         # A.SPEC 0099: cgroupfs silently ignores container limits on cgroup v2
         # when the daemon lives in a cgroup that already has processes. The
         # systemd driver is used together with the user unit and the user bus.
-        config = f'{{"exec-opts": ["native.cgroupdriver={driver}"]}}\n'
+        # A.SPEC 0105: ship the fail-closed seccomp profile into the cell's own
+        # data-root and reference it from daemon.json (no extra mounts/sockets).
+        seccomp_dest = Path(cell_dir) / _CELL_SECCOMP_NAME
+        self._write_file_once(
+            seccomp_dest, _CELL_SECCOMP_SRC.read_text(encoding="utf-8")
+        )
+        config = json.dumps(
+            {
+                "exec-opts": [f"native.cgroupdriver={driver}"],
+                "seccomp-profile": str(seccomp_dest),
+            }
+        ) + "\n"
         self._write_file_once(Path(cell_dir) / "daemon.json", config)
         self._run(["chown", f"{uid}:{gid}", f"{cell_dir}/daemon.json"])
+        self._run(["chown", f"{uid}:{gid}", str(seccomp_dest)])
 
     def ensure_delegation(self) -> None:
         """Host-wide, idempotent controller delegation for user managers."""

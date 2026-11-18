@@ -1,0 +1,56 @@
+{
+  "artifact": "gap1-rootless-detection-experiment",
+  "date": "2026-11-18",
+  "question": "¿Se puede forzar la detección rootless de runc cuando user@<uid>.service se reparenta a un slice del tenant (opción 2 del GAP-1)?",
+  "answer": "NO con los mecanismos disponibles en este host. La causa es systemd, no AppArmor ni la ruta del cgroup.",
+  "root_cause": {
+    "detail": "runc 1.3.4 decide el cgroup manager con shouldUseRootlessCgroupManager(): si euid==0 dentro de userns y --systemd-cgroup, llama a systemd.DetectUID(), que parsesa 'OwnerUID' de `busctl --user --no-pager status`. Si no aparece OwnerUID, asume UID 0 y usa el cgroup manager rootful, que conecta a /run/systemd/private (root:0600) y recibe EPERM.",
+    "evidence": {
+      "before_plan": "busctl --user --no-pager status -> OwnerUID=60024, CGroup=/user.slice/user-60024.slice/user@60024.service/init.scope",
+      "after_plan": "la línea OwnerUID desaparece; CGroup=/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-gap3.slice/user@60024.service/init.scope",
+      "error": "unable to start unit docker-*.scope ... failed to connect to dbus ... dial unix /run/systemd/private: connect: permission denied"
+    }
+  },
+  "experiments": [
+    {
+      "name": "baseline_sin_plan_con_AppArmor_parcheado",
+      "result": "PASS",
+      "detail": "rc=0: el contenedor nginx arranca. Confirma que AppArmor (GAP-2) explicaba el fallo del docker-proxy, pero NO el fallo dbus."
+    },
+    {
+      "name": "plan_con_AppArmor_parcheado",
+      "result": "FAIL",
+      "detail": "rc=126 con el mismo error /run/systemd/private. AppArmor ya no es el limitante."
+    },
+    {
+      "name": "plan_con_daemon_sin_AppArmor",
+      "result": "FAIL",
+      "detail": "rc=125, 'Interactive authentication required' (polkit del bus del sistema). Confirma definitivamente que runc elige el bus del sistema, no AppArmor."
+    },
+    {
+      "name": "forzar_ROOTLESSKIT_PARENT_EUID_y_EGID_en_la_unidad",
+      "result": "FAIL",
+      "detail": "rc=126 con el mismo error. runc no usa esa variable para elegir el cgroup manager."
+    },
+    {
+      "name": "slice_del_tenant_dentro_de_user.slice",
+      "result": "FAIL",
+      "detail": "rc=126; OwnerUID sigue sin aparecer en busctl y runc vuelve al bus del sistema. No basta con que la ruta empiece por /user.slice/."
+    },
+    {
+      "name": "fallback_setproperty_in_place",
+      "result": "PASS",
+      "detail": "rc=0; user@60023.service conserva Slice=user-60023.slice y `systemctl set-property` aplica MemoryMax=268435456, CPUQuota=50% (cpu.max 50000 100000), TasksMax=128. El contenedor arranca con esos límites efectivos."
+    }
+  ],
+  "conclusion": "La opción 2 (forzar rootless detection bajo un manager reparentado) no es viable en esta versión de systemd/runc sin parchear runc o containerd. La corrección práctica es la opción 1: no reparentar user@<uid>.service; aplicar los límites con systemctl set-property sobre la unidad en su slice por defecto. Coste: se pierde la agregación de contenedores rootful en el mismo slice; se mantiene el límite del lado rootless, que es el que importa para las Apps.",
+  "safety": {
+    "links_vivos_verificados_al_final": [
+      "http://rootless-e2e.lab:9080/ -> http=200",
+      "http://editores-e2e.lab:9080/ -> http=200"
+    ],
+    "celdas_de_experimento_limpias": true,
+    "cell_g_y_cell_h_intocadas": true,
+    "produccion_intocada": true
+  }
+}
