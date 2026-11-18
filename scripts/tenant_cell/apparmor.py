@@ -141,6 +141,8 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   mount options=(rw, rbind) /etc/.ro*/** -> /etc/**,
   mount options=(rw, rbind) /run/.ro*/** -> /etc/**,
   mount fstype=tmpfs options=(rw, nosuid, nodev, noexec) -> /tmp/,
+  mount fstype=overlay overlay -> /var/lib/spanel/cells/{slug}/**,
+  mount fstype=overlay -> /var/lib/spanel/cells/{slug}/**,
   mount options=(rw, rbind) /var/lib/spanel/cells/{slug}/** -> /run/.ro*/**,
   mount options=(rw, rbind) /var/lib/spanel/cells/{slug}/** -> /var/lib/spanel/cells/{slug}/**,
   umount /run/.ro*/**,
