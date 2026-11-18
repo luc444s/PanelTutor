@@ -126,18 +126,19 @@ structural_constraints:
 ## Traceability
 
 - Requirement: HTTPS y certificados para apps rootless sin mover TLS del Traefik padre.
-- Evidence: E2E 0104/0105 (HTTP only) y resolver `internal` del lab.
+- Evidence: `artifacts/0106-rootless-route-tls-e2e.json` (PASS) y E2E 0104/0105 (HTTP only).
 - owner: lucas
 - approver: lucas
-- Deployment: laboratorio `spanel.lab`; sin producción.
+- Commit: `27392c4` (implementacion), `628234c` (artifact E2E)
+- Deployment: laboratorio `spanel.lab` (ruta `gitea-e2e.lab` HTTPS operativa); sin producción.
 
 ## Definition of Done
 
-- [ ] Objective satisfied
-- [ ] Scope respected
-- [ ] Contract satisfied
-- [ ] Invariants preserved
-- [ ] Verification passed
-- [ ] Rollback honest
-- [ ] No unrelated changes
-- [ ] E2E HTTPS con certificado real y contenido de app rootless
+- [x] Objective satisfied
+- [x] Scope respected
+- [x] Contract satisfied
+- [x] Invariants preserved
+- [x] Verification passed
+- [x] Rollback honest
+- [x] No unrelated changes
+- [x] E2E HTTPS con certificado real y contenido de app rootless
