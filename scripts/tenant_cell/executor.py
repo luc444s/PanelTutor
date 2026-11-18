@@ -82,6 +82,12 @@ def systemd_unit(slug: str, uid: int, cgroup_path: str) -> str:
         # it cannot create the bridge; rootlesskit's own netns + port driver
         # provide connectivity and loopback publishing instead.
         "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_DETACH_NETNS=false\n"
+        # slirp4netns' own mount sandbox conflicts with AppArmor mount rules;
+        # the cell profile supplies confinement instead (verified in lab).
+        "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_SLIRP4NETNS_SANDBOX=false\n"
+        # Bind the cell profile at exec, not by executable path: all execs in
+        # the chain inherit it via the profile's ix rules.
+        f"AppArmorProfile=spanel-cell-{slug}\n"
         "Delegate=yes\n"
         # nf_tables iptables inside the userns is denied on this host; the
         # rootlesskit port driver publishes loopback ports without iptables.

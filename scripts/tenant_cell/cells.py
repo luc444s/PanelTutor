@@ -53,7 +53,9 @@ class CellService:
         cell = reg["allocations"].get(slug)
         if cell is None:
             raise CellNotFound(slug)
-        main_pid = int(cell.get("daemon_pid", 0))
+        # Prefer the live systemd MainPID: a restarted daemon changes it, and
+        # the stored value must not make effective-profile evidence go stale.
+        main_pid = self.probe.service_main_pid(slug) or int(cell.get("daemon_pid", 0))
         pid = self.probe.daemon_pid(main_pid)
         return {
             "state": cell.get("state", "unknown"),

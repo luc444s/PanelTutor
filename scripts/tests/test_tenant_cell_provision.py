@@ -372,6 +372,8 @@ def test_systemd_unit_uses_rootlesskit_netns_and_no_host_iptables() -> None:
     assert "--ip6tables=false" in unit
     assert "Delegate=yes" in unit
     assert "XDG_RUNTIME_DIR=/run/user/60000" in unit
+    assert "AppArmorProfile=spanel-cell-acme" in unit
+    assert "DOCKERD_ROOTLESS_ROOTLESSKIT_SLIRP4NETNS_SANDBOX=false" in unit
 
 
 def test_local_executor_creates_output_chain_before_rules(monkeypatch) -> None:

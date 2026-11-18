@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -120,6 +121,19 @@ class HostProbe:
             return False
         current = _path_text(Path(f"/proc/{pid}/attr/current")).strip()
         return current == profile or current.startswith(f"{profile} (")
+
+    def service_main_pid(self, slug: str) -> int:
+        """Current MainPID from systemd, so a restarted daemon is not stale."""
+        try:
+            result = subprocess.run(
+                ["systemctl", "show", "-p", "MainPID", "--value", f"spanel-cell-{slug}"],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            return int(result.stdout.strip())
+        except (ValueError, OSError):
+            return 0
 
     def daemon_pid(self, main_pid: int) -> int:
         """Resolve the dockerd child of rootlesskit's MainPID.
