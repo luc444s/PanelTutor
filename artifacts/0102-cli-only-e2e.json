@@ -1,0 +1,94 @@
+{
+  "artifact": "0102-cli-only-e2e",
+  "scope": "laboratorio: celda desechable; NO se tocaron cell-g, cell-h, Traefik, phpMyAdmin, MariaDB ni WordPress",
+  "slug": "cell-e2e-v5",
+  "uid": 60018,
+  "gate": "SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1 solo en el proceso CLI del host",
+  "lab_workaround": "provision invoca systemctl --user como root (EPERM): el daemon se arranca con runuser -u <cell-user> -- systemctl --user start <unit> tras cada mutacion que reinicia user@<uid>.service",
+  "known_defects": [
+    "plan verify usa el socket rootless de la celda para el probe 'rootful'; runc intenta /run/systemd/private y recibe EPERM al crear el scope bajo un slice del sistema",
+    "slice_cgroup_path() devuelve /tenant.slice/tenant-<slug>.slice, pero systemd crea slices intermedios para nombres con guiones; el startswith de verify falla aunque el slice exista"
+  ],
+  "steps": {
+    "doctor": {
+      "rc": 0,
+      "stdout": "{\"capabilities\": {\"apparmor_enabled\": {\"detail\": \"AppArmor enabled in kernel\", \"ok\": true}, \"apparmor_parser\": {\"detail\": \"apparmor_parser on PATH\", \"ok\": true}, \"kernel_cgroup2\": {\"detail\": \"cgroup v2 mounted\", \"ok\": true}, \"nftables_skuid\": {\"detail\": \"network isolation mode=skuid\", \"ok\": true}, \"rootless_docker\": {\"detail\": \"dockerd-rootless.sh on PATH\", \"ok\": true}, \"subuid_range_free\": {\"detail\": \"free subuid/subgid block\", \"ok\": true}, \"systemd_delegate\": {\"detail\": \"Delegate=yes for user units\", \"ok\": true}}, \"ready\": true}\n",
+      "stderr": ""
+    },
+    "import_legacy": {
+      "rc": 0,
+      "stdout": "{\"cache_only\": true, \"imported\": [{\"cgroup_path\": \"/tenant.slice/tenant-cell-e2e-v5.slice\", \"dropin\": \"/etc/systemd/system/user@60018.service.d/tenant-plan.conf\", \"plan\": {\"cpus\": 0.5, \"memory\": \"256M\", \"pids\": 128}, \"slice\": \"tenant-cell-e2e-v5.slice\", \"slug\": \"cell-e2e-v5\", \"uid\": 60018}], \"source\": \"/var/tmp/spanel-e2e-0102/legacy-cell-e2e-v5.json\"}\n",
+      "stderr": ""
+    },
+    "manager_after_import": {
+      "rc": 0,
+      "stdout": "Slice=tenant-cell-e2e-v5.slice\nControlGroup=/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-v5.slice/user@60018.service\n",
+      "stderr": ""
+    },
+    "manager_restored": {
+      "rc": 0,
+      "stdout": "Slice=user-60018.slice\n",
+      "stderr": ""
+    },
+    "plan_remove": {
+      "rc": 0,
+      "stdout": "{\"removed\": true, \"restored_slice\": \"user-60018.slice\", \"slug\": \"cell-e2e-v5\"}\n",
+      "stderr": ""
+    },
+    "plan_set": {
+      "rc": 0,
+      "stdout": "{\"cgroup_path\": \"/tenant.slice/tenant-cell-e2e-v5.slice\", \"dropin\": \"/etc/systemd/system/user@60018.service.d/tenant-plan.conf\", \"plan\": {\"cpus\": 0.75, \"memory\": \"384M\", \"pids\": 96}, \"slice\": \"tenant-cell-e2e-v5.slice\", \"slug\": \"cell-e2e-v5\", \"uid\": 60018}\n",
+      "stderr": ""
+    },
+    "provision": {
+      "rc": 0,
+      "stdout": "{\"apparmor\": {\"effective\": false, \"hash\": \"2c51f3565f7bac0ecfa4f41921134cff2281aabbdee28f507669d99c62e422d9\", \"profile\": \"spanel-cell-cell-e2e-v5\"}, \"cgroup_driver\": \"systemd\", \"cgroup_path\": \"/user.slice/user-60018.slice/user@60018.service/user.slice/spanel-cell-cell-e2e-v5.scope\", \"gid_map\": [], \"network_mode\": \"skuid\", \"slug\": \"cell-e2e-v5\", \"socket_path\": \"/var/lib/spanel/cells/cell-e2e-v5/docker.sock\", \"state\": \"degraded\", \"uid\": 60018, \"uid_map\": []}\n",
+      "stderr": "useradd warning: spanel-cell-e2e-v5's uid 60018 is greater than SYS_UID_MAX 999\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\nFailed to connect to bus: Operación no permitida\n"
+    },
+    "rootful_after_import": {
+      "rc": 0,
+      "stdout": "container_cgroup=/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-v5.slice/docker-774aa0759c38638196d6bfa80a22dc376ddaeb561e37952b59d43233014a25ce.scope\nslice_cgroup=/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-v5.slice\nmemory.max=268435456\ncpu.max=50000 100000\npids.max=128\nexpected=268435456/50000/128\n",
+      "stderr": ""
+    },
+    "rootful_after_set": {
+      "rc": 0,
+      "stdout": "container_cgroup=/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-v5.slice/docker-e0b527d7fc0708de96c53ef5cd7c96c413836067f8dcaadbc1f55be22157b0cf.scope\nslice_cgroup=/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-v5.slice\nmemory.max=402653184\ncpu.max=75000 100000\npids.max=96\nexpected=402653184/75000/96\n",
+      "stderr": ""
+    },
+    "show_after_import": {
+      "rc": 0,
+      "stdout": "{\"cgroup_path\": \"/tenant.slice/tenant-cell-e2e-v5.slice\", \"dropin\": \"/etc/systemd/system/user@60018.service.d/tenant-plan.conf\", \"plan\": {\"cpus\": 0.5, \"memory\": \"256M\", \"pids\": 128}, \"slice\": \"tenant-cell-e2e-v5.slice\", \"slug\": \"cell-e2e-v5\", \"uid\": 60018}\n",
+      "stderr": ""
+    },
+    "show_after_remove": {
+      "rc": 2,
+      "stdout": "{\"error\": \"cell-e2e-v5\", \"verb\": \"plan_show\"}\n",
+      "stderr": ""
+    },
+    "show_after_set": {
+      "rc": 0,
+      "stdout": "{\"cgroup_path\": \"/tenant.slice/tenant-cell-e2e-v5.slice\", \"dropin\": \"/etc/systemd/system/user@60018.service.d/tenant-plan.conf\", \"plan\": {\"cpus\": 0.75, \"memory\": \"384M\", \"pids\": 96}, \"slice\": \"tenant-cell-e2e-v5.slice\", \"slug\": \"cell-e2e-v5\", \"uid\": 60018}\n",
+      "stderr": ""
+    },
+    "show_before": {
+      "rc": 2,
+      "stdout": "{\"error\": \"cell-e2e-v5\", \"verb\": \"plan_show\"}\n",
+      "stderr": ""
+    },
+    "slice_after_restart": {
+      "rc": 0,
+      "stdout": "manager:\nSlice=tenant-cell-e2e-v5.slice\nControlGroup=/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-v5.slice/user@60018.service\nslice:\nActiveState=active\nmemory.max=402653184\n",
+      "stderr": ""
+    },
+    "slice_props": {
+      "rc": 0,
+      "stdout": "MemoryMax=402653184\nTasksMax=96\n",
+      "stderr": ""
+    },
+    "verify_import": {
+      "rc": 1,
+      "stdout": "{\"cgroup_path\": \"/tenant.slice/tenant-cell-e2e-v5.slice\", \"evidence\": {\"cgroup_path\": \"/tenant.slice/tenant-cell-e2e-v5.slice\", \"error\": \"Unable to find image 'alpine:latest' locally\\nlatest: Pulling from library/alpine\\n881fc932939e: Pulling fs layer\\n86ff264fe568: Download complete\\nc35a7d82b8fa: Download complete\\n881fc932939e: Download complete\\n881fc932939e: Pull complete\\nDigest: sha256:f59abe656b692d901e184be3445e084786602108599d2a51d229c0f5a48c71bf\\nStatus: Downloaded newer image for alpine:latest\\ndocker: Error response from daemon:\", \"expected\": {\"cpu_max\": \"50000 100000\", \"memory_max\": \"268435456\", \"pids_max\": \"128\"}, \"ok\": false, \"rootful\": {}, \"rootless\": {}, \"slice\": \"tenant-cell-e2e-v5.slice\", \"slug\": \"cell-e2e-v5\"}, \"ok\": false, \"plan\": {\"cpus\": 0.5, \"memory\": \"256M\", \"pids\": 128}, \"slice\": \"tenant-cell-e2e-v5.slice\", \"slug\": \"cell-e2e-v5\"}\n",
+      "stderr": ""
+    }
+  }
+}
