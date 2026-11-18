@@ -84,6 +84,7 @@ class AppsWorker:
             runner_factory,
             route_refresh=route_refresh,
             transport=self._transport,
+            runner_for_tenant=self._runner,
         )
 
     def run(self, operation_id: str) -> None:

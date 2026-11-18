@@ -83,11 +83,23 @@ class ReleaseExecution:
         *,
         route_refresh: Callable[[Session, str, str], None] | None,
         transport: Callable[[], str],
+        runner_for_tenant: Callable[[str], Runner] | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.runner_factory = runner_factory
         self.route_refresh = route_refresh
         self.transport = transport
+        self.runner_for_tenant = runner_for_tenant
+
+    def _runner(self, tenant_id: str | None) -> Runner:
+        """Resolve the runner for an authenticated tenant when one is injected.
+
+        Without ``runner_for_tenant`` this is byte-identical to the former
+        global ``runner_factory(self.transport())`` call.
+        """
+        if tenant_id is not None and self.runner_for_tenant is not None:
+            return self.runner_for_tenant(tenant_id)
+        return self.runner_factory(self.transport())
 
     def _publish_restored_state(
         self,
@@ -211,6 +223,7 @@ class ReleaseExecution:
                        scope: object = None) -> dict:
         with self.session_factory() as db:
             current_app = db.get(Application, application_id)
+            tenant_id = current_app.tenant_id if current_app is not None else None
             previous = (
                 db.get(Deployment, current_app.active_deployment_id)
                 if current_app is not None and current_app.active_deployment_id else None
@@ -230,7 +243,7 @@ class ReleaseExecution:
             release, previous_manifest, requested, services=services or None
         )
         env_file = pending_env_path(operation_id)
-        runner = self.runner_factory(self.transport())
+        runner = self._runner(tenant_id)
         lock = application_lock(application_id)
         if not lock.acquire(blocking=False):
             raise RuntimeError("Another build or deployment is active")
@@ -320,6 +333,7 @@ class ReleaseExecution:
             operation = db.get(Operation, operation_id)
             if app is None or operation is None:
                 raise RuntimeError("Application not found")
+            tenant_id = app.tenant_id
             report = dict(operation.report or {})
             target_id = report.get("to_deployment_id")
             target = db.get(Deployment, target_id) if isinstance(target_id, str) else None
@@ -356,7 +370,7 @@ class ReleaseExecution:
         plan = plan_deployment(
             release, current_manifest, requested, services=services or None
         )
-        runner = self.runner_factory(self.transport())
+        runner = self._runner(tenant_id)
         lock = application_lock(application_id)
         if not lock.acquire(blocking=False):
             raise RuntimeError("Another build or deployment is active")

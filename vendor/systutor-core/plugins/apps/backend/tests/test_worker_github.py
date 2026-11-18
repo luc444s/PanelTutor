@@ -28,6 +28,7 @@ from plugins.apps.backend.releases import execution as execution_module
 from plugins.apps.backend.releases import find_release
 from plugins.apps.backend.releases import pipeline as pipeline_module
 from plugins.apps.backend.runtime import AppDeployError
+from plugins.apps.backend.runtime.tenant_runtime import TenantRuntimeRegistry
 from plugins.apps.backend.worker import AppsWorker
 from systutor.core.database import Base
 from systutor.kernel.auth.models import User
@@ -377,6 +378,63 @@ def test_deploy_existing_release_avoids_clone_and_github(
     assert github.token_calls == []
 
 
+def test_deploy_uses_tenant_runner_when_registry_injected(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """An isolated deploy must never fall back to the worker's global runner."""
+    db = database(tmp_path)
+    cipher = TokenCipher(b"k" * 32)
+    seed(db, cipher)
+    db.add(Operation(
+        id="op-release", application_id="a1", tenant_id="t1", actor_user_id="u1",
+        kind="deploy", status="running", idempotency_key="release", request_hash="h",
+        report={"hardened_operation_id": "op-signed"},
+    ))
+    db.commit()
+    manifest = {
+        "release": str(tmp_path / "state" / "app-demo" / "releases" / "op-release"),
+        "commit": "a" * 40, "tree_hash": "b" * 64, "compose": "compose.yml",
+        "containers": {"web": "cid"}, "status": "running",
+    }
+    monkeypatch.setattr(
+        execution_module, "find_release", lambda *_args: SimpleNamespace(
+            service_fingerprints={"web": "a" * 64},
+            shared_fingerprint="b" * 64, release_id="op-signed",
+        )
+    )
+    captured: list[object] = []
+
+    def fake_deploy(runner, *_args, **_kwargs):
+        captured.append(runner)
+        return manifest
+
+    monkeypatch.setattr(execution_module, "deploy_scoped", fake_deploy)
+    monkeypatch.setattr(
+        execution_module, "release_result", lambda _release: {"release_id": "op-signed"}
+    )
+    monkeypatch.setattr(worker_module, "tenant_slug", lambda _db, _tid: "cell-g")
+
+    class _FakeRunner:
+        def __init__(self, transport="local", environ=None):
+            self.transport = transport
+            self.environ = dict(environ or {})
+
+        def run(self, *_args, **_kwargs):
+            return None
+
+    worker = AppsWorker(
+        lambda: Session(db.get_bind()), cipher, github=FakeGithub(),
+        runner_factory=lambda transport, environ=None: _FakeRunner(transport, environ),
+        runtime_registry=TenantRuntimeRegistry(str(tmp_path), _FakeRunner),
+    )
+    result = worker._source_operation("op-release", "a1", "deploy")
+    assert result["deployment_id"]
+    assert len(captured) == 1
+    assert captured[0].environ["DOCKER_HOST"] == (
+        f"unix://{tmp_path}/cells/cell-g/docker.sock"
+    )
+
+
 def test_rollback_rejects_a_deployment_without_a_signed_release(
     tmp_path: Path,
 ) -> None:
@@ -479,6 +537,86 @@ def test_rollback_downs_new_starts_signed_previous_and_moves_active(
     assert db.get(Deployment, active_id).operation_id == "op-rb"
     assert db.get(Deployment, "d-signed").status == "stopped"
     assert db.get(Application, "a1").status == "running"
+
+
+def test_rollback_uses_tenant_runner_when_registry_injected(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A rollback on failure must also stay inside the tenant's own socket."""
+    db = database(tmp_path)
+    cipher = TokenCipher(b"k" * 32)
+    seed(db, cipher)
+    signed_release = tmp_path / "state" / "app-demo" / "releases" / "d-signed"
+    signed_release.mkdir(parents=True)
+    db.add(Deployment(
+        id="d-current", application_id="a1", operation_id="current",
+        repository="acme/repo", branch="main", status="running",
+        manifest={"project": "app-demo"},
+    ))
+    db.add(Deployment(
+        id="d-signed", application_id="a1", operation_id="signed",
+        repository="acme/repo", branch="main", status="stopped",
+        release=str(signed_release),
+        manifest={"hardened_release": {"release_id": "op-old"}},
+    ))
+    app = db.get(Application, "a1")
+    app.active_deployment_id = "d-current"
+    db.add(Operation(
+        id="op-rb", application_id="a1", tenant_id="t1", actor_user_id="u1",
+        kind="rollback", status="running", idempotency_key="rb", request_hash="h",
+        report={"to_deployment_id": "d-signed"},
+    ))
+    db.commit()
+    manifest = {
+        "release": str(signed_release), "commit": "a" * 40,
+        "tree_hash": "b" * 64, "compose": "compose.yml",
+        "containers": {"web": "cid"}, "status": "running",
+    }
+    captured: list[object] = []
+
+    class FakeRelease:
+        release_id = "op-old"
+        service_fingerprints = {"web": "a" * 64}
+        shared_fingerprint = "b" * 64
+        repo = "acme/repo"
+        branch = "main"
+
+        @classmethod
+        def from_dict(cls, _value):
+            return cls()
+
+    monkeypatch.setattr(execution_module, "TrustedRelease", FakeRelease)
+    monkeypatch.setattr(execution_module, "verify_release", lambda *_a, **_k: None)
+    monkeypatch.setattr(
+        execution_module, "release_result", lambda _release: {"release_id": "op-old"}
+    )
+
+    def fake_deploy(runner, *_args, **_kwargs):
+        captured.append(runner)
+        return manifest
+
+    monkeypatch.setattr(execution_module, "deploy_scoped", fake_deploy)
+    monkeypatch.setattr(worker_module, "tenant_slug", lambda _db, _tid: "cell-g")
+
+    class _FakeRunner:
+        def __init__(self, transport="local", environ=None):
+            self.transport = transport
+            self.environ = dict(environ or {})
+
+        def run(self, *_args, **_kwargs):
+            return None
+
+    worker = AppsWorker(
+        lambda: Session(db.get_bind()), cipher, github=FakeGithub(),
+        runner_factory=lambda transport, environ=None: _FakeRunner(transport, environ),
+        runtime_registry=TenantRuntimeRegistry(str(tmp_path), _FakeRunner),
+    )
+    result = worker.execution.rollback_operation("op-rb", "a1")
+    assert result["rollback"] is True
+    assert len(captured) == 1
+    assert captured[0].environ["DOCKER_HOST"] == (
+        f"unix://{tmp_path}/cells/cell-g/docker.sock"
+    )
 
 
 def test_restored_partial_deploy_publishes_new_active_identity(tmp_path: Path) -> None:

@@ -156,3 +156,42 @@ def test_worker_uses_registry_for_authenticated_tenant(tmp_path, monkeypatch) ->
     worker = worker_module.AppsWorker(_Session, None, runtime_registry=registry)
     runner = worker._runner("tenant-1")
     assert runner.environ["DOCKER_HOST"] == f"unix://{tmp_path}/cells/cell-g/docker.sock"
+
+
+def test_release_execution_default_runner_is_unchanged() -> None:
+    """No registry injected: the global runner_factory path stays byte-identical."""
+    from plugins.apps.backend.releases.execution import ReleaseExecution
+
+    calls: list[str] = []
+    global_runner = FakeRunner("local", {"source": "global"})
+
+    def factory(transport: str = "local"):
+        calls.append(transport)
+        return global_runner
+
+    execution = ReleaseExecution(
+        lambda: None, factory, route_refresh=None, transport=lambda: "local"
+    )
+    assert execution._runner("tenant-1") is global_runner
+    assert calls == ["local"]
+
+
+def test_release_execution_uses_tenant_runner_when_injected() -> None:
+    from plugins.apps.backend.releases.execution import ReleaseExecution
+
+    tenant_runner = FakeRunner("local", {"source": "tenant"})
+    fallback = FakeRunner("local", {"source": "fallback"})
+
+    def factory(*_args, **_kwargs):
+        return fallback
+
+    execution = ReleaseExecution(
+        lambda: None,
+        factory,
+        route_refresh=None,
+        transport=lambda: "local",
+        runner_for_tenant=lambda _tenant_id: tenant_runner,
+    )
+    assert execution._runner("tenant-1") is tenant_runner
+    # A missing tenant id still falls back to the old global path.
+    assert execution._runner(None) is fallback
