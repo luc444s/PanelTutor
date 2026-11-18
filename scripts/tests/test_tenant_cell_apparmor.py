@@ -9,6 +9,8 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -58,12 +60,25 @@ def test_render_profile_grants_broad_image_agnostic_rootfs() -> None:
 
     # The inversion: broad read/exec of the cell's own rootfs plus read-only
     # host binaries -- no enumeration of per-image executables.
-    assert "owner /** r/ix," in profile
+    assert "owner /** rix," in profile
+    # GAP-0105-4: real images create sockets, cache dirs and log files;
+    # `w` on the owned rootfs also grants creation (AppArmor 4 has no `c` mode).
+    assert "owner /** rwklix," in profile
     assert "owner /** m," in profile
     assert (
-        "/{bin,sbin,usr,lib,lib64,opt,etc,srv,var/tmp,tmp,proc,sys,dev}/** r/ix,"
+        "/{bin,sbin,usr,lib,lib64,opt,etc,srv,var/tmp,tmp,proc,sys,dev}/** rix,"
         in profile
     )
+    # GAP-0105-2: runc re-execs its init through /proc/self/fd -> /runc,
+    # which is root-owned and therefore not covered by `owner /**`.
+    assert "/runc rix," in profile
+    # GAP-0105-8: container-view datadirs and writable mmap of /.
+    for rule in ("/data/** rwklix,", "/var/lib/mysql/** rwklix,",
+                 "/var/cache/** rwklix,", "/var/log/** rwklix,",
+                 "/app/** rwklix,", "/docker-entrypoint-initdb.d/** rwklix,",
+                 "/run/mysqld/** rwklix,", "/home/** rwklix,",
+                 "/dev/tty rw,", "/ mrw,"):
+        assert rule in profile
     for image_binary in (
         "/usr/sbin/nginx",
         "/docker-entrypoint.sh",
@@ -72,6 +87,21 @@ def test_render_profile_grants_broad_image_agnostic_rootfs() -> None:
         "/usr/bin/unpigz",
     ):
         assert f"{image_binary} ix," not in profile
+
+
+def test_rendered_profile_parses_when_apparmor_parser_is_available(
+    tmp_path: Path,
+) -> None:
+    """Catch invalid modes such as `r/ix` or `c` before the lab does (GAP-0105-5)."""
+    parser = shutil.which("apparmor_parser")
+    if parser is None:
+        pytest.skip("apparmor_parser is not installed on this host")
+    profile_file = tmp_path / f"{apparmor.profile_name('acme')}.profile"
+    profile_file.write_text(apparmor.render_profile("acme"), encoding="utf-8")
+    result = subprocess.run(
+        [parser, "-Q", str(profile_file)], capture_output=True, text=True, check=False
+    )
+    assert result.returncode == 0, result.stderr
 
 
 def test_render_profile_scopes_writes_to_cell_and_image_trees() -> None:
@@ -94,7 +124,7 @@ def test_render_matrix_covers_real_images_without_patching() -> None:
         assert f"profile spanel-cell-{slug} " in profile
         assert f"/var/lib/spanel/cells/{slug}/** rwkl," in profile
         assert f"owner /var/lib/spanel/cells/{slug}/docker.sock rw," in profile
-        assert "owner /** r/ix," in profile
+        assert "owner /** rix," in profile
         assert apparmor.profile_hash(slug) == apparmor.profile_hash(slug)
         # Image-specific entrypoints are never hand-listed.
         assert f"/usr/sbin/{app} ix," not in profile
@@ -124,7 +154,7 @@ def test_render_profile_allows_only_the_session_bus() -> None:
 
     assert "dbus (send, receive) bus=session," in profile
     assert "dbus (send, receive) bus=system," not in profile
-    assert "/run/user/[0-9]*/** r/ix," in profile
+    assert "/run/user/[0-9]*/** rix," in profile
 
 
 def test_render_profile_has_no_complain_or_unconfined() -> None:
@@ -147,9 +177,11 @@ def test_render_profile_keeps_capabilities_ptrace_and_mounts_scoped() -> None:
         assert f"capability {capability}," in profile
     assert "ptrace (read, readby) peer=spanel-cell-acme," in profile
     assert (
-        "mount options in (ro, rw, bind, rbind, remount, nosuid, nodev, noexec)"
+        "mount options in (ro, rw, bind, rbind, remount, nosuid, nodev, noexec, rslave)"
         " /var/lib/spanel/cells/acme/** -> /var/lib/spanel/cells/acme/**" in profile
     )
+    # GAP-0105-4: Gitea's bind mount propagates with MS_REC|MS_SLAVE.
+    assert "mount options=(rw, rslave) -> /var/lib/spanel/cells/acme/**," in profile
     assert "pivot_root /var/lib/spanel/cells/acme/**," in profile
     # No wildcard that allows mounting over another cell or the host.
     assert "mount /** -> /," not in profile
@@ -178,6 +210,10 @@ def test_seccomp_allowlist_covers_runtime_syscalls() -> None:
         "clone", "execve", "mount", "umount2", "setns", "seccomp", "ptrace",
         "socket", "connect", "openat", "futex", "mmap", "read", "write",
         "fork", "vfork", "wait4", "pivot_root",
+        # GAP-0105-3: container init resolves entrypoints via newfstatat.
+        "newfstatat", "fstatat64",
+        # GAP-0105-7: Gitea/MariaDB init needs chown, fifos and device nodes.
+        "fchown", "fchownat", "lchown", "mkfifo", "mkfifoat", "mknod", "mknodat",
     ):
         assert syscall in allowed, syscall
 

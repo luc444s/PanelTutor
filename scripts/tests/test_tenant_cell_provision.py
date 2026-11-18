@@ -376,7 +376,7 @@ def test_apparmor_profile_uses_only_validated_slug() -> None:
     assert apparmor.profile_hash("acme") != apparmor.profile_hash("other")
     # A.SPEC 0105: unpigz, busybox and the qemu-check helpers are no longer
     # enumerated -- the broad, image-agnostic rootfs grant covers them all.
-    assert "owner /** r/ix," in profile
+    assert "owner /** rix," in profile
     assert "options=(ro, rbind) /var/lib/spanel/cells/acme/**" in profile
     with pytest.raises(alloc.InvalidSlug):
         apparmor.render_profile("acme\n  deny /etc/** rw,")
@@ -391,7 +391,7 @@ def test_apparmor_profile_allows_rootless_build_and_exec() -> None:
     profile = apparmor.render_profile("acme")
     assert "capability net_raw," in profile
     # Real-image shells (busybox/dash/sh) run via the broad rootfs grant now.
-    assert "owner /** r/ix," in profile
+    assert "owner /** rix," in profile
     assert "/proc/pressure/** r," in profile
     assert "/proc/self/{setgroups,uid_map,gid_map} rw," in profile
     assert "remount options in (ro, rw, nosuid, nodev, noexec, bind, rbind)" in profile

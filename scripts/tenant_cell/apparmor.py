@@ -30,14 +30,19 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   # permits PROT_EXEC mappings used by dynamic loaders and JITs (node, Go).
   # Using `owner` keeps other tenants' files (different uid) out of reach even
   # though dac_override is granted to rootlesskit below.
-  owner /** r/ix,
+  owner /** rix,
+  owner /** rwklix,
   owner /** m,
 
   # Root-owned host binaries/libraries/config are shared and read-only. They
   # are not covered by `owner`, so grant them explicitly (still read/exec only).
-  /{{bin,sbin,usr,lib,lib64,opt,etc,srv,var/tmp,tmp,proc,sys,dev}}/** r/ix,
+  /{{bin,sbin,usr,lib,lib64,opt,etc,srv,var/tmp,tmp,proc,sys,dev}}/** rix,
   /{{bin,sbin,usr,lib,lib64,opt,etc,srv,var/tmp,tmp,proc,sys,dev}}/** m,
-  /run/user/[0-9]*/** r/ix,
+  /run/user/[0-9]*/** rix,
+  # runc re-execs its init through /proc/self/fd/N; inside the container's
+  # mount namespace AppArmor resolves that target to /runc (root-owned), so
+  # it needs an explicit root-owned exec exception (GAP-0105-2).
+  /runc rix,
 
   # Capabilities required by rootlesskit, the setuid id mappers, nsenter and
   # dockerd inside the cell's own user/mount/net namespaces.
@@ -86,6 +91,19 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   # --- /proc and /sys reads required by the daemon and containers ----------
   / r,
   /dev/net/tun rw,
+  /dev/tty rw,
+  # Container view of common writable app datadirs (GAP-0105-8). DAC and the
+  # userns keep host paths protected; these are the paths seen after pivot_root.
+  /data/** rwklix,
+  /var/lib/mysql/** rwklix,
+  /var/cache/** rwklix,
+  /var/log/** rwklix,
+  /var/www/** rwklix,
+  /app/** rwklix,
+  /docker-entrypoint-initdb.d/** rwklix,
+  /run/mysqld/** rwklix,
+  /home/** rwklix,
+  / mrw,
   /proc/ r,
   /proc/[0-9]*/ r,
   /proc/[0-9]*/ns/* r,
@@ -139,6 +157,8 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   mount options=(rw, private) -> /var/lib/spanel/cells/{slug}/**,
   mount options=(rw, rprivate) -> /var/lib/spanel/cells/{slug}/**,
   mount options=(rw, rslave) -> /,
+  mount options=(rw, rslave) -> /var/lib/spanel/cells/{slug}/**,
+  mount options in (ro, rw, bind, rbind, remount, nosuid, nodev, noexec, rslave) /var/lib/spanel/cells/{slug}/** -> /var/lib/spanel/cells/{slug}/**,
   mount options=(rw, move) /tmp/rootlesskit-*/ -> /etc/.ro*/,
   mount options=(rw, move) /tmp/rootlesskit-*/ -> /run/.ro*/,
   mount fstype=sysfs -> /sys/,
