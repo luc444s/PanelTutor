@@ -172,6 +172,13 @@ class AppsTenantPlan(Base):
     cpus: Mapped[float] = mapped_column(Float, nullable=False)
     pids: Mapped[int] = mapped_column(Integer, nullable=False)
     cpuset: Mapped[str | None] = mapped_column(String(255))
+    # A.SPEC 0102: explicit lifecycle state. A persisted plan is always
+    # recoverable: pending while the agent works, applied only after real
+    # materialization, failed (with last_error) otherwise.
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    desired_hash: Mapped[str | None] = mapped_column(String(64))
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )

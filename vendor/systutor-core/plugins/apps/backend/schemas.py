@@ -399,6 +399,10 @@ class TenantPlanView(BaseModel):
     cpus: float
     pids: int
     cpuset: str | None = None
+    # A.SPEC 0102: lifecycle state of the materialized plan.
+    status: str = "applied"
+    applied_at: datetime | None = None
+    last_error: str | None = None
     updated_at: datetime | None = None
     slice: str
     cgroup_path: str

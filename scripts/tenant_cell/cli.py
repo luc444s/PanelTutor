@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
+import socket
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
@@ -16,7 +17,7 @@ import click.core
 import typer
 from typer.core import TyperOption
 
-from . import alloc, materializer, plans
+from . import alloc, host_agent, materializer, plans
 from . import doctor as doctor_mod
 from .cells import CellNotFound, CellService, ProvisionRefused
 from .executor import LocalExecutor
@@ -357,3 +358,36 @@ def plan_import(
         lambda: _import_plans(from_file, data_root), json_output, "plan_import"
     )
     _emit(result, json_output)
+
+
+# --- A.SPEC 0102: privileged host agent (run only by systemd) ---------------
+
+
+@app.command("plan-agent")
+def plan_agent(
+    data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
+) -> None:
+    """Serve the restricted plan protocol on the host Unix socket.
+
+    This command is meant to be started by ``spanel-plan-agent.service`` only.
+    The local mutation gate and the shared token live in this privileged host
+    process, never in the unprivileged application container.
+    """
+    if not host_agent.plans.mutation_allowed():
+        typer.echo(
+            f"refusing to start: set {host_agent.plans.MUTATION_GATE}=1 "
+            "in the host agent process only"
+        )
+        raise typer.Exit(code=2)
+    agent = host_agent.build_agent_from_env(data_root)
+    path = host_agent.socket_path_from_env()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+    server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    server.bind(str(path))
+    server.listen(16)
+    try:
+        agent.serve_forever(server)
+    finally:
+        server.close()
+        path.unlink(missing_ok=True)

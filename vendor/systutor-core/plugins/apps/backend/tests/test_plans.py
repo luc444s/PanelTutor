@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 import yaml
-from sqlalchemy import create_engine, inspect, select
+from sqlalchemy import create_engine, inspect, select, text
 from sqlalchemy.orm import Session
 
 import systutor.kernel.models  # noqa: F401
@@ -37,13 +37,23 @@ MEM = 1024 * 1024 * 1024
 
 
 class FakeMaterializer:
-    def __init__(self, fail: str | None = None, evidence: dict | None = None) -> None:
+    def __init__(
+        self,
+        fail: str | None = None,
+        evidence: dict | None = None,
+        on_apply: Any = None,
+        reconcile_result: dict | None = None,
+    ) -> None:
         self.calls: list[tuple[Any, ...]] = []
         self.fail = fail
         self.evidence = dict(evidence or {"ok": True})
+        self.on_apply = on_apply
+        self.reconcile_result = reconcile_result
 
     def apply(self, tenant_slug: str, plan: dict[str, Any]) -> dict[str, Any]:
         self.calls.append(("apply", tenant_slug, dict(plan)))
+        if self.on_apply is not None:
+            self.on_apply()
         if self.fail == "apply":
             raise RuntimeError("slice write failed")
         return {"slice": f"tenant-{tenant_slug}.slice"}
@@ -59,6 +69,20 @@ class FakeMaterializer:
         if self.fail == "verify":
             raise RuntimeError("probe failed")
         return dict(self.evidence)
+
+    def reconcile(self, desired: list[dict[str, Any]]) -> dict[str, Any]:
+        self.calls.append(("reconcile", [dict(item) for item in desired]))
+        if self.fail == "reconcile":
+            raise RuntimeError("agent restart failed")
+        if self.reconcile_result is not None:
+            return dict(self.reconcile_result)
+        return {
+            "ok": True,
+            "results": [
+                {"slug": item["slug"], "ok": True, "action": "verified"}
+                for item in desired
+            ],
+        }
 
 
 @pytest.fixture
@@ -219,7 +243,7 @@ def test_get_plan_returns_none_when_no_plan_is_stored(db: Session) -> None:
     assert plans_service.plan_view(db, "t1") is None
 
 
-def test_failed_materialization_rolls_back_and_audits_the_failure(
+def test_failed_materialization_keeps_a_recoverable_failed_row(
     db: Session,
 ) -> None:
     fake = FakeMaterializer(fail="apply")
@@ -227,13 +251,118 @@ def test_failed_materialization_rolls_back_and_audits_the_failure(
         plans_service.set_plan(
             db, tenant_id="t1", actor="u1", body=body(), materializer=fake
         )
-    assert plans_service.get_plan(db, "t1") is None
+    row = plans_service.get_plan(db, "t1")
+    assert row is not None
+    assert row.status == "failed"
+    assert row.applied_at is None
+    assert row.last_error is not None and "slice write failed" in row.last_error
     failure = audits(db, "apps.plan.set")
     assert len(failure) == 1
     assert failure[0].result == "failure"
     assert "slice write failed" in failure[0].details["error"]
     operation = db.scalar(select(Operation).where(Operation.kind == "plan_set"))
     assert operation is not None and operation.status == "failed"
+
+
+def test_apply_transitions_pending_applied_and_records_desired_hash(
+    db: Session,
+) -> None:
+    seen: list[str | None] = []
+
+    def observe() -> None:
+        row = plans_service.get_plan(db, "t1")
+        seen.append(None if row is None else row.status)
+
+    view = plans_service.set_plan(
+        db, tenant_id="t1", actor="u1", body=body(),
+        materializer=FakeMaterializer(on_apply=observe),
+    )
+    assert view["status"] == "applied"
+    assert view["applied_at"] is not None
+    assert view["last_error"] is None
+    assert seen == ["pending"]
+    row = plans_service.get_plan(db, "t1")
+    assert row is not None and row.status == "applied"
+    assert row.desired_hash is not None and len(row.desired_hash) == 64
+    # A retry with the same body produces the same desired hash.
+    plans_service.set_plan(
+        db, tenant_id="t1", actor="u1", body=body(), materializer=FakeMaterializer()
+    )
+    assert plans_service.get_plan(db, "t1").desired_hash == row.desired_hash
+
+
+def test_a_failed_plan_is_retryable(db: Session) -> None:
+    with pytest.raises(AppError, match="materialization"):
+        plans_service.set_plan(
+            db, tenant_id="t1", actor="u1", body=body(),
+            materializer=FakeMaterializer(fail="apply"),
+        )
+    view = plans_service.set_plan(
+        db, tenant_id="t1", actor="u1", body=body(), materializer=FakeMaterializer()
+    )
+    assert view["status"] == "applied"
+    assert plans_service.get_plan(db, "t1").last_error is None
+
+
+def test_verify_reports_drift_as_failed_without_deleting_the_row(db: Session) -> None:
+    plans_service.set_plan(
+        db, tenant_id="t1", actor="u1", body=body(), materializer=FakeMaterializer()
+    )
+    result = plans_service.verify_plan(
+        db, tenant_id="t1", actor="u1",
+        materializer=FakeMaterializer(evidence={"ok": False, "error": "cpu.max differs"}),
+    )
+    assert result["ok"] is False
+    row = plans_service.get_plan(db, "t1")
+    assert row is not None and row.status == "failed"
+    assert "cpu.max differs" in row.last_error
+
+
+def test_typed_client_errors_map_to_controlled_app_errors(db: Session) -> None:
+    from plugins.apps.backend.plans_client import PlanAgentDenied
+
+    class DenyingMaterializer(FakeMaterializer):
+        def apply(self, tenant_slug, plan):
+            raise PlanAgentDenied("tenant not allowed", code="tenant_not_allowed")
+
+    with pytest.raises(AppError) as raised:
+        plans_service.set_plan(
+            db, tenant_id="t1", actor="u1", body=body(),
+            materializer=DenyingMaterializer(),
+        )
+    assert raised.value.status_code == 502
+    assert raised.value.code == "apps.plan_agent_denied"
+    assert plans_service.get_plan(db, "t1").status == "failed"
+
+
+def test_reconcile_repairs_states_from_the_db_desired_set(db: Session) -> None:
+    plans_service.set_plan(
+        db, tenant_id="t1", actor="u1", body=body(), materializer=FakeMaterializer()
+    )
+    row = plans_service.get_plan(db, "t1")
+    row.status = "failed"
+    row.last_error = "agent was down"
+    row.applied_at = None
+    db.commit()
+    result = plans_service.reconcile(
+        db, materializer=FakeMaterializer(reconcile_result={
+            "ok": True,
+            "results": [{"slug": "acme", "ok": True, "action": "re-applied"}],
+            "removed": [],
+        })
+    )
+    assert result["ok"] is True and result["checked"] == 1
+    repaired = plans_service.get_plan(db, "t1")
+    assert repaired.status == "applied"
+    assert repaired.last_error is None
+    assert repaired.applied_at is not None
+    assert len(audits(db, "apps.plan.reconcile")) == 1
+
+
+def test_reconcile_without_a_client_is_a_loud_503(db: Session) -> None:
+    with pytest.raises(AppError) as raised:
+        plans_service.reconcile(db, materializer=None)
+    assert raised.value.status_code == 503
 
 
 def test_remove_dematerializes_and_deletes_only_the_target_tenant(
@@ -351,3 +480,45 @@ def test_migration_006_is_idempotent_and_reversible(tmp_path: Path) -> None:
         migration.downgrade(db)
         db.commit()
     assert "apps_tenant_plans" not in inspect(engine).get_table_names()
+
+
+def _load_migration(name: str) -> Any:
+    spec = importlib.util.spec_from_file_location(name, MIGRATIONS / f"{name}.py")
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def test_migration_007_adds_status_columns_and_is_reversible(tmp_path: Path) -> None:
+    base = _load_migration("006_add_tenant_resource_plans")
+    status = _load_migration("007_add_tenant_plan_status")
+    assert status.revision == "007_add_tenant_plan_status"
+
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'm007.db'}")
+    with Session(engine) as db:
+        base.upgrade(db)
+        db.execute(text(
+            "INSERT INTO apps_tenant_plans "
+            "(id, tenant_id, memory_bytes, cpus, pids, updated_at) "
+            "VALUES ('p1', 't1', 1024, 1, 10, '2026-01-01 00:00:00')"
+        ))
+        status.upgrade(db)
+        status.upgrade(db)  # idempotent
+        db.commit()
+    columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("apps_tenant_plans")
+    }
+    assert {"status", "applied_at", "last_error", "desired_hash"} <= columns
+    with Session(engine) as db:
+        assert db.scalar(text(
+            "SELECT status FROM apps_tenant_plans WHERE id = 'p1'"
+        )) == "applied"  # legacy rows were already materialized
+        status.downgrade(db)
+        db.commit()
+    columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("apps_tenant_plans")
+    }
+    assert not {"status", "applied_at", "last_error", "desired_hash"} & columns

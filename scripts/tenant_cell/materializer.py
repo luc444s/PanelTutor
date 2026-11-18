@@ -159,3 +159,59 @@ class PlanMaterializer:
             "plan": effective,
             "evidence": evidence,
         }
+
+    def reconcile(self, desired: list[dict[str, Any]]) -> dict[str, Any]:
+        """Repair host state to match ``desired`` plans coming from the DB.
+
+        ``plans.json`` is used only to find stale cache entries to clean up;
+        it is never the source of truth. A missing cache entry is repaired by
+        re-applying from the desired plan, which is what makes reconcile safe
+        after a VPS restart.
+        """
+        results: list[dict[str, Any]] = []
+        desired_slugs: set[str] = set()
+        for entry in desired:
+            if not isinstance(entry, dict):
+                results.append({"slug": "", "ok": False, "error": "invalid desired entry"})
+                continue
+            slug = plans.validate_slug(str(entry.get("slug", "")))
+            desired_slugs.add(slug)
+            plan = entry["plan"]
+            try:
+                evidence = self.verify(slug, plan)
+                ok = bool(evidence.get("ok"))
+                action = "verified"
+                if not ok:
+                    self.apply(slug, plan)
+                    action = "re-applied"
+                results.append({
+                    "slug": slug, "tenant": entry.get("tenant"),
+                    "ok": True, "action": action,
+                })
+            except plans.PlanNotFound:
+                self.apply(slug, plan)
+                results.append({
+                    "slug": slug, "tenant": entry.get("tenant"),
+                    "ok": True, "action": "re-applied",
+                })
+            except Exception as exc:  # noqa: BLE001 - one tenant must not abort all
+                results.append({
+                    "slug": slug, "tenant": entry.get("tenant"),
+                    "ok": False, "error": str(exc)[:300],
+                })
+
+        removed: list[str] = []
+        cleanup_failed: list[str] = []
+        cached = set(plans.load_plans(self.data_root)["plans"])
+        for slug in sorted(cached - desired_slugs):
+            try:
+                self.remove(slug)
+                removed.append(slug)
+            except Exception:  # noqa: BLE001 - one stale slug must not abort all
+                cleanup_failed.append(slug)
+        return {
+            "ok": all(item["ok"] for item in results) and not cleanup_failed,
+            "results": results,
+            "removed": removed,
+            "cleanup_failed": cleanup_failed,
+        }

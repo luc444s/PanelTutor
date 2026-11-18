@@ -13,6 +13,7 @@ from plugins.apps.backend.crypto import TokenCipher
 from plugins.apps.backend.dispatcher import DramatiqDispatcher
 from plugins.apps.backend.github import GithubClient, UrllibGithubClient
 from plugins.apps.backend.models import Application, Deployment
+from plugins.apps.backend.plans_client import HostPlanMaterializerClient
 from plugins.apps.backend.public_url import PublicUrlError, parse_public_url
 from plugins.apps.backend.router import router
 from plugins.apps.backend.settings import AppsSettings
@@ -80,6 +81,22 @@ def resolve_apps_sites(db: Session, tenant_id: str | None) -> list[OwnedSite]:
     return result
 
 
+def _build_plan_materializer(settings: AppsSettings) -> HostPlanMaterializerClient | None:
+    """Wire the bounded socket client when the operator configured the agent.
+
+    An empty socket path means no client at all, so the plans API stays
+    fail-closed with ``503 apps.materializer_unavailable``. Removing this
+    injection rolls back to the 0101 behaviour without touching any data.
+    """
+    if not str(settings.plan_agent_socket):
+        return None
+    return HostPlanMaterializerClient(
+        settings.plan_agent_socket,
+        settings.plan_agent_token_file,
+        timeout=settings.plan_agent_timeout,
+    )
+
+
 def register(context: PluginContext) -> None:
     settings = AppsSettings.from_env()
     production = os.environ.get("SYSTUTOR_ENV") == "production"
@@ -92,6 +109,9 @@ def register(context: PluginContext) -> None:
     app = context.router_registry
     if app is not None:
         app.state.apps_resources = AppsResources(
-            settings, DramatiqDispatcher(), UrllibGithubClient()
+            settings,
+            DramatiqDispatcher(),
+            UrllibGithubClient(),
+            plan_materializer=_build_plan_materializer(settings),
         )
         register_site_provider(app, "apps", resolve_apps_sites)
