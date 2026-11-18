@@ -34,6 +34,7 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   capability fowner,
   capability fsetid,
   capability net_bind_service,
+  capability net_raw,
   capability kill,
   capability setpcap,
 
@@ -50,10 +51,15 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /usr/bin/dash rix,
   /bin/dash rix,
   /usr/bin/sh rix,
+  # Alpine/BusyBox payloads resolve /bin/sh to busybox inside the mount ns.
+  /bin/busybox ix,
+  /usr/bin/busybox ix,
   /usr/bin/rootlesskit ix,
   /usr/bin/dockerd rix,
   /usr/bin/containerd rix,
   /usr/bin/containerd-shim-runc-v2 rix,
+  # containerd forks unpigz to decompress OCI layers during pull/build.
+  /usr/bin/unpigz ix,
   /usr/sbin/runc rix,
   # runc re-execs its init through /proc/self/fd/N; inside the container's
   # mount namespace AppArmor resolves that target to /runc.
@@ -82,6 +88,8 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /usr/bin/umount ix,
   /usr/bin/ip ix,
   /usr/bin/unshare ix,
+  # dockerd probes binfmt by executing generated helpers inside the cell tmp.
+  /var/lib/spanel/cells/{slug}/tmp/qemu-check*/** ix,
 
   # Runtime reads of proc/sys.
   / r,
@@ -106,10 +114,11 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /proc/self/fd/* rw,
   /proc/self/fd/* ix,
   /proc/[0-9]*/uid_map r,
-  /proc/[0-9]*/{{uid_map,gid_map,setgroups}} w,
-  /proc/self/{{setgroups,uid_map,gid_map}} w,
+  /proc/[0-9]*/{{uid_map,gid_map,setgroups}} rw,
+  /proc/self/{{setgroups,uid_map,gid_map}} rw,
   /[0-9]*/{{setgroups,uid_map,gid_map}} rw,
   /proc/self/ns/net r,
+  /proc/pressure/** r,
   /proc/sys/kernel/random/boot_id r,
   /proc/sys/kernel/threads-max r,
   /proc/sys/user/max_user_namespaces r,
@@ -126,6 +135,7 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /sys/fs/cgroup/cgroup.controllers r,
   /sys/fs/cgroup/cpuset.cpus.effective r,
   /sys/fs/cgroup/system.slice/ rwkl,
+  /sys/fs/cgroup/system.slice/** rwkl,
   /sys/fs/cgroup/system.slice/cgroup.type r,
   /sys/fs/cgroup/system.slice/spanel-cell-{slug}.service/** r,
   # rootlesskit/dockerd look up the delegated cgroup of the cell's uid.
@@ -194,6 +204,15 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   mount fstype=cgroup2 -> /var/lib/spanel/cells/{slug}/**,
   mount options=(rw, rbind) /var/lib/spanel/cells/{slug}/** -> /run/.ro*/**,
   mount options=(rw, rbind) /var/lib/spanel/cells/{slug}/** -> /var/lib/spanel/cells/{slug}/**,
+  # BuildKit/runc combine bind, remount and nodev flags in one call; `in`
+  # matches any combination of these flags, still only inside this cell's tree.
+  mount options in (ro, rw, bind, rbind, remount, nosuid, nodev, noexec) /var/lib/spanel/cells/{slug}/** -> /var/lib/spanel/cells/{slug}/**,
+  remount options in (ro, rw, nosuid, nodev, noexec, bind, rbind) /var/lib/spanel/cells/{slug}/**,
+  # BuildKit reads the Dockerfile by rbind-mounting a read-only snapshot, then
+  # remounts it read-only; runc remounts resolv.conf/hosts inside the rootfs.
+  mount options=(ro, rbind) /var/lib/spanel/cells/{slug}/** -> /var/lib/spanel/cells/{slug}/**,
+  mount options=(ro, remount, rbind) /var/lib/spanel/cells/{slug}/** -> /var/lib/spanel/cells/{slug}/**,
+  mount options=(ro, nosuid, nodev, noexec, remount, rbind) /var/lib/spanel/cells/{slug}/** -> /var/lib/spanel/cells/{slug}/**,
   mount options=(rw, bind) /dev/** -> /var/lib/spanel/cells/{slug}/**,
   mount options=(rw, bind) /proc/** -> /var/lib/spanel/cells/{slug}/**,
   mount options=(rw, rbind) /proc/** -> /var/lib/spanel/cells/{slug}/**,

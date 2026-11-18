@@ -301,8 +301,35 @@ def test_apparmor_profile_uses_only_validated_slug() -> None:
     assert "spanel-cell-other" not in profile
     assert apparmor.profile_hash("acme") == apparmor.profile_hash("acme")
     assert apparmor.profile_hash("acme") != apparmor.profile_hash("other")
+    # containerd decompresses pulled layers through unpigz (regression: E2E in
+    # cell-g found pull blocked by an AppArmor exec denial for this binary).
+    assert "/usr/bin/unpigz ix," in profile
+    assert "qemu-check*/** ix," in profile
+    assert "options=(ro, rbind) /var/lib/spanel/cells/acme/**" in profile
     with pytest.raises(alloc.InvalidSlug):
         apparmor.render_profile("acme\n  deny /etc/** rw,")
+
+
+def test_apparmor_profile_allows_rootless_build_and_exec() -> None:
+    """E2E in cell-g found each of these denials blocking a real deploy.
+
+    All grants stay inside this cell's own tree (or are read-only host paths),
+    so cross-cell and rootful-socket denials remain intact.
+    """
+    profile = apparmor.render_profile("acme")
+    assert "capability net_raw," in profile
+    assert "/bin/busybox ix," in profile
+    assert "/proc/pressure/** r," in profile
+    assert "/proc/self/{setgroups,uid_map,gid_map} rw," in profile
+    assert "remount options in (ro, rw, nosuid, nodev, noexec, bind, rbind)" in profile
+    assert (
+        "mount options in (ro, rw, bind, rbind, remount, nosuid, nodev, noexec)"
+        " /var/lib/spanel/cells/acme/** -> /var/lib/spanel/cells/acme/**" in profile
+    )
+    # The hard denials from the original profile are preserved.
+    assert "audit deny /var/run/docker.sock rw," in profile
+    assert "audit deny /run/secrets/** r," in profile
+    assert "/var/lib/spanel/cells/other" not in profile
 
 
 def test_network_spec_targets_dedicated_loopback_and_skuid() -> None:
