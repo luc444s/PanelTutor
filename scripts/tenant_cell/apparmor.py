@@ -50,6 +50,9 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /usr/bin/containerd rix,
   /usr/bin/containerd-shim-runc-v2 rix,
   /usr/sbin/runc rix,
+  # runc re-execs its init through /proc/self/fd/N; inside the container's
+  # mount namespace AppArmor resolves that target to /runc.
+  /runc ix,
   /usr/bin/docker-init ix,
   /usr/bin/git ix,
   /usr/bin/busctl ix,
