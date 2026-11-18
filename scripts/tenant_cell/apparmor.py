@@ -86,6 +86,8 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /proc/[0-9]*/mountinfo r,
   /proc/[0-9]*/task/[0-9]*/mountinfo r,
   /proc/[0-9]*/loginuid r,
+  /proc/[0-9]*/oom_score_adj rw,
+  /proc/[0-9]*/status r,
   /proc/[0-9]*/uid_map r,
   /proc/[0-9]*/{{uid_map,gid_map,setgroups}} w,
   /proc/self/ns/net r,
