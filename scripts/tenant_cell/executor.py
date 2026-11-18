@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 from .alloc import DEFAULT_CGROUP_DRIVER, LEGACY_CGROUP_DRIVER
+from .plans import PlanExecutorMixin
 
 _SYSTEMD_DIR = Path("/etc/systemd/system")
 _USER_SYSTEMD_DIR = Path("/etc/systemd/user")
@@ -103,6 +104,27 @@ class Executor:
         raise NotImplementedError
 
     def run_limit_probe(self, slug: str, uid: int) -> dict[str, Any]:
+        raise NotImplementedError
+
+    # A.SPEC 0100: defaults raise so unsupported executors fail loudly.
+    def install_tenant_slice(self, slug: str, plan: dict[str, Any]) -> None:
+        raise NotImplementedError
+
+    def remove_tenant_slice(self, slug: str) -> None:
+        raise NotImplementedError
+
+    def install_user_manager_dropin(self, slug: str, uid: int) -> None:
+        raise NotImplementedError
+
+    def remove_user_manager_dropin(self, slug: str, uid: int) -> None:
+        raise NotImplementedError
+
+    def restart_user_manager(self, uid: int) -> None:
+        raise NotImplementedError
+
+    def run_plan_probe(
+        self, slug: str, uid: int, plan: dict[str, Any]
+    ) -> dict[str, Any]:
         raise NotImplementedError
 
     def remove_network(self, spec: dict[str, Any]) -> None:
@@ -199,8 +221,12 @@ def systemd_unit(
     )
 
 
-class LocalExecutor(Executor):
-    """Real adapter for the lab host; mutations require an explicit opt-in."""
+class LocalExecutor(PlanExecutorMixin, Executor):
+    """Real adapter for the lab host; mutations require an explicit opt-in.
+
+    Plan operations are supplied by ``PlanExecutorMixin`` so their rendering,
+    paths and probe interpretation stay next to the rest of the plan logic.
+    """
 
     _GATE = "SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS"
 

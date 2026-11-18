@@ -67,6 +67,26 @@ class CellService:
             )
         return f"/system.slice/spanel-cell-{slug}.scope"
 
+    def _keep_plan(self, slug: str) -> None:
+        """A.SPEC 0100: repair/provision must never revert an active plan.
+
+        A plan attaches to the user manager, not to the cell unit, so these
+        flows normally leave it untouched. Re-asserting both artifacts makes
+        that invariant explicit and future-proof, without changing the stored
+        driver or any other tenant.
+        """
+        from . import plans
+
+        entry = plans.active_plan(self.data_root, slug)
+        if entry is None:
+            return
+        cell = alloc.load_registry(self.data_root)["allocations"].get(slug)
+        if cell is None:
+            return
+        uid = int(cell["uid"])
+        self.executor.install_tenant_slice(slug, entry["plan"])
+        self.executor.install_user_manager_dropin(slug, uid)
+
     def _main_pid(self, slug: str, cell: dict[str, Any]) -> int:
         driver = cgroup_driver(cell)
         if driver == DEFAULT_CGROUP_DRIVER:
@@ -211,6 +231,7 @@ class CellService:
             self.data_root, tenant_slug=slug, verb="provision", exit_code=0,
             state="ready",
         )
+        self._keep_plan(slug)
         return self.status(slug)
 
     def deprovision(self, slug: str, keep_data: bool = True) -> dict[str, Any]:
@@ -310,6 +331,7 @@ class CellService:
         audit.write_audit(
             self.data_root, tenant_slug=slug, verb="repair", exit_code=0
         )
+        self._keep_plan(slug)
         return self.status(slug)
 
     def verify_limits(self, slug: str) -> dict[str, Any]:

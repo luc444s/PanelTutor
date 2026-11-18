@@ -15,7 +15,7 @@ import click.core
 import typer
 from typer.core import TyperOption
 
-from . import alloc
+from . import alloc, plans
 from . import doctor as doctor_mod
 from .cells import CellNotFound, CellService, ProvisionRefused
 from .executor import LocalExecutor
@@ -83,7 +83,16 @@ def _execute(
             json_output,
         )
         raise typer.Exit(code=2)
-    except (alloc.InvalidSlug, alloc.SlugRetired, CellNotFound) as exc:
+    except (
+        alloc.InvalidSlug,
+        alloc.SlugRetired,
+        CellNotFound,
+        plans.InvalidPlan,
+        plans.PlanNotFound,
+        plans.PlanCellMissing,
+        plans.PlanDriverError,
+        plans.MutationDisabled,
+    ) as exc:
         _emit({"error": str(exc), "verb": verb}, json_output)
         raise typer.Exit(code=2)
     except Exception as exc:  # noqa: BLE001 - CLI must not leak a stack trace
@@ -240,3 +249,78 @@ def apparmor_remove(
         lambda: _service(data_root).apparmor_remove(slug), json_output, "apparmor_remove"
     )
     _emit(result, json_output)
+
+
+# --- A.SPEC 0100: per-tenant resource plans --------------------------------
+
+plan_app = typer.Typer(
+    name="plan",
+    add_completion=False,
+    help="Manage a tenant's aggregate memory/CPU/PID plan (tenant slice).",
+)
+app.add_typer(plan_app, name="plan")
+
+
+def _plan_service(data_root: str) -> plans.PlanService:
+    return plans.PlanService(
+        LocalExecutor(), data_root, probe=doctor_mod.HostProbe()
+    )
+
+
+@plan_app.command("set")
+def plan_set(
+    slug: str = typer.Option(..., "--slug", help="Validated tenant slug."),
+    memory: str = typer.Option(..., "--memory", help="MemoryMax (e.g. 512M)."),
+    cpus: float = typer.Option(..., "--cpus", help="CPU quota in cores (e.g. 0.5)."),
+    pids: int = typer.Option(..., "--pids", help="TasksMax (positive integer)."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+    data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
+) -> None:
+    """Install tenant-<slug>.slice, attach the user manager and save the plan."""
+    result = _execute(
+        lambda: _plan_service(data_root).set(slug, memory, cpus, pids),
+        json_output,
+        "plan_set",
+    )
+    _emit(result, json_output)
+
+
+@plan_app.command("show")
+def plan_show(
+    slug: str = typer.Option(..., "--slug", help="Validated tenant slug."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+    data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
+) -> None:
+    """Return the saved plan and its effective slice."""
+    result = _execute(
+        lambda: _plan_service(data_root).show(slug), json_output, "plan_show"
+    )
+    _emit(result, json_output)
+
+
+@plan_app.command("remove")
+def plan_remove(
+    slug: str = typer.Option(..., "--slug", help="Validated tenant slug."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+    data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
+) -> None:
+    """Remove the slice and drop-in and restore user-<uid>.slice."""
+    result = _execute(
+        lambda: _plan_service(data_root).remove(slug), json_output, "plan_remove"
+    )
+    _emit(result, json_output)
+
+
+@plan_app.command("verify")
+def plan_verify(
+    slug: str = typer.Option(..., "--slug", help="Validated tenant slug."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+    data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
+) -> None:
+    """Prove the kernel enforces the plan on the rootful and rootless sides."""
+    result = _execute(
+        lambda: _plan_service(data_root).verify(slug), json_output, "plan_verify"
+    )
+    _emit(result, json_output)
+    if not result.get("ok"):
+        raise typer.Exit(code=1)

@@ -690,3 +690,71 @@ def test_delegate_controllers_cover_the_five_required() -> None:
     assert set(DELEGATE_CONTROLLERS.split()) == {
         "cpu", "cpuset", "io", "memory", "pids"
     }
+
+
+# --- A.SPEC 0100: a plan survives provision / repair -----------------------
+
+
+class PlanAwareExecutor(FakeExecutor):
+    """A cell executor that also records the A.SPEC 0100 plan operations."""
+
+    def install_tenant_slice(self, slug, plan):
+        self._rec("install_tenant_slice", slug=slug, plan=plan)
+
+    def remove_tenant_slice(self, slug):
+        self._rec("remove_tenant_slice", slug=slug)
+
+    def install_user_manager_dropin(self, slug, uid):
+        self._rec("install_user_manager_dropin", slug=slug, uid=uid)
+
+    def remove_user_manager_dropin(self, slug, uid):
+        self._rec("remove_user_manager_dropin", slug=slug, uid=uid)
+
+    def restart_user_manager(self, uid):
+        self._rec("restart_user_manager", uid=uid)
+
+    def run_plan_probe(self, slug, uid, plan):
+        self._rec("run_plan_probe", slug=slug, uid=uid, plan=plan)
+        return {"ok": True}
+
+
+def test_repair_and_provision_preserve_an_active_tenant_plan(tmp_path, monkeypatch) -> None:
+    from scripts.tenant_cell import plans
+
+    monkeypatch.setenv("SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS", "1")
+    executor = PlanAwareExecutor()
+    svc = CellService(FakeProbe(), executor, tmp_path)
+    svc.provision("acme")
+    plans.PlanService(executor, tmp_path).set("acme", "512M", 0.5, 128)
+    executor.calls.clear()
+
+    svc.repair("acme")
+
+    cell = alloc.load_registry(tmp_path)["allocations"]["acme"]
+    assert alloc.cgroup_driver(cell) == "systemd"
+    assert plans.active_plan(tmp_path, "acme")["plan"]["pids"] == 128
+    assert {"install_tenant_slice", "install_user_manager_dropin"} <= set(
+        executor.names()
+    )
+    assert "remove_tenant_slice" not in executor.names()
+
+    executor.calls.clear()
+    svc.provision("acme")
+
+    assert alloc.cgroup_driver(
+        alloc.load_registry(tmp_path)["allocations"]["acme"]
+    ) == "systemd"
+    assert plans.active_plan(tmp_path, "acme")["plan"]["memory"] == "512M"
+    assert "install_tenant_slice" in executor.names()
+    assert "remove_tenant_slice" not in executor.names()
+
+
+def test_repair_of_a_cell_without_a_plan_installs_no_slice(tmp_path) -> None:
+    svc, _, executor = _service(tmp_path)
+    svc.provision("acme")
+    executor.calls.clear()
+
+    svc.repair("acme")
+
+    assert "install_tenant_slice" not in executor.names()
+    assert "install_user_manager_dropin" not in executor.names()
