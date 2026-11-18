@@ -760,3 +760,41 @@ def test_repair_of_a_cell_without_a_plan_installs_no_slice(tmp_path) -> None:
 
     assert "install_tenant_slice" not in executor.names()
     assert "install_user_manager_dropin" not in executor.names()
+
+
+# --- A.SPEC 0103: user commands run as the cell user, not root --------------
+
+
+def test_run_user_switches_identity_via_runuser(monkeypatch) -> None:
+    """No ``systemctl --user`` may run as root: wrap it in runuser -u <user>."""
+    from types import SimpleNamespace
+
+    from scripts.tenant_cell import executor as exec_mod
+
+    monkeypatch.setenv("SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS", "1")
+    calls: list[tuple[list[str], dict[str, Any]]] = []
+
+    def fake_run(argv, **kwargs):
+        calls.append((list(argv), kwargs))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(exec_mod.subprocess, "run", fake_run)
+    monkeypatch.setattr(
+        exec_mod.pwd,
+        "getpwuid",
+        lambda uid: SimpleNamespace(pw_name="spanel-acme"),
+    )
+
+    exec_mod.LocalExecutor()._run_user(
+        60000, ["systemctl", "--user", "start", "spanel-cell-acme"]
+    )
+
+    assert len(calls) == 1
+    argv, kwargs = calls[0]
+    assert argv == [
+        "runuser", "-u", "spanel-acme", "--",
+        "systemctl", "--user", "start", "spanel-cell-acme",
+    ]
+    env = kwargs["env"]
+    assert env["XDG_RUNTIME_DIR"] == "/run/user/60000"
+    assert env["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/run/user/60000/bus"

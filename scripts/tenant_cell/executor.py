@@ -336,9 +336,22 @@ class LocalExecutor(PlanExecutorMixin, Executor):
         return env
 
     def _run_user(self, uid: int, argv: list[str], **kwargs: Any) -> Any:
+        """Run ``argv`` as the *cell user*, never as root.
+
+        A.SPEC 0103: ``systemctl --user`` / ``systemd-run --user`` connect to
+        the user bus from ``/run/user/<uid>``.  Running them as root used root's
+        runtime dir and bus and got EPERM, leaving provision's rootless daemon
+        down.  ``runuser`` switches identity to the real name resolved from the
+        uid; the cell's bus environment is carried through explicitly.
+        """
         self._ensure_gate()
+        user = pwd.getpwuid(uid).pw_name
         return subprocess.run(
-            argv, env=self._user_env(uid), text=True, check=False, **kwargs
+            ["runuser", "-u", user, "--", *argv],
+            env=self._user_env(uid),
+            text=True,
+            check=False,
+            **kwargs,
         )
 
     def start_user_daemon(self, slug: str, uid: int) -> int:

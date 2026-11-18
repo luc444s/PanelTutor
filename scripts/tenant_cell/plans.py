@@ -25,7 +25,6 @@ from typing import Any
 from .alloc import validate_slug
 
 _SYSTEMD_DIR = Path("/etc/systemd/system")
-_CELL_ROOT = "/var/lib/spanel/cells"
 
 PLANS_NAME = "plans.json"
 PLAN_VERSION = 1
@@ -109,8 +108,31 @@ def slice_name(slug: str) -> str:
 
 
 def slice_cgroup_path(slug: str) -> str:
-    """Where systemd places the slice (automatically under tenant.slice)."""
-    return f"/tenant.slice/{slice_name(slug)}"
+    """Return the *real* cgroup path of the tenant slice.
+
+    A.SPEC 0103: for a hyphenated name such as ``tenant-cell-e2e-v5.slice``
+    systemd inserts intermediate slices
+    (``/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/...``), so a
+    literal composition does not match the paths observed by ``verify``.  Ask
+    systemd for the slice's ``ControlGroup`` and fall back to the old literal
+    path only when systemd cannot be queried (INVARIANT: deterministic
+    fallback, never assume intermediate slices are absent).
+    """
+    name = slice_name(slug)
+    fallback = f"/tenant.slice/{name}"
+    try:
+        result = subprocess.run(
+            ["systemctl", "show", name, "-p", "ControlGroup", "--value"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return fallback
+    if result.returncode != 0:
+        return fallback
+    return result.stdout.strip() or fallback
 
 
 def user_slice(uid: int) -> str:
@@ -262,8 +284,14 @@ class PlanExecutorMixin:
         cgroup = slice_cgroup_path(slug)
         path = Path("/sys/fs/cgroup") / cgroup.lstrip("/")
         container = f"spanel-plan-probe-{slug}"
+        # A.SPEC 0103: the rootful probe container (--cgroup-parent) must talk
+        # to the host's *root* daemon.  The cell's rootless socket can only
+        # create scopes under user@<uid>.service, runc then hits
+        # /run/systemd/private as rootless and gets EPERM.  Drop any inherited
+        # DOCKER_HOST so docker uses the default root daemon socket; the
+        # rootless scope below still goes through the cell user via _run_user.
         env = dict(os.environ)
-        env["DOCKER_HOST"] = f"unix://{_CELL_ROOT}/{slug}/docker.sock"
+        env.pop("DOCKER_HOST", None)
 
         def docker(argv: list[str], stdin: str | None = None) -> Any:
             return subprocess.run(

@@ -368,3 +368,88 @@ def test_cpuset_is_rendered_into_the_slice() -> None:
         plans.render_slice(
             "acme", {"memory": "512M", "cpus": 0.5, "pids": 128, "cpuset": "0; rm -rf /"}
         )
+
+
+# --- A.SPEC 0103: host probe and slice-path fixes ---------------------------
+
+
+def test_slice_cgroup_path_comes_from_systemd_controlgroup(monkeypatch) -> None:
+    """Hyphenated slices get intermediate slices; trust systemd, not composition."""
+    from types import SimpleNamespace
+
+    seen: list[list[str]] = []
+    real = "/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-v5.slice"
+
+    def fake_run(argv, **_kwargs):
+        seen.append(list(argv))
+        return SimpleNamespace(returncode=0, stdout=real + "\n", stderr="")
+
+    monkeypatch.setattr(plans.subprocess, "run", fake_run)
+
+    path = plans.slice_cgroup_path("cell-e2e-v5")
+
+    assert seen[0] == [
+        "systemctl", "show", "tenant-cell-e2e-v5.slice",
+        "-p", "ControlGroup", "--value",
+    ]
+    assert path == real
+
+
+def test_slice_cgroup_path_falls_back_when_systemd_unavailable(monkeypatch) -> None:
+    """Deterministic literal fallback keeps the contract when no bus answers."""
+
+    def unreachable(argv, **_kwargs):
+        raise FileNotFoundError("systemctl")
+
+    monkeypatch.setattr(plans.subprocess, "run", unreachable)
+    assert plans.slice_cgroup_path("acme") == "/tenant.slice/tenant-acme.slice"
+
+
+def test_rootful_probe_drops_inherited_docker_host(monkeypatch) -> None:
+    """The --cgroup-parent container must use the host's root daemon, not the cell."""
+    from types import SimpleNamespace
+
+    captured: dict[str, Any] = {}
+
+    monkeypatch.setenv("DOCKER_HOST", "unix:///run/user/60000/docker.sock")
+    monkeypatch.setattr(
+        plans, "slice_cgroup_path", lambda slug: "/tenant.slice/tenant-acme.slice"
+    )
+
+    def fake_run(argv, **kwargs):
+        if argv[:2] == ["docker", "run"]:
+            captured["env"] = dict(kwargs["env"])
+            captured["argv"] = list(argv)
+        if argv[:2] == ["docker", "inspect"]:
+            return SimpleNamespace(stdout="4242\n", returncode=0)
+        if argv[0] == "systemctl":
+            return SimpleNamespace(stdout="60000\n", returncode=0)
+        return SimpleNamespace(stdout="", returncode=0)
+
+    monkeypatch.setattr(plans.subprocess, "run", fake_run)
+
+    class Capture(plans.PlanExecutorMixin):
+        def __init__(self) -> None:
+            self.user_calls: list[tuple[int, list[str]]] = []
+
+        def _ensure_gate(self) -> None:
+            pass
+
+        def _run_user(self, uid, argv, **kwargs):
+            self.user_calls.append((uid, list(argv)))
+            return SimpleNamespace(returncode=0)
+
+    executor = Capture()
+    evidence = executor.run_plan_probe(
+        "acme", 60000, {"memory": "512M", "cpus": 0.5, "pids": 128}
+    )
+
+    assert "DOCKER_HOST" not in captured["env"]
+    assert any("--cgroup-parent=tenant-acme.slice" in a for a in captured["argv"])
+    # The rootless scope still goes through the cell user's systemd --user.
+    assert any(
+        "systemd-run" in argv and "--user" in argv
+        for _uid, argv in executor.user_calls
+    )
+    # No fake kernel limits were read, so the probe must stay honest.
+    assert evidence["ok"] is False
