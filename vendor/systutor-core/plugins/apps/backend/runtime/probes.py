@@ -13,6 +13,7 @@ import os
 import re
 import time
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -31,6 +32,52 @@ MAX_APP_MEMORY = 512 * 1024 * 1024
 MAX_APP_NANO_CPUS = 1_000_000_000
 _SERVICE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _DIGEST_IMAGE = re.compile(r".+@sha256:[0-9a-f]{64}\Z")
+
+# Isolation checks are split into three explicit groups.  Prohibited
+# conditions and mandatory properties hold in every runtime; optional
+# properties only hold in the hardened (rootful) baseline.  A rootless cell
+# gets its isolation from the tenant's user namespace, not from a non-root
+# container user or docker-default AppArmor, so those checks are optional.
+PROHIBITED: frozenset[str] = frozenset({
+    "privileged", "host_devices", "host_binds", "unsafe_sysctls",
+    "port_bindings", "host_pid", "host_network", "rootful_socket",
+})
+MANDATORY: frozenset[str] = frozenset({
+    "no_new_privileges", "seccomp", "runc", "limits", "writable_rootfs",
+    "running", "network_topology",
+})
+OPTIONAL: frozenset[str] = frozenset({
+    "non_root_user", "cap_drop_all", "apparmor_docker_default",
+    "no_uid0_processes",
+})
+
+
+@dataclass(frozen=True)
+class ProbeBaseline:
+    """Which optional isolation checks are active for a deployment."""
+
+    name: str
+    mandatory: frozenset[str] = MANDATORY
+    optional: frozenset[str] = OPTIONAL
+    prohibited: frozenset[str] = PROHIBITED
+
+
+HARDENED_BASELINE = ProbeBaseline("hardened")
+ROOTLESS_BASELINE = ProbeBaseline(
+    "rootless",
+    mandatory=frozenset({*MANDATORY, "user_namespace"}),
+    optional=frozenset(),
+)
+
+
+def resolve_baseline(environ: Mapping[str, str]) -> ProbeBaseline:
+    """Select the probe baseline; hardened stays the default."""
+    value = environ.get("SPANEL_APPS_PROBE_BASELINE", "").strip().lower()
+    if value == "rootless":
+        return ROOTLESS_BASELINE
+    if value and value != "hardened":
+        raise ProbeFailed("unknown probe baseline")
+    return HARDENED_BASELINE
 
 
 class ProbeFailed(AppDeployError):
@@ -182,85 +229,136 @@ def _signed_network_options(
     return None
 
 
+def _rootless_userns(runner: Runner) -> bool:
+    """Prove the daemon runs inside a user namespace before relaxing checks.
+
+    ``docker info`` reports ``rootless`` in SecurityOptions when dockerd runs
+    through rootlesskit.  UID 0 inside that namespace maps to a non-root host
+    subuid, so it is not host root.
+    """
+    result = runner.run(
+        ["docker", "info", "--format", "{{json .SecurityOptions}}"],
+        check=False,
+    )
+    return result.returncode == 0 and "rootless" in result.stdout.lower()
+
+
+def _assert_prohibited(service: str, values: Mapping[str, Any]) -> None:
+    """Conditions that are forbidden in every runtime baseline."""
+    host = values["host"]
+    if host.get("Privileged") is True:
+        raise ProbeFailed(f"service {service} is privileged")
+    if host.get("Devices"):
+        raise ProbeFailed(f"service {service} accesses host devices")
+    if any(
+        isinstance(mount, Mapping) and mount.get("Type") == "bind"
+        for mount in values["mounts"]
+    ):
+        raise ProbeFailed(f"service {service} contains a host bind")
+    sysctls = host.get("Sysctls") or {}
+    if sysctls != {} and sysctls != {
+        "net.ipv4.ip_unprivileged_port_start": "0"
+    }:
+        raise ProbeFailed(f"service {service} contains an unsafe sysctl")
+    if host.get("PortBindings"):
+        raise ProbeFailed(f"service {service} publishes host ports")
+    if str(host.get("PidMode", "")) == "host":
+        raise ProbeFailed(f"service {service} uses the host PID namespace")
+    if str(host.get("NetworkMode", "")) in {"host", "container:host"}:
+        raise ProbeFailed(f"service {service} uses the host network")
+
+
+def _assert_mandatory(
+    service: str, values: Mapping[str, Any]
+) -> tuple[set[str], dict[str, Any]]:
+    """Properties required in every runtime; returns options and limits."""
+    host, state = values["host"], values["state"]
+    options = " ".join(
+        str(item).lower().replace(" ", "")
+        for item in (host.get("SecurityOpt") or [])
+    )
+    if "no-new-privileges" not in options:
+        raise ProbeFailed(f"service {service} allows privilege escalation")
+    if "seccomp=builtin" not in options:
+        raise ProbeFailed(f"service {service} does not use the default seccomp profile")
+    if host.get("Runtime") != "runc":
+        raise ProbeFailed(f"service {service} does not use runc")
+    pids = host.get("PidsLimit")
+    if isinstance(pids, bool) or not isinstance(pids, int) or not 0 < pids <= MAX_APP_PIDS:
+        raise ProbeFailed(f"service {service} PID limit is invalid")
+    memory = host.get("Memory")
+    if (
+        isinstance(memory, bool)
+        or not isinstance(memory, int)
+        or not 0 < memory <= MAX_APP_MEMORY
+    ):
+        raise ProbeFailed(f"service {service} memory limit is invalid")
+    nano_cpus = host.get("NanoCpus")
+    if (
+        isinstance(nano_cpus, bool)
+        or not isinstance(nano_cpus, int)
+        or not 0 < nano_cpus <= MAX_APP_NANO_CPUS
+    ):
+        raise ProbeFailed(f"service {service} CPU limit is invalid")
+    if host.get("ReadonlyRootfs") is not False:
+        raise ProbeFailed(f"service {service} root filesystem is not writable")
+    if str(state.get("Status", "")) != "running":
+        raise ProbeFailed(f"service {service} is not running")
+    return options, {"pids": pids, "memory": memory, "nano_cpus": nano_cpus}
+
+
+def _assert_optional(
+    service: str, values: Mapping[str, Any], options: str, baseline: ProbeBaseline
+) -> None:
+    """Properties that are mandatory only for the hardened baseline."""
+    host, config = values["host"], values["config"]
+    if "non_root_user" in baseline.optional and not _is_definitely_non_root_user(
+        config.get("User")
+    ):
+        raise ProbeFailed(f"service {service} does not declare a non-root user")
+    if "cap_drop_all" in baseline.optional:
+        caps = {str(item).upper() for item in (host.get("CapDrop") or [])}
+        if "ALL" not in caps:
+            raise ProbeFailed(f"service {service} does not drop all capabilities")
+    if "apparmor_docker_default" in baseline.optional:
+        if "apparmor=docker-default" not in options:
+            raise ProbeFailed(
+                f"service {service} does not use docker-default AppArmor"
+            )
+        if values.get("apparmor") != "docker-default":
+            raise ProbeFailed(
+                f"service {service} effective AppArmor profile is invalid"
+            )
+
+
 def check_isolation(
     runner: Runner,
     containers: Mapping[str, str],
     release_root: Path | None = None,
     compose_rel: str | None = None,
+    *,
+    baseline: ProbeBaseline = HARDENED_BASELINE,
 ) -> dict[str, Any]:
     evidence: dict[str, Any] = {}
     signed = _signed_networks(release_root, compose_rel)
+    user_namespace = False
+    if "user_namespace" in baseline.mandatory:
+        if not _rootless_userns(runner):
+            raise ProbeFailed("rootless baseline requires a user namespace")
+        user_namespace = True
     for service, container_id in containers.items():
         values = _inspect_container(runner, container_id)
-        state, host, config = values["state"], values["host"], values["config"]
-        if not _is_definitely_non_root_user(config.get("User")):
-            raise ProbeFailed(f"service {service} does not declare a non-root user")
-        if host.get("Privileged") is True:
-            raise ProbeFailed(f"service {service} is privileged")
-        if host.get("Devices"):
-            raise ProbeFailed(f"service {service} accesses host devices")
-        if any(
-            isinstance(mount, Mapping)
-            and mount.get("Type") == "bind"
-            for mount in values["mounts"]
-        ):
-            raise ProbeFailed(f"service {service} contains a host bind")
-        sysctls = host.get("Sysctls") or {}
-        if sysctls != {} and sysctls != {
-            "net.ipv4.ip_unprivileged_port_start": "0"
-        }:
-            raise ProbeFailed(f"service {service} contains an unsafe sysctl")
-        if host.get("PortBindings"):
-            raise ProbeFailed(f"service {service} publishes host ports")
-        if str(host.get("PidMode", "")) == "host":
-            raise ProbeFailed(f"service {service} uses the host PID namespace")
-        if str(host.get("NetworkMode", "")) in {"host", "container:host"}:
-            raise ProbeFailed(f"service {service} uses the host network")
-        caps = {str(item).upper() for item in (host.get("CapDrop") or [])}
-        if "ALL" not in caps:
-            raise ProbeFailed(f"service {service} does not drop all capabilities")
-        options = " ".join(
-            str(item).lower().replace(" ", "")
-            for item in (host.get("SecurityOpt") or [])
-        )
-        if "no-new-privileges" not in options:
-            raise ProbeFailed(f"service {service} allows privilege escalation")
-        if "apparmor=docker-default" not in options:
-            raise ProbeFailed(f"service {service} does not use docker-default AppArmor")
-        if "seccomp=builtin" not in options:
-            raise ProbeFailed(f"service {service} does not use the default seccomp profile")
-        if values.get("apparmor") != "docker-default":
-            raise ProbeFailed(f"service {service} effective AppArmor profile is invalid")
-        if host.get("Runtime") != "runc":
-            raise ProbeFailed(f"service {service} does not use runc")
-        pids = host.get("PidsLimit")
-        if (
-            isinstance(pids, bool)
-            or not isinstance(pids, int)
-            or not 0 < pids <= MAX_APP_PIDS
-        ):
-            raise ProbeFailed(f"service {service} PID limit is invalid")
-        memory = host.get("Memory")
-        if (
-            isinstance(memory, bool)
-            or not isinstance(memory, int)
-            or not 0 < memory <= MAX_APP_MEMORY
-        ):
-            raise ProbeFailed(f"service {service} memory limit is invalid")
-        nano_cpus = host.get("NanoCpus")
-        if (
-            isinstance(nano_cpus, bool)
-            or not isinstance(nano_cpus, int)
-            or not 0 < nano_cpus <= MAX_APP_NANO_CPUS
-        ):
-            raise ProbeFailed(f"service {service} CPU limit is invalid")
-        if host.get("ReadonlyRootfs") is not False:
-            raise ProbeFailed(f"service {service} root filesystem is not writable")
-        if str(state.get("Status", "")) != "running":
-            raise ProbeFailed(f"service {service} is not running")
+        _assert_prohibited(service, values)
+        options, limits = _assert_mandatory(service, values)
+        _assert_optional(service, values, options, baseline)
         users = _process_users(runner, container_id)
-        if not users or any(
-            user == "root" or (user.isdigit() and int(user) == 0) for user in users
+        # UID 0 in a user namespace is a tenant subuid, never host root.
+        if "no_uid0_processes" in baseline.optional and (
+            not users
+            or any(
+                user == "root" or (user.isdigit() and int(user) == 0)
+                for user in users
+            )
         ):
             raise ProbeFailed(f"service {service} has root processes")
         networks = _network_names_from_config(values)
@@ -292,15 +390,17 @@ def check_isolation(
                     )
             topology[network] = is_internal
         evidence[service] = {
-            "user": str(config.get("User")),
+            "user": str(values["config"].get("User")),
             "networks": networks,
             "network_internal": topology,
             "processes": len(users),
             "runtime": "runc",
             "writable_rootfs": True,
-            "apparmor": "docker-default",
+            "apparmor": str(values.get("apparmor") or ""),
             "seccomp": "builtin",
-            "limits": {"pids": pids, "memory": memory, "nano_cpus": nano_cpus},
+            "limits": limits,
+            "baseline": baseline.name,
+            "user_namespace": user_namespace,
         }
     return evidence
 
@@ -465,8 +565,10 @@ def run_probes(
     target: tuple[str, int] | None = None,
     sleep: Callable[[float], None] = time.sleep,
     one_shot: set[str] | frozenset[str] = frozenset(),
+    baseline: ProbeBaseline | None = None,
 ) -> dict[str, Any]:
     environ = dict(os.environ if environ is None else environ)
+    baseline = baseline if baseline is not None else resolve_baseline(environ)
     image = probe_image(environ)
     command = probe_command(environ, target)
     checks = _int_env(environ, "SPANEL_APPS_PROBE_CHECKS", 3)
@@ -485,7 +587,9 @@ def run_probes(
         if service not in completed
     }
     assert_compose_healthchecks(runner, release, compose_rel, project, services)
-    isolation = check_isolation(runner, active, release, compose_rel)
+    isolation = check_isolation(
+        runner, active, release, compose_rel, baseline=baseline
+    )
     signed = _signed_networks(release, compose_rel)
     service_networks = {
         service: sorted(values["networks"])
@@ -553,6 +657,7 @@ def run_probes(
         if index + 1 < checks and interval:
             sleep(interval)
     return {
+        "baseline": baseline.name,
         "isolation": isolation,
         "network": network,
         "service_networks": service_networks,

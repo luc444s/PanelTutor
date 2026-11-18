@@ -5,8 +5,11 @@ import json
 import pytest
 
 from plugins.apps.backend.runtime.probes import (
+    HARDENED_BASELINE,
+    ROOTLESS_BASELINE,
     ProbeFailed,
     check_isolation,
+    resolve_baseline,
     run_functional_probe,
     run_probes,
 )
@@ -112,6 +115,71 @@ def test_isolation_accepts_hardened_containers_and_rejects_root_processes() -> N
     runner.run = root_top
     with pytest.raises(ProbeFailed, match="root"):
         check_isolation(runner, {"web": "cid1"})
+
+
+def _rootless_runner(payload=None):
+    """A runner whose daemon reports rootless SecurityOptions via docker info."""
+    base = FakeRunner(payload)
+    original = base.run
+
+    def run(argv, **kwargs):
+        if argv[:2] == ["docker", "info"]:
+            return Completed(0, '["name=seccomp,profile=builtin","name=rootless"]')
+        return original(argv, **kwargs)
+
+    base.run = run
+    return base
+
+
+def test_rootless_baseline_accepts_uid0_in_a_user_namespace() -> None:
+    """UID 0 mapped by a rootless daemon is a tenant subuid, not host root."""
+    payload = container(
+        Config={"User": ""},
+        HostConfig={
+            "CapDrop": [],
+            "SecurityOpt": ["no-new-privileges:true", "seccomp=builtin"],
+        },
+        AppArmorProfile="spanel-cell-cell-g",
+    )
+    base = FakeRunner(payload)
+    delegate = _rootless_runner(payload).run
+
+    def run(argv, **kwargs):
+        if argv[:2] == ["docker", "top"]:
+            return Completed(0, "PID UID\n1 0\n")
+        return delegate(argv, **kwargs)
+
+    base.run = run
+    evidence = check_isolation(base, {"web": "cid1"}, baseline=ROOTLESS_BASELINE)
+    assert evidence["web"]["baseline"] == "rootless"
+    assert evidence["web"]["user_namespace"] is True
+    assert evidence["web"]["processes"] == 1
+    # The same container is still rejected by the hardened baseline.
+    with pytest.raises(ProbeFailed, match="non-root user"):
+        check_isolation(_rootless_runner(payload), {"web": "cid1"})
+
+
+def test_rootless_baseline_requires_proven_user_namespace() -> None:
+    """A rootful daemon cannot silently select the relaxed baseline."""
+    payload = container(Config={"User": "0"})
+    with pytest.raises(ProbeFailed, match="user namespace"):
+        check_isolation(FakeRunner(payload), {"web": "cid1"}, baseline=ROOTLESS_BASELINE)
+
+
+def test_rootless_baseline_still_enforces_prohibited_conditions() -> None:
+    payload = container(HostConfig={"Privileged": True})
+    with pytest.raises(ProbeFailed, match="privileged"):
+        check_isolation(
+            _rootless_runner(payload), {"web": "cid1"}, baseline=ROOTLESS_BASELINE
+        )
+
+
+def test_resolve_baseline_defaults_to_hardened() -> None:
+    assert resolve_baseline({}) is HARDENED_BASELINE
+    assert resolve_baseline({"SPANEL_APPS_PROBE_BASELINE": "rootless"}) is ROOTLESS_BASELINE
+    assert resolve_baseline({"SPANEL_APPS_PROBE_BASELINE": "hardened"}) is HARDENED_BASELINE
+    with pytest.raises(ProbeFailed, match="unknown probe baseline"):
+        resolve_baseline({"SPANEL_APPS_PROBE_BASELINE": "permissive"})
 
 
 def test_isolation_rejects_a_container_without_a_declared_user() -> None:
