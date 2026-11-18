@@ -14,13 +14,17 @@ import pytest
 
 from plugins.apps.backend.plans_client import CellEndpoint, PlanAgentUnavailable
 from plugins.apps.backend.rootless_routes import RootlessRoutes
-from plugins.domains.backend.publisher import RootlessRoutePublisher
 from plugins.domains.backend.proxy.config import Settings
-from plugins.domains.backend.proxy.core import PathRoute
+from plugins.domains.backend.proxy.core import (
+    ACME_CHALLENGE_PREFIX,
+    PathRoute,
+    parse_site_document,
+)
 from plugins.domains.backend.proxy.detect import Detection
 from plugins.domains.backend.proxy.files import LocalFiles
 from plugins.domains.backend.proxy.operations import ProxyOperations
 from plugins.domains.backend.proxy.transport import CommandResult
+from plugins.domains.backend.publisher import RootlessRoutePublisher
 
 DOMAIN = "rootless-e2e.lab"
 
@@ -100,7 +104,15 @@ def test_publisher_calls_write_route_document_with_runtime_checks_off() -> None:
 
     domain, routes, kwargs = operations.written[-1]
     assert domain == DOMAIN
-    assert routes == [PathRoute(prefix="/", container="172.18.0.1", port=40007)]
+    assert routes == [
+        PathRoute(
+            prefix="/",
+            container="172.18.0.1",
+            port=40007,
+            https=True,
+            entrypoints=(),
+        )
+    ]
     assert kwargs == {"validate_runtime": False, "connect_network": False}
 
 
@@ -112,6 +124,134 @@ def test_publisher_refuses_a_host_that_already_has_a_route() -> None:
         publisher.publish(DOMAIN, "", 40007)
     with pytest.raises(ValueError):
         publisher.publish(DOMAIN, "172.18.0.1", 70000)
+
+
+# --- A.SPEC 0106: optional TLS ----------------------------------------------
+
+
+def test_default_publish_keeps_redirect_and_websecure_routers(
+    tmp_path: Path,
+) -> None:
+    operations, runner = _operations(tmp_path)
+    publisher = RootlessRoutePublisher(operations)
+
+    target = publisher.publish(DOMAIN, "172.18.0.1", 40003)
+    assert target is not None
+    data = parse_site_document(target.read_text(encoding="utf-8"))
+    routers = data["http"]["routers"]
+    middlewares = data["http"]["middlewares"]
+    http_router = next(
+        router for router in routers.values() if router["entryPoints"] == ["web"]
+    )
+    assert f"Host(`{DOMAIN}`)" in http_router["rule"]
+    assert f"!PathPrefix(`{ACME_CHALLENGE_PREFIX}`)" in http_router["rule"]
+    redirect_name = http_router["middlewares"][0]
+    assert middlewares[redirect_name] == {
+        "redirectScheme": {"scheme": "https", "permanent": True}
+    }
+    https_router = next(
+        router for router in routers.values() if router["entryPoints"] == ["websecure"]
+    )
+    assert https_router["rule"] == f"Host(`{DOMAIN}`)"
+    assert https_router["tls"] == {
+        "certResolver": operations.settings.cert_resolver
+    }
+    service = next(iter(data["http"]["services"].values()))
+    assert service["loadBalancer"]["servers"] == [
+        {"url": "http://172.18.0.1:40003"}
+    ]
+    assert runner.calls == []
+
+
+def test_explicit_http_publishes_plain_route_without_tls(tmp_path: Path) -> None:
+    operations, runner = _operations(tmp_path)
+    publisher = RootlessRoutePublisher(operations)
+
+    target = publisher.publish(DOMAIN, "172.18.0.1", 40003, https=False)
+    assert target is not None
+    data = parse_site_document(target.read_text(encoding="utf-8"))
+    routers = data["http"]["routers"]
+    assert len(routers) == 1
+    router = next(iter(routers.values()))
+    assert router["rule"] == f"Host(`{DOMAIN}`)"
+    assert router["entryPoints"] == [operations.settings.entrypoint_http]
+    assert "tls" not in router
+    assert data["http"]["middlewares"] == {}
+    service = next(iter(data["http"]["services"].values()))
+    assert service["loadBalancer"]["servers"] == [
+        {"url": "http://172.18.0.1:40003"}
+    ]
+    assert runner.calls == []
+
+
+def test_https_publishes_redirect_and_websecure_routers(tmp_path: Path) -> None:
+    operations, runner = _operations(tmp_path)
+    publisher = RootlessRoutePublisher(operations)
+
+    target = publisher.publish(DOMAIN, "172.18.0.1", 40003, https=True)
+    assert target is not None
+    data = parse_site_document(target.read_text(encoding="utf-8"))
+    routers = data["http"]["routers"]
+    middlewares = data["http"]["middlewares"]
+    services = data["http"]["services"]
+
+    http_router = next(
+        router for router in routers.values() if router["entryPoints"] == ["web"]
+    )
+    assert f"Host(`{DOMAIN}`)" in http_router["rule"]
+    assert f"!PathPrefix(`{ACME_CHALLENGE_PREFIX}`)" in http_router["rule"]
+    redirect_name = http_router["middlewares"][0]
+    assert middlewares[redirect_name] == {
+        "redirectScheme": {"scheme": "https", "permanent": True}
+    }
+
+    https_router = next(
+        router for router in routers.values() if router["entryPoints"] == ["websecure"]
+    )
+    assert https_router["rule"] == f"Host(`{DOMAIN}`)"
+    assert https_router["tls"] == {
+        "certResolver": operations.settings.cert_resolver
+    }
+
+    assert len(services) == 1
+    service = next(iter(services.values()))
+    assert service["loadBalancer"]["servers"] == [
+        {"url": "http://172.18.0.1:40003"}
+    ]
+    assert runner.calls == []
+
+
+def test_https_takes_resolver_and_entrypoints_from_proxy_settings(
+    tmp_path: Path,
+) -> None:
+    config = tmp_path / "dynamic"
+    config.mkdir(parents=True, exist_ok=True)
+    settings = Settings.from_env(
+        "internal",
+        env={
+            "SPANEL_PROXY_CONFIG_DIR": str(config),
+            "SPANEL_PROXY_CERT_RESOLVER": "lab-ca",
+            "SPANEL_PROXY_ENTRYPOINT_HTTP": "edge-web",
+            "SPANEL_PROXY_ENTRYPOINT_HTTPS": "edge-websecure",
+        },
+    )
+    runner = FakeRunner()
+    operations = ProxyOperations(settings, runner, files=LocalFiles(config))
+    operations._detection = Detection(transport="local", reason="test", config_dir=config)
+    publisher = RootlessRoutePublisher(operations)
+
+    target = publisher.publish(DOMAIN, "172.18.0.1", 40003, https=True)
+    assert target is not None
+    data = parse_site_document(target.read_text(encoding="utf-8"))
+    routers = data["http"]["routers"]
+    entrypoints = {
+        tuple(router["entryPoints"]) for router in routers.values()
+    }
+    assert entrypoints == {("edge-web",), ("edge-websecure",)}
+    assert {router.get("tls", {}).get("certResolver") for router in routers.values()} == {
+        None,
+        "lab-ca",
+    }
 
 
 # --- apps plugin hooks -------------------------------------------------------
@@ -135,11 +275,13 @@ class FakeClient:
 
 class FakePublisher:
     def __init__(self) -> None:
-        self.published: list[tuple[str, str, int]] = []
+        self.published: list[tuple[str, str, int, bool]] = []
         self.removed: list[str] = []
 
-    def publish(self, domain: str, bind: str, relay_port: int) -> None:
-        self.published.append((domain, bind, relay_port))
+    def publish(
+        self, domain: str, bind: str, relay_port: int, https: bool = False
+    ) -> None:
+        self.published.append((domain, bind, relay_port, https))
 
     def unpublish(self, domain: str) -> bool:
         self.removed.append(domain)
@@ -172,7 +314,7 @@ def test_rootless_routes_refresh_and_cleanup_use_the_resolved_endpoint() -> None
 
     assert result["published"] == [DOMAIN]
     assert client.slugs == ["acme"]
-    assert publisher.published == [(DOMAIN, "172.18.0.1", 40003)]
+    assert publisher.published == [(DOMAIN, "172.18.0.1", 40003, True)]
     routes.cleanup(_Db(), "t1", "app1")
     assert publisher.removed == [DOMAIN]
 

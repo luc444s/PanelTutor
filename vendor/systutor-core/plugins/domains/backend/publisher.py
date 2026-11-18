@@ -74,7 +74,17 @@ class RootlessRoutePublisher:
             self._operations = ProxyOperations(settings, build_runner(settings))
         return self._operations
 
-    def publish(self, domain: str, bind: str, relay_port: int) -> object:
+    def publish(
+        self, domain: str, bind: str, relay_port: int, https: bool = True
+    ) -> object:
+        """Publish the relay-backed route, optionally over HTTPS.
+
+        ``https`` is forwarded to :class:`PathRoute`; the resolver, entrypoints
+        and the ACME challenge exclusion are still chosen by the domains proxy
+        settings and ``render_site_yaml``. The default is ``True`` to preserve
+        the redirect+TLS document already rendered by ``HEAD``; passing
+        ``False`` yields the plain HTTP route of the A.SPEC 0104 artifact.
+        """
         if not bind.strip():
             raise ValueError("relay bind is required")
         if not 1 <= relay_port <= 65535:
@@ -82,7 +92,9 @@ class RootlessRoutePublisher:
         operations = self.operations
         if operations.path_conflict(domain, "/"):
             raise ValueError(f"the domain {domain} already has a managed route")
-        route = PathRoute(prefix="/", container=bind, port=relay_port)
+        route = PathRoute(
+            prefix="/", container=bind, port=relay_port, https=https, entrypoints=()
+        )
         return operations.write_route_document(
             domain,
             [route],

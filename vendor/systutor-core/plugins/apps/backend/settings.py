@@ -7,6 +7,18 @@ from dataclasses import dataclass
 from pathlib import Path
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    """Read a boolean flag from the environment, fail-safe to ``default``."""
+    value = os.environ.get(name, "").strip().lower()
+    if not value:
+        return default
+    if value in {"1", "true", "yes", "on"}:
+        return True
+    if value in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 @dataclass(frozen=True)
 class AppsSettings:
     encryption_key_file: Path
@@ -21,6 +33,10 @@ class AppsSettings:
     plan_agent_token_file: Path = Path("/run/secrets/plan_agent_token")
     plan_agent_timeout: float = 5.0
     plan_agent_allowed_uids: str = ""
+    # A.SPEC 0106: TLS for rootless-backed routes. True is the existing
+    # behaviour (PathRoute default); false is an explicit opt-out that renders
+    # the plain HTTP document of the A.SPEC 0104 artifact. Never touches Traefik.
+    rootless_routes_https: bool = True
 
     @classmethod
     def from_env(cls) -> AppsSettings:
@@ -40,6 +56,9 @@ class AppsSettings:
             ),
             plan_agent_timeout=float(os.environ.get("SPANEL_PLAN_AGENT_TIMEOUT", "5.0")),
             plan_agent_allowed_uids=os.environ.get("SPANEL_PLAN_AGENT_ALLOWED_UIDS", ""),
+            rootless_routes_https=_env_bool(
+                "SPANEL_ROOTLESS_ROUTES_HTTPS", default=True
+            ),
         )
 
     @staticmethod

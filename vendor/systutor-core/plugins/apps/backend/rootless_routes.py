@@ -40,10 +40,22 @@ class RootlessRoutes:
         publisher: Any,
         *,
         slug_resolver: Callable[[Any, str], str] | None = None,
+        https: bool | None = None,
     ) -> None:
         self.endpoint_client = endpoint_client
         self.publisher = publisher
         self.slug_resolver = slug_resolver or _default_slug_resolver
+        # ``None`` means "resolve from host settings at refresh time"; an
+        # explicit value lets the worker capture the boot-time configuration.
+        self.https = https
+
+    def _https(self) -> bool:
+        """Return the configured TLS flag (default True, preserves HEAD)."""
+        if self.https is not None:
+            return self.https
+        from plugins.apps.backend.settings import AppsSettings
+
+        return AppsSettings.from_env().rootless_routes_https
 
     def _domains(self, db: Any, application_id: str) -> list[str]:
         from .models import Application
@@ -68,8 +80,9 @@ class RootlessRoutes:
             )
             return {"published": [], "slug": slug, "error": str(exc)}
         published: list[str] = []
+        https = self._https()
         for domain in domains:
-            self.publisher.publish(domain, endpoint.bind, endpoint.relay_port)
+            self.publisher.publish(domain, endpoint.bind, endpoint.relay_port, https=https)
             published.append(domain)
         return {
             "published": published,
@@ -113,7 +126,7 @@ def build_rootless_routes() -> RootlessRoutes | None:
         publisher = RootlessRoutePublisher(
             ProxyOperations(proxy, build_runner(proxy))
         )
-        return RootlessRoutes(client, publisher)
+        return RootlessRoutes(client, publisher, https=settings.rootless_routes_https)
     except Exception:  # noqa: BLE001 - fail closed, never block the worker boot
         logger.warning("rootless_routes_unavailable", exc_info=True)
         return None
