@@ -70,12 +70,18 @@ class AppsWorker:
         route_cleanup: Callable[[Session, str, str], None] | None = None,
         route_refresh: Callable[[Session, str, str], None] | None = None,
         runtime_registry: TenantRuntimeRegistry | None = None,
+        rootless_routes: Any | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.cipher = cipher
         self.runner_factory = runner_factory
         self.runtime_registry = runtime_registry
         self.publisher = publisher
+        self.rootless_routes = rootless_routes
+        if self.rootless_routes is None:
+            from .rootless_routes import build_rootless_routes
+
+            self.rootless_routes = build_rootless_routes()
         self.github = github or UrllibGithubClient()
         self.route_cleanup = route_cleanup
         self.route_refresh = route_refresh
@@ -353,7 +359,7 @@ class AppsWorker:
 
     def reconcile_routes(self) -> int:
         """Re-publish routes for every active app; safe to run on every boot."""
-        if self.route_refresh is None:
+        if self.route_refresh is None and self.rootless_routes is None:
             return 0
         with self.session_factory() as db:
             rows = list(db.execute(
@@ -366,7 +372,10 @@ class AppsWorker:
         for application_id, tenant_id in rows:
             with self.session_factory() as db:
                 try:
-                    self.route_refresh(db, tenant_id, application_id)
+                    if self.route_refresh is not None:
+                        self.route_refresh(db, tenant_id, application_id)
+                    if self.rootless_routes is not None:
+                        self.rootless_routes.refresh(db, tenant_id, application_id)
                 except Exception:  # noqa: BLE001 - una app no bloquea al resto
                     logger.warning(
                         "apps_route_reconcile_failed",
@@ -532,9 +541,12 @@ class AppsWorker:
                     runner.run(["rm", "-rf", "--", str(project_root)])
                 elif project_root.exists():
                     shutil.rmtree(project_root)
-            if self.route_cleanup is not None:
+            if self.route_cleanup is not None or self.rootless_routes is not None:
                 with self.session_factory() as db:
-                    self.route_cleanup(db, tenant_id, application_id)
+                    if self.route_cleanup is not None:
+                        self.route_cleanup(db, tenant_id, application_id)
+                    if self.rootless_routes is not None:
+                        self.rootless_routes.cleanup(db, tenant_id, application_id)
             if domain and self.publisher is not None:
                 self.publisher.unpublish(domain)
             with self.session_factory() as db:
@@ -575,9 +587,14 @@ class AppsWorker:
                             "service_runtime": snapshot,
                         }
                         db.commit()
-        if kind == "delete" and self.route_cleanup is not None:
+        if kind == "delete" and (
+            self.route_cleanup is not None or self.rootless_routes is not None
+        ):
             with self.session_factory() as db:
-                self.route_cleanup(db, tenant_id, application_id)
+                if self.route_cleanup is not None:
+                    self.route_cleanup(db, tenant_id, application_id)
+                if self.rootless_routes is not None:
+                    self.rootless_routes.cleanup(db, tenant_id, application_id)
         if domain and self.publisher is not None and kind == "delete":
             self.publisher.unpublish(domain)
         if kind == "delete":

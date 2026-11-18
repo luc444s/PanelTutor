@@ -44,6 +44,16 @@ def publish_port(index: int) -> int:
     return 20000 + (int(index) % 20000)
 
 
+def relay_port(index: int) -> int:
+    """Stable host-side relay port for a cell (A.SPEC 0104).
+
+    Disjoint from ``publish_port``: the cell publishes on 20000+index inside
+    its loopback, while the unprivileged relay listens on 40000+index on the
+    gateway of the proxy network. No nft rule or cell port is changed.
+    """
+    return 40000 + int(index)
+
+
 def build_network_spec(
     slug: str, alloc: dict[str, Any], mode: str
 ) -> dict[str, Any]:

@@ -17,7 +17,7 @@ import click.core
 import typer
 from typer.core import TyperOption
 
-from . import alloc, host_agent, materializer, plans
+from . import alloc, host_agent, materializer, network, plans, relay
 from . import doctor as doctor_mod
 from .cells import CellNotFound, CellService, ProvisionRefused
 from .executor import LocalExecutor
@@ -390,4 +390,53 @@ def plan_agent(
         agent.serve_forever(server)
     finally:
         server.close()
+        path.unlink(missing_ok=True)
+
+
+# --- A.SPEC 0104: unprivileged edge relay -----------------------------------
+
+
+@app.command("edge-relay")
+def edge_relay(
+    data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
+    bind: str = typer.Option("", "--bind", help="Override the relay bind address."),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Serve the unprivileged TCP relay and its restricted control socket.
+
+    Started by ``spanel-edge-relay.service`` only. It carries the same
+    host-only mutation gate as ``plan-agent`` and never touches a Docker socket
+    or a certificate: the relay just forwards bytes to the cell loopback.
+    """
+    if not host_agent.plans.mutation_allowed():
+        typer.echo(
+            f"refusing to start: set {host_agent.plans.MUTATION_GATE}=1 "
+            "in the host relay process only"
+        )
+        raise typer.Exit(code=2)
+    relay_bind = bind or relay.default_bind()
+    sources = relay.allowed_sources()
+    endpoints = relay.endpoints_from_registry(
+        data_root, bind=relay_bind, sources=sources
+    )
+    tcp = relay.TCPRelay(relay_bind, sources)
+    try:
+        tcp.reload(endpoints)
+    except Exception as exc:  # noqa: BLE001 - surface a bind failure cleanly
+        _emit({"error": str(exc), "verb": "edge_relay"}, json_output)
+        raise typer.Exit(code=1) from None
+    agent = relay.RelayControlAgent(
+        tcp, allowed_uids={network.traefik_uid()}
+    )
+    path = Path(relay.socket_path_from_env())
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.unlink(missing_ok=True)
+    control = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    control.bind(str(path))
+    control.listen(16)
+    try:
+        agent.serve_forever(control)
+    finally:
+        control.close()
+        tcp.close()
         path.unlink(missing_ok=True)

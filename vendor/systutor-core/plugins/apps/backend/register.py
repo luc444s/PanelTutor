@@ -15,6 +15,7 @@ from plugins.apps.backend.github import GithubClient, UrllibGithubClient
 from plugins.apps.backend.models import Application, Deployment
 from plugins.apps.backend.plans_client import HostPlanMaterializerClient
 from plugins.apps.backend.public_url import PublicUrlError, parse_public_url
+from plugins.apps.backend.rootless_routes import build_rootless_routes
 from plugins.apps.backend.router import router
 from plugins.apps.backend.settings import AppsSettings
 from plugins.apps.backend.states import OneTimeStates
@@ -32,6 +33,8 @@ class AppsResources:
     # Injected by the host: the real (gated) root/systemd materializer. Without
     # it the plan API fails loudly with 503 instead of faking success.
     plan_materializer: object | None = None
+    # A.SPEC 0104: read-only relay endpoint client + rootless route publisher.
+    rootless_routes: object | None = None
 
     def cipher(self) -> TokenCipher:
         if self._cipher is None:
@@ -108,10 +111,13 @@ def register(context: PluginContext) -> None:
     context.register_router(router)
     app = context.router_registry
     if app is not None:
+        rootless = build_rootless_routes()
         app.state.apps_resources = AppsResources(
             settings,
             DramatiqDispatcher(),
             UrllibGithubClient(),
             plan_materializer=_build_plan_materializer(settings),
+            rootless_routes=rootless,
         )
+        app.state.rootless_routes = rootless
         register_site_provider(app, "apps", resolve_apps_sites)

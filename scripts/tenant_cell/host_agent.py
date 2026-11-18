@@ -28,9 +28,13 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import alloc, materializer, plans
+from . import alloc, materializer, plans, relay
 
 ALLOWED_OPS = ("apply", "remove", "verify", "reconcile")
+# A.SPEC 0104: ``endpoint`` is a read-only host fact, deliberately kept out of
+# the mutation allowlist (ALLOWED_OPS) so existing callers keep the same gate.
+READ_OPS = ("endpoint",)
+ALL_OPS = ALLOWED_OPS + READ_OPS
 RECONCILE_SUBJECT = "*"
 REQUEST_KEYS = {"op", "tenant", "slug", "token", "plan", "desired"}
 PLAN_KEYS = {"memory", "cpus", "pids", "cpuset"}
@@ -148,6 +152,14 @@ def write_frame(sock: Any, payload: dict[str, Any]) -> None:
     sock.sendall(struct.pack("!I", len(raw)) + raw)
 
 
+def resolve_endpoint(slug: str, data_root: str | Path) -> dict[str, Any]:
+    """Read-only cell endpoint derived from the registry and network.py."""
+    allocation = alloc.load_registry(data_root)["allocations"].get(slug)
+    if allocation is None:
+        raise AuthorizationError(ERR_TENANT, f"tenant {slug} has no cell allocation")
+    return relay.endpoint_for_allocation(allocation)
+
+
 # --- agent ------------------------------------------------------------------
 
 
@@ -164,6 +176,7 @@ class PlanAgent:
         allowed_gids: set[int] | frozenset[int] | None = None,
         clock: Callable[[], float] | None = None,
         peer_resolver: Callable[[Any], Peer] | None = None,
+        endpoint_resolver: Callable[[str, str | Path], dict[str, Any]] | None = None,
     ) -> None:
         if not secret:
             raise ValueError("the host agent requires a shared secret")
@@ -176,6 +189,7 @@ class PlanAgent:
         self.data_root = Path(data_root)
         self.clock = clock or time.time
         self.peer_resolver = peer_resolver or peer_credential
+        self.endpoint_resolver = endpoint_resolver or resolve_endpoint
 
     def authorize_peer(self, peer: Peer) -> None:
         if peer.uid not in self.allowed_uids:
@@ -208,7 +222,7 @@ class PlanAgent:
         if set(request) - REQUEST_KEYS:
             raise AuthorizationError(ERR_REQUEST, "request carries unsupported fields")
         op = request.get("op")
-        if op not in ALLOWED_OPS:
+        if op not in ALL_OPS:
             raise AuthorizationError(ERR_FORBIDDEN, f"operation {op!r} is not supported")
         tenant, slug = request.get("tenant"), request.get("slug")
         verify_capability(
@@ -233,6 +247,9 @@ class PlanAgent:
             op = self.authorize(request, peer)
             if op == "reconcile":
                 result = self.materializer.reconcile(request["desired"])
+            elif op == "endpoint":
+                slug = plans.validate_slug(str(request["slug"]))
+                result = self.endpoint_resolver(slug, self.data_root)
             else:
                 slug = plans.validate_slug(str(request["slug"]))
                 if op == "apply":

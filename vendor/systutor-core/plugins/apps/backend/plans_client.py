@@ -22,6 +22,7 @@ import secrets
 import socket
 import struct
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -31,8 +32,41 @@ DEFAULT_TIMEOUT = 5.0
 TOKEN_TTL_SECONDS = 60
 MAX_FRAME = 1 << 20  # plans are small; the protocol never carries files.
 
-OPS = ("apply", "remove", "verify", "reconcile")
+OPS = ("apply", "remove", "verify", "reconcile", "endpoint")
 RECONCILE_SUBJECT = "*"
+
+
+@dataclass(frozen=True)
+class CellEndpoint:
+    """Read-only relay endpoint of a rootless cell (A.SPEC 0104)."""
+
+    slug: str
+    loopback_address: str
+    publish_port: int
+    relay_port: int
+    bind: str
+    allowed_sources: tuple[str, ...] = ()
+
+    @classmethod
+    def from_result(cls, result: dict[str, Any]) -> CellEndpoint:
+        return cls(
+            slug=str(result["slug"]),
+            loopback_address=str(result["loopback_address"]),
+            publish_port=int(result["publish_port"]),
+            relay_port=int(result["relay_port"]),
+            bind=str(result["bind"]),
+            allowed_sources=tuple(result.get("allowed_sources", ())),
+        )
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "slug": self.slug,
+            "loopback_address": self.loopback_address,
+            "publish_port": self.publish_port,
+            "relay_port": self.relay_port,
+            "bind": self.bind,
+            "allowed_sources": list(self.allowed_sources),
+        }
 
 
 class PlanAgentError(Exception):
@@ -263,3 +297,10 @@ class HostPlanMaterializerClient:
             slug=RECONCILE_SUBJECT,
             desired=desired,
         )
+
+    def endpoint(self, tenant_slug: str) -> CellEndpoint:
+        """Resolve the relay endpoint of one cell; never mutates the host."""
+        result = self._call(
+            "endpoint", tenant=tenant_slug, slug=tenant_slug
+        )
+        return CellEndpoint.from_result(result)

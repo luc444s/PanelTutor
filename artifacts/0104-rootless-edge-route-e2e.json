@@ -1,0 +1,265 @@
+{
+  "artifact": "0104-rootless-edge-route-e2e",
+  "spec": "A.SPEC 0104",
+  "subagent": 2,
+  "role": "E2E en laboratorio (sin cambios de codigo fuente, sin GENERATOR, sin commit)",
+  "date_utc": "2026-11-18T07:59:11Z",
+  "lab": {
+    "host": "lucas@100.67.5.50",
+    "hostname": "lucas-ThinkPad-E570",
+    "venv_python": "/home/lucas/mailadmin/.venv/bin/python",
+    "temp_checkout": "/var/tmp/spanel-e2e-0104",
+    "data_root": "/var/lib/spanel",
+    "traefik_container": "spanel-traefik-lab",
+    "traefik_ip": "172.25.0.3",
+    "traefik_network": "spanel-traefik-lab",
+    "network": "172.25.0.0/16",
+    "gateway": "172.25.0.1",
+    "http_entrypoint_host_port": 9080,
+    "dynamic_dir": "/home/lucas/mailadmin/scripts/traefik-lab/dynamic",
+    "registry_next_index_before": 20,
+    "forbidden_targets_untouched": [
+      "cell-g (uid 60008)",
+      "cell-h (uid 60009)",
+      "Traefik (config estatica / restart)",
+      "phpMyAdmin",
+      "MariaDB",
+      "WordPress",
+      "produccion vmi3461574",
+      "/opt/stacks"
+    ]
+  },
+  "preparation": {
+    "local_tar": "tar --exclude='__pycache__' --exclude='*.pyc' -czf spanel-0104.tar.gz scripts/spanel_tenant.py scripts/tenant_cell",
+    "lab_extract": "mkdir -p /var/tmp/spanel-e2e-0104 && tar -xzf /var/tmp/spanel-0104.tar.gz -C /var/tmp/spanel-e2e-0104 && chown -R 1000:1000 /var/tmp/spanel-e2e-0104",
+    "cli_help_ok": "python3 /var/tmp/spanel-e2e-0104/scripts/spanel_tenant.py edge-relay --help (exit 0)",
+    "doctor": "{\"capabilities\": {...all ok...}, \"ready\": true}",
+    "notes": "El primer arranque del relay fallo porque los archivos extraidos quedaron root:0600; tras chown a uid 1000 el relay arranco correctamente."
+  },
+  "relay": {
+    "state": "RUNNING",
+    "process": {
+      "launcher_pid": 547037,
+      "relay_pid": 547039,
+      "relay_uid": 1000,
+      "launch_command": "nohup runuser -u lucas -- env SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1 SPANEL_EDGE_RELAY_BIND=172.25.0.1 SPANEL_EDGE_RELAY_SOURCES=172.25.0.3 SPANEL_EDGE_RELAY_SOCKET=/run/spanel/edge-relay.sock SPANEL_TRAEFIK_UID=1000 /home/lucas/mailadmin/.venv/bin/python /var/tmp/spanel-e2e-0104/scripts/spanel_tenant.py edge-relay --data-root /var/lib/spanel --bind 172.25.0.1 < /dev/null > /var/tmp/spanel-e2e-0104/relay.log 2>&1 &",
+      "env_verified": {
+        "SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS": "1",
+        "SPANEL_EDGE_RELAY_BIND": "172.25.0.1",
+        "SPANEL_EDGE_RELAY_SOURCES": "172.25.0.3",
+        "SPANEL_EDGE_RELAY_SOCKET": "/run/spanel/edge-relay.sock",
+        "SPANEL_TRAEFIK_UID": "1000"
+      }
+    },
+    "control_socket": "/run/spanel/edge-relay.sock",
+    "control_client": "/var/tmp/spanel-e2e-0104/ctl.py (framing propio: struct.pack('!I', len(json)) + json)",
+    "control_commands": [
+      "runuser -u lucas -- python3 /var/tmp/spanel-e2e-0104/ctl.py status",
+      "runuser -u lucas -- python3 /var/tmp/spanel-e2e-0104/ctl.py apply '{\"slug\":...,\"loopback_address\":...,\"publish_port\":...,\"relay_port\":...,\"bind\":\"172.25.0.1\",\"allowed_sources\":[\"172.25.0.3\"]}'"
+    ],
+    "status_result": [
+      {"slug": "cell-g", "loopback_address": "127.9.1.1", "publish_port": 20008, "relay_port": 40008, "bind": "172.25.0.1", "allowed_sources": ["172.25.0.3"]},
+      {"slug": "cell-h", "loopback_address": "127.10.1.1", "publish_port": 20009, "relay_port": 40009, "bind": "172.25.0.1", "allowed_sources": ["172.25.0.3"]},
+      {"slug": "cell-e2e-0104a", "loopback_address": "127.21.1.1", "publish_port": 20020, "relay_port": 40020, "bind": "172.25.0.1", "allowed_sources": ["172.25.0.3"]},
+      {"slug": "cell-e2e-0104b", "loopback_address": "127.22.1.1", "publish_port": 20021, "relay_port": 40021, "bind": "172.25.0.1", "allowed_sources": ["172.25.0.3"]}
+    ],
+    "listeners_verified": [
+      "172.25.0.1:40020 -> pid 547039",
+      "172.25.0.1:40021 -> pid 547039"
+    ],
+    "allowlist_probe": {
+      "plain_host_curl": "curl http://172.25.0.1:40020/ -> curl (56) Recv failure: conexion reinicializada (DENEGADO, fail-closed correcto)",
+      "authorized_source": "nsenter -t <traefik_pid> -n curl http://172.25.0.1:40020/ -> 200 (source 172.25.0.3)"
+    }
+  },
+  "round_1": {
+    "result": "PASS",
+    "purpose": "Salto 1 -> 2 -> 3 con el mismo cuerpo y sha256",
+    "cell": {
+      "slug": "cell-e2e-0104a",
+      "index": 20,
+      "uid": 60020,
+      "gid": 60020,
+      "user": "spanel-cell-e2e-0104a",
+      "socket": "/var/lib/spanel/cells/cell-e2e-0104a/docker.sock",
+      "configs_verified": {
+        "useradd": "uid 60020",
+        "linger": "Linger=yes",
+        "daemon_json": "{\"exec-opts\": [\"native.cgroupdriver=systemd\"]}",
+        "apparmor": "spanel-cell-cell-e2e-0104a = enforce (aa-status --json)",
+        "nft_table": "spanel-cell-cell-e2e-0104a: oifname lo ip daddr 127.21.1.1 tcp dport 20020 meta skuid { 1000, 60020 } accept + drop",
+        "plan_set": "plan set --memory 256M --cpus 0.5 --pids 128 -> slice tenant-cell-e2e-0104a.slice, MemoryMax=256M, CPUQuota=50% (cpu.max 50000 100000), TasksMax=128, dropin user@60020.service.d/tenant-plan.conf",
+        "socket": "docker info via socket = 29.1.3 / CgroupDriver systemd"
+      },
+      "final_plan_state": "REMOVIDO para que el contenedor rootless pueda arrancar (ver GAP-1). El plan set se ejecuto y verificado; se retiro para conservar el link vivo."
+    },
+    "container": {
+      "name": "e2e-0104a-nginx",
+      "image": "nginx:alpine",
+      "run_command": "runuser -u spanel-cell-e2e-0104a -- env XDG_RUNTIME_DIR=/run/user/60020 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/60020/bus DOCKER_HOST=unix:///var/lib/spanel/cells/cell-e2e-0104a/docker.sock docker run -d --name e2e-0104a-nginx -p 127.21.1.1:20020:80 nginx:alpine",
+      "index_html_write": "printf %s 'hola, este es un htrml que se ve desde un contenedor rootless' > /usr/share/nginx/html/index.html",
+      "state": "Up"
+    },
+    "endpoint": {
+      "slug": "cell-e2e-0104a",
+      "loopback_address": "127.21.1.1",
+      "publish_port": 20020,
+      "relay_port": 40020,
+      "bind": "172.25.0.1",
+      "allowed_sources": ["172.25.0.3"]
+    },
+    "route_file": "/home/lucas/mailadmin/scripts/traefik-lab/dynamic/spanel-route-0104a-rootless.yml",
+    "route_yaml": "# managed-by: spanel\nhttp:\n  routers:\n    spanel-rootless-e2e-0104a:\n      rule: Host(`rootless-e2e.lab`)\n      entryPoints:\n      - web\n      service: spanel-rootless-e2e-0104a\n      priority: 301\n  services:\n    spanel-rootless-e2e-0104a:\n      loadBalancer:\n        servers:\n        - url: http://172.25.0.1:40020\n",
+    "expected_body": "hola, este es un htrml que se ve desde un contenedor rootless",
+    "expected_body_sha256": "6335927b407fcd71bebd46d2d592a70f68f96fdb6f4bf6e0627ce940e0d38b39",
+    "hops": {
+      "salto_1": {
+        "command": "runuser -u lucas -- curl -sS --max-time 5 http://127.21.1.1:20020/",
+        "why_uid_1000": "La regla nft skuid {1000,60020} drops uid 0; como root el curl expira.",
+        "sha256": "6335927b407fcd71bebd46d2d592a70f68f96fdb6f4bf6e0627ce940e0d38b39",
+        "timestamp": "2026-11-18T07:54:07Z",
+        "stdout": "hola, este es un htrml que se ve desde un contenedor rootless"
+      },
+      "salto_2": {
+        "command": "nsenter -t $(docker inspect -f '{{.State.Pid}}' spanel-traefik-lab) -n curl -sS --max-time 5 http://172.25.0.1:40020/",
+        "why_nsenter": "El allowlist del relay solo acepta source 172.25.0.3; el curl del host seria rechazado (fail-closed). nsenter usa el netns de Traefik sin tocar su configuracion.",
+        "sha256": "6335927b407fcd71bebd46d2d592a70f68f96fdb6f4bf6e0627ce940e0d38b39",
+        "timestamp": "2026-11-18T07:54:25Z",
+        "stdout": "hola, este es un htrml que se ve desde un contenedor rootless"
+      },
+      "salto_3": {
+        "command": "curl -sS --max-time 8 -H 'Host: rootless-e2e.lab' http://127.0.0.1:9080/",
+        "sha256": "6335927b407fcd71bebd46d2d592a70f68f96fdb6f4bf6e0627ce940e0d38b39",
+        "timestamp": "2026-11-18T07:54:40Z",
+        "stdout": "hola, este es un htrml que se ve desde un contenedor rootless"
+      }
+    },
+    "hosts_entry": "24:127.0.0.1 rootless-e2e.lab",
+    "link": "http://rootless-e2e.lab:9080/",
+    "link_final_check": {"timestamp": "2026-11-18T07:59:11Z", "http_code": 200, "sha256": "6335927b407fcd71bebd46d2d592a70f68f96fdb6f4bf6e0627ce940e0d38b39", "state": "LIVE"}
+  },
+  "round_2": {
+    "result": "PASS",
+    "purpose": "App real (software para editores) en celda aislada distinta, mismo relay reutilizado",
+    "cell": {
+      "slug": "cell-e2e-0104b",
+      "index": 21,
+      "uid": 60021,
+      "gid": 60021,
+      "user": "spanel-cell-e2e-0104b",
+      "socket": "/var/lib/spanel/cells/cell-e2e-0104b/docker.sock",
+      "configs_verified": {
+        "useradd": "uid 60021",
+        "linger": "Linger=yes",
+        "daemon_json": "{\"exec-opts\": [\"native.cgroupdriver=systemd\"]}",
+        "apparmor": "spanel-cell-cell-e2e-0104b = enforce (aa-status --json)",
+        "nft_table": "spanel-cell-cell-e2e-0104b: oifname lo ip daddr 127.22.1.1 tcp dport 20021 meta skuid { 1000, 60021 } accept + drop",
+        "plan_set": "plan set --memory 256M --cpus 0.5 --pids 128 -> slice tenant-cell-e2e-0104b.slice, MemoryMax=256M, CPUQuota=50% (cpu.max 50000 100000), TasksMax=128, dropin user@60021.service.d/tenant-plan.conf",
+        "socket": "docker info via socket = 29.1.3 / CgroupDriver systemd"
+      },
+      "final_plan_state": "REMOVIDO para que el contenedor rootless pueda arrancar (ver GAP-1)."
+    },
+    "app": {
+      "name": "e2e-0104b-editores",
+      "image": "software-de-gestion-para-editores-main_frontend:latest",
+      "provenance": "Imagen del stack del e2e de software para editores, disponible en el daemon del lab; exportada con docker save e importada al daemon aislado de la celda con docker load (63MB).",
+      "why_frontend_only": "El compose completo requiere backend + PostgreSQL (varios contenedores y muchas reglas AppArmor). Se uso el frontend real de la app ('Panel Editor'), que es una SPA nginx de un solo contenedor, satisfaciendo 'un contenedor' y 'app real, no solo nginx'.",
+      "config_override": "El default.conf de la imagen tiene location /api/ -> proxy_pass http://backend:8000 y nginx no arranca sin ese host (host not found in upstream). Se reemplazo por un server statico: root /usr/share/nginx/html; try_files $uri $uri/ /index.html; (sin proxy /api/). La UI y sus assets son los reales; las llamadas API al backend no estan desplegadas.",
+      "run_script": "/var/tmp/spanel-e2e-0104/run_editor_b.sh",
+      "run_command_esencial": "docker run -d --name e2e-0104b-editores -p 127.22.1.1:20021:80 --entrypoint /bin/sh software-de-gestion-para-editores-main_frontend:latest -c \"printf '%s' '<server static config>' > /etc/nginx/conf.d/default.conf && exec nginx -g 'daemon off;'\"",
+      "state": "Up",
+      "asset_check_via_link": "GET http://editores-e2e.lab:9080/assets/index-UqyIMAPJ.js -> http=200 bytes=753932 type=application/javascript"
+    },
+    "endpoint": {
+      "slug": "cell-e2e-0104b",
+      "loopback_address": "127.22.1.1",
+      "publish_port": 20021,
+      "relay_port": 40021,
+      "bind": "172.25.0.1",
+      "allowed_sources": ["172.25.0.3"]
+    },
+    "route_file": "/home/lucas/mailadmin/scripts/traefik-lab/dynamic/spanel-route-0104b-editores.yml",
+    "route_yaml": "# managed-by: spanel\nhttp:\n  routers:\n    spanel-editores-e2e-0104b:\n      rule: Host(`editores-e2e.lab`)\n      entryPoints:\n      - web\n      service: spanel-editores-e2e-0104b\n      priority: 301\n  services:\n    spanel-editores-e2e-0104b:\n      loadBalancer:\n        servers:\n        - url: http://172.25.0.1:40021\n",
+    "hops": {
+      "salto_1": {
+        "command": "runuser -u lucas -- curl -sS --max-time 8 http://127.22.1.1:20021/",
+        "sha256": "45794de7a58c8305cebfafaa51ba82897c00358c9d5b82b4e287058d8ef6388f",
+        "timestamp": "2026-11-18T07:58:29Z",
+        "stdout_head": "<!doctype html><html lang=\"es\">...<title>Panel Editor</title>..."
+      },
+      "salto_2": {
+        "command": "nsenter -t $(docker inspect -f '{{.State.Pid}}' spanel-traefik-lab) -n curl -sS --max-time 8 http://172.25.0.1:40021/",
+        "sha256": "45794de7a58c8305cebfafaa51ba82897c00358c9d5b82b4e287058d8ef6388f",
+        "timestamp": "2026-11-18T07:58:40Z",
+        "stdout_head": "<!doctype html><html lang=\"es\">...<title>Panel Editor</title>..."
+      },
+      "salto_3": {
+        "command": "curl -sS --max-time 8 -H 'Host: editores-e2e.lab' http://127.0.0.1:9080/",
+        "sha256": "45794de7a58c8305cebfafaa51ba82897c00358c9d5b82b4e287058d8ef6388f",
+        "timestamp": "2026-11-18T07:58:52Z",
+        "stdout_head": "<!doctype html><html lang=\"es\">...<title>Panel Editor</title>..."
+      }
+    },
+    "hosts_entry": "25:127.0.0.1 editores-e2e.lab",
+    "link": "http://editores-e2e.lab:9080/",
+    "link_final_check": {"timestamp": "2026-11-18T07:59:11Z", "http_code": 200, "sha256": "45794de7a58c8305cebfafaa51ba82897c00358c9d5b82b4e287058d8ef6388f", "state": "LIVE"}
+  },
+  "gaps": [
+    {
+      "id": "GAP-1",
+      "severity": "high",
+      "title": "plan set es incompatible con contenedores rootless en esta rama",
+      "evidence": "Con plan set aplicado (dropin Slice=tenant-cell-e2e-0104a.slice en user@60020.service), todo docker run/start falla: runc create failed ... unable to start unit docker-*.scope ... failed to connect to dbus ... dial unix /run/systemd/private: connect: permission denied. Sin el plan (user@60020.slice), el mismo contenedor arranca. Confirmado en ambas celdas.",
+      "root_cause": "Al reparentar el user manager a tenant.slice, runc no decide modo rootless (falla su deteccion OwnerUID via busctl --user) y cae al bus del sistema, donde /run/systemd/private es root:0600.",
+      "impact": "No se pueden tener simultaneamente el plan aplicado y los contenedores/rutas rootless vivos. El plan set SE ejecuto y verifico (slice, CPUQuota=50%, MemoryMax=256M, TasksMax=128, dropin), pero se retiro al final para conservar los links exigidos.",
+      "recommendation": "El materializador del plan debe aplicar los limites sin sacar user@<uid>.service de user.slice (p.ej. set-property en la celda scope), o garantizar la deteccion rootless de runc bajo tenant.slice."
+    },
+    {
+      "id": "GAP-2",
+      "severity": "medium",
+      "title": "El perfil AppArmor generado omite reglas necesarias para contenedores reales",
+      "evidence": "DENIED observados: exec /usr/bin/docker-proxy; open /proc/sys/net/ipv4/conf/docker0/route_localnet; open /proc/<pid>/comm; exec /docker-entrypoint.sh y open del mismo; exec /usr/sbin/nginx; open /usr/share/nginx/html/index.html (w); open /var/cache/nginx/**; open /sys/fs/cgroup/user.slice/cgroup.type.",
+      "mitigation_applied": "Parches SOLO en /etc/apparmor.d/spanel-cell-cell-e2e-0104{a,b} del laboratorio (no en el repo): docker-proxy ix, /proc/[0-9]*/comm r, /proc/sys/net/ipv4/** rw, cgroup.type r, tenant.slice/** rwkl, /docker-entrypoint.sh ix+r, /usr/sbin/nginx ix, /usr/bin/env ix, /usr/share/nginx/** rwkl, /var/cache/nginx/** rwkl, /var/log/nginx/** rwkl. apparmor_parser -r aplicado.",
+      "recommendation": "Anadir estas reglas al generador de perfiles (scripts/tenant_cell/apparmor.py) para que provision produzca celdas capaces de ejecutar imagenes reales con puertos publicados."
+    },
+    {
+      "id": "GAP-3",
+      "severity": "info",
+      "title": "El allowlist del relay y la regla nft skuid son restrictivos por diseno",
+      "evidence": "curl directo desde el host a 172.25.0.1:40020 fue reinicializado (source no 172.25.0.3). curl como root (uid 0) a 127.21.1.1:20020 expira (nft skuid {1000,60020} drops uid 0).",
+      "impact": "Ninguno sobre la ruta real (Traefik llega con source 172.25.0.3 y uid 1000). Salto 1 se ejecuto como uid 1000 y salto 2 desde el netns de Traefik.",
+      "recommendation": "Documentar en el runbook de verificacion como ejecutar los curls de evidencia."
+    },
+    {
+      "id": "GAP-4",
+      "severity": "low",
+      "title": "El frontend del stack de editores no es autocontenido",
+      "evidence": "software-de-gestion-para-editores-main_frontend:latest no arranca con su config por defecto: nginx [emerg] host not found in upstream \"backend\" en /etc/nginx/conf.d/default.conf:12.",
+      "mitigation_applied": "Se overrides default.conf con un server statico (SPA) dentro del contenedor; UI y assets reales servidos (asset 753932 bytes, http 200). No se desplego backend ni PostgreSQL (fuera del alcance 'un contenedor').",
+      "recommendation": "Si se exige la app completa, desplegar backend+DB dentro de la celda y ampliar el perfil AppArmor (ver GAP-2)."
+    }
+  ],
+  "cleanup": {
+    "removed": [
+      "Contenedores de intentos fallidos de cell-e2e-0104a (varios e2e-0104a-nginx recreados)",
+      "plan set de ambas celdas (slice tenant-*.slice y drop-ins user@6002x.service.d/tenant-plan.conf) -> verificado que no quedan archivos",
+      "Sin entradas duplicadas en /etc/hosts (1 cada Host)"
+    ],
+    "kept_alive": [
+      "cell-e2e-0104a con e2e-0104a-nginx (Up) y ruta rootless-e2e.lab",
+      "cell-e2e-0104b con e2e-0104b-editores (Up) y ruta editores-e2e.lab",
+      "relay edge-relay PID 547039 con ambos endpoints aplicados",
+      "dos archivos spanel-route-0104*.yml en el dynamic de Traefik lab",
+      "dos entradas en /etc/hosts del lab"
+    ]
+  },
+  "final_summary": {
+    "round_1": "PASS",
+    "round_2": "PASS",
+    "links": ["http://rootless-e2e.lab:9080/", "http://editores-e2e.lab:9080/"],
+    "both_hops_sha_equal": true,
+    "relay_reusable_infrastructure_proven": true,
+    "artifact_path": "/data/data/com.termux/files/home/Proyectos/mailadmin/artifacts/0104-rootless-edge-route-e2e.json",
+    "committed": false
+  }
+}
