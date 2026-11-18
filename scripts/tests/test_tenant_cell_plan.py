@@ -17,7 +17,7 @@ ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.tenant_cell import alloc, audit, cli, plans
+from scripts.tenant_cell import alloc, audit, cli, materializer, plans
 from scripts.tenant_cell.executor import Executor
 
 GATE = "SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS"
@@ -80,9 +80,9 @@ def _cell(
 
 def _service(
     tmp_path: Path, evidence: dict[str, Any] | None = None
-) -> tuple[plans.PlanService, FakePlanExecutor]:
+) -> tuple[materializer.PlanMaterializer, FakePlanExecutor]:
     executor = FakePlanExecutor(evidence)
-    return plans.PlanService(executor, tmp_path), executor
+    return materializer.PlanMaterializer(executor, tmp_path), executor
 
 
 def test_validate_plan_rejects_nonpositive_values_before_any_write(tmp_path) -> None:
@@ -101,7 +101,7 @@ def test_validate_plan_rejects_nonpositive_values_before_any_write(tmp_path) -> 
     ]
     for memory, cpus, pids in bad_plans:
         with pytest.raises(plans.InvalidPlan):
-            svc.set("acme", memory, cpus, pids)
+            svc.apply("acme", memory, cpus, pids)
 
     assert executor.calls == []
     assert not plans.plans_path(tmp_path).exists()
@@ -112,7 +112,7 @@ def test_set_installs_slice_dropin_and_persists_plan_atomically(tmp_path) -> Non
     _cell(tmp_path)
     svc, executor = _service(tmp_path)
 
-    result = svc.set("acme", "512M", 0.5, 128)
+    result = svc.apply("acme", "512M", 0.5, 128)
 
     assert executor.names() == [
         "install_tenant_slice",
@@ -155,7 +155,7 @@ def test_set_requires_the_local_mutation_gate(tmp_path, monkeypatch) -> None:
     svc, executor = _service(tmp_path)
 
     with pytest.raises(plans.MutationDisabled):
-        svc.set("acme", "512M", 0.5, 128)
+        svc.apply("acme", "512M", 0.5, 128)
 
     assert executor.calls == []
     assert not plans.plans_path(tmp_path).exists()
@@ -165,11 +165,11 @@ def test_set_rejects_missing_cell_and_legacy_driver_without_writes(tmp_path) -> 
     svc, executor = _service(tmp_path)
 
     with pytest.raises(plans.PlanCellMissing):
-        svc.set("ghost", "512M", 0.5, 128)
+        svc.apply("ghost", "512M", 0.5, 128)
 
     _cell(tmp_path, driver="cgroupfs")
     with pytest.raises(plans.PlanDriverError):
-        svc.set("acme", "512M", 0.5, 128)
+        svc.apply("acme", "512M", 0.5, 128)
 
     assert executor.calls == []
     assert not plans.plans_path(tmp_path).exists()
@@ -179,7 +179,7 @@ def test_set_rejects_missing_cell_and_legacy_driver_without_writes(tmp_path) -> 
 def test_show_returns_saved_plan_and_effective_slice(tmp_path) -> None:
     _cell(tmp_path)
     svc, executor = _service(tmp_path)
-    svc.set("acme", "1G", 1.25, 256)
+    svc.apply("acme", "1G", 1.25, 256)
     executor.calls.clear()
 
     shown = svc.show("acme")
@@ -196,8 +196,8 @@ def test_plan_operations_on_one_tenant_leave_others_untouched(tmp_path) -> None:
     _cell(tmp_path, "beta")
     svc, executor = _service(tmp_path)
 
-    svc.set("acme", "512M", 0.5, 128)
-    svc.set("beta", "256M", 1, 64)
+    svc.apply("acme", "512M", 0.5, 128)
+    svc.apply("beta", "256M", 1, 64)
     before_remove_calls = len(executor.calls)
     registry_before = json.loads((tmp_path / "registry.json").read_text(encoding="utf-8"))
 
@@ -216,7 +216,7 @@ def test_plan_operations_on_one_tenant_leave_others_untouched(tmp_path) -> None:
 def test_remove_restores_default_user_slice_and_deletes_plan(tmp_path) -> None:
     _cell(tmp_path)
     svc, executor = _service(tmp_path)
-    svc.set("acme", "512M", 0.5, 128)
+    svc.apply("acme", "512M", 0.5, 128)
     executor.calls.clear()
 
     result = svc.remove("acme")
@@ -252,7 +252,7 @@ def test_verify_reports_kernel_evidence_from_both_sides(tmp_path, ok: bool) -> N
     if not ok:
         evidence["error"] = "kernel did not apply the limits"
     svc, executor = _service(tmp_path, evidence)
-    svc.set("acme", "512M", 0.5, 128)
+    svc.apply("acme", "512M", 0.5, 128)
     executor.calls.clear()
 
     result = svc.verify("acme")
@@ -292,7 +292,7 @@ def test_cli_plan_help_lists_all_subcommands() -> None:
     runner = CliRunner()
     result = runner.invoke(cli.app, ["plan", "--help"])
     assert result.exit_code == 0, result.output
-    for subcommand in ("set", "show", "remove", "verify"):
+    for subcommand in ("set", "show", "remove", "verify", "import"):
         assert subcommand in result.output
 
     set_help = runner.invoke(cli.app, ["plan", "set", "--help"])
@@ -324,3 +324,47 @@ def test_cli_set_and_show_use_the_injected_plan_service(tmp_path, monkeypatch) -
     )
     assert show_result.exit_code == 0, show_result.output
     assert json.loads(show_result.output)["plan"]["pids"] == 128
+
+
+def test_cli_plan_import_migrates_the_cache_explicitly(tmp_path, monkeypatch) -> None:
+    from typer.testing import CliRunner
+
+    _cell(tmp_path)
+    svc, _executor = _service(tmp_path)
+    monkeypatch.setattr(cli, "_plan_service", lambda data_root: svc)
+    source = tmp_path / "plans.json"
+    source.write_text(
+        json.dumps({
+            "version": plans.PLAN_VERSION,
+            "plans": {
+                "acme": {
+                    "slug": "acme",
+                    "uid": 60000,
+                    "plan": {"memory": "256M", "cpus": 1, "pids": 64},
+                }
+            },
+        }),
+        encoding="utf-8",
+    )
+
+    result = CliRunner().invoke(
+        cli.app,
+        ["plan", "import", "--from", str(source), "--json",
+         "--data-root", str(tmp_path)],
+    )
+    assert result.exit_code == 0, result.output
+    payload = json.loads(result.output)
+    assert payload["cache_only"] is True
+    assert payload["imported"][0]["slice"] == "tenant-acme.slice"
+    assert svc.show("acme")["plan"]["pids"] == 64
+
+
+def test_cpuset_is_rendered_into_the_slice() -> None:
+    rendered = plans.render_slice(
+        "acme", {"memory": "512M", "cpus": 0.5, "pids": 128, "cpuset": "0-3,8"}
+    )
+    assert "AllowedCPUs=0-3,8" in rendered
+    with pytest.raises(plans.InvalidPlan):
+        plans.render_slice(
+            "acme", {"memory": "512M", "cpus": 0.5, "pids": 128, "cpuset": "0; rm -rf /"}
+        )

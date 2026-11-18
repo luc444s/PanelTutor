@@ -1,10 +1,10 @@
-"""Tenant resource plans: validated persistence, slice rendering and enforcement.
+"""Tenant resource plan vocabulary: validation, rendering and host adapter.
 
-A plan is a small, atomically written JSON record keyed by a validated slug.
-Applying it materialises ``tenant-<slug>.slice`` (under the default
+The DB in the Apps plugin is the source of truth.  ``plans.json`` here is only
+a cache of the last applied state and is never read as a plan implicitly.
+Applying a plan materialises ``tenant-<slug>.slice`` (under the default
 ``tenant.slice`` hierarchy) and points the cell's user manager at that slice
-with a drop-in. Removing it deletes both artifacts and restarts the manager so
-it returns to ``user-<uid>.slice``.
+with a drop-in; removing it restores ``user-<uid>.slice``.
 
 Everything that touches the host goes through the injectable ``Executor``. This
 module owns validation, rendering, persistence and orchestration; the only real
@@ -22,8 +22,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import alloc, audit
-from .alloc import DEFAULT_CGROUP_DRIVER, validate_slug
+from .alloc import validate_slug
 
 _SYSTEMD_DIR = Path("/etc/systemd/system")
 _CELL_ROOT = "/var/lib/spanel/cells"
@@ -34,6 +33,7 @@ MUTATION_GATE = "SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS"
 DROPIN_NAME = "tenant-plan.conf"
 
 _MEMORY_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([KMGT]?)B?$", re.IGNORECASE)
+_CPUSET_RE = re.compile(r"^[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*$")
 _UNIT_MULT = {"": 1, "K": 1024, "M": 1024**2, "G": 1024**3, "T": 1024**4}
 
 
@@ -125,7 +125,7 @@ def dropin_path(uid: int) -> str:
 def render_slice(slug: str, plan: dict[str, Any]) -> str:
     """Render the tenant slice with MemoryMax / CPUQuota / TasksMax."""
     checked = validate_plan(plan["memory"], plan["cpus"], plan["pids"])
-    return (
+    rendered = (
         "[Unit]\n"
         f"Description=Spanel tenant {validate_slug(slug)} resource plan slice\n"
         "\n"
@@ -134,6 +134,13 @@ def render_slice(slug: str, plan: dict[str, Any]) -> str:
         f"CPUQuota={cpu_quota(checked['cpus'])}\n"
         f"TasksMax={checked['pids']}\n"
     )
+    cpuset = plan.get("cpuset")
+    if cpuset:
+        value = str(cpuset).strip()
+        if not _CPUSET_RE.fullmatch(value):
+            raise InvalidPlan(f"invalid cpuset: {cpuset!r}")
+        rendered += f"AllowedCPUs={value}\n"
+    return rendered
 
 
 def render_dropin(slug: str) -> str:
@@ -193,128 +200,9 @@ def mutation_allowed() -> bool:
 
 
 # --- orchestration ---------------------------------------------------------
-
-
-class PlanService:
-    """Doctor-agnostic, slug-keyed plan lifecycle with audit on every mutation."""
-
-    def __init__(
-        self,
-        executor: Any,
-        data_root: str | Path,
-        probe: Any = None,
-    ) -> None:
-        self.executor = executor
-        self.data_root = Path(data_root)
-        self.probe = probe
-
-    def _require_gate(self) -> None:
-        if not mutation_allowed():
-            raise MutationDisabled(
-                f"local plan mutations disabled; set {MUTATION_GATE}=1"
-            )
-
-    def _cell(self, slug: str) -> dict[str, Any]:
-        cell = alloc.load_registry(self.data_root)["allocations"].get(slug)
-        if cell is None:
-            raise PlanCellMissing(slug)
-        return cell
-
-    def _entry(self, slug: str) -> dict[str, Any]:
-        entry = load_plans(self.data_root)["plans"].get(slug)
-        if entry is None:
-            raise PlanNotFound(slug)
-        return entry
-
-    def set(self, slug: str, memory: object, cpus: object, pids: object) -> dict[str, Any]:
-        """Validate, install the slice + drop-in, restart the manager, persist."""
-        slug = validate_slug(slug)
-        plan = validate_plan(memory, cpus, pids)  # before ANY host write
-        self._require_gate()
-        cell = self._cell(slug)
-        if alloc.cgroup_driver(cell) != DEFAULT_CGROUP_DRIVER:
-            raise PlanDriverError("tenant plans require the systemd cgroup driver")
-        uid = int(cell["uid"])
-
-        self.executor.install_tenant_slice(slug, plan)
-        self.executor.install_user_manager_dropin(slug, uid)
-        self.executor.restart_user_manager(uid)
-
-        data = load_plans(self.data_root)
-        data["plans"][slug] = {"slug": slug, "uid": uid, "plan": plan}
-        save_plans(self.data_root, data)
-        audit.write_audit(
-            self.data_root,
-            tenant_slug=slug,
-            verb="plan_set",
-            exit_code=0,
-            slice=slice_name(slug),
-            restored_slice=user_slice(uid),
-        )
-        return self.show(slug)
-
-    def show(self, slug: str) -> dict[str, Any]:
-        """Return the saved plan and the slice it currently materialises."""
-        slug = validate_slug(slug)
-        entry = self._entry(slug)
-        uid = int(entry.get("uid", 0)) or int(self._cell(slug)["uid"])
-        return {
-            "slug": slug,
-            "uid": uid,
-            "plan": entry["plan"],
-            "slice": slice_name(slug),
-            "cgroup_path": slice_cgroup_path(slug),
-            "dropin": dropin_path(uid),
-        }
-
-    def remove(self, slug: str) -> dict[str, Any]:
-        """Drop the artifacts, restore user-<uid>.slice and delete the entry."""
-        slug = validate_slug(slug)
-        self._require_gate()
-        entry = self._entry(slug)
-        cell = alloc.load_registry(self.data_root)["allocations"].get(slug)
-        uid = int(entry.get("uid", 0)) or int(cell["uid"] if cell else 0)
-
-        self.executor.remove_user_manager_dropin(slug, uid)
-        self.executor.remove_tenant_slice(slug)
-        self.executor.restart_user_manager(uid)
-
-        data = load_plans(self.data_root)
-        data["plans"].pop(slug, None)
-        save_plans(self.data_root, data)
-        restored = user_slice(uid)
-        audit.write_audit(
-            self.data_root,
-            tenant_slug=slug,
-            verb="plan_remove",
-            exit_code=0,
-            restored_slice=restored,
-        )
-        return {"slug": slug, "removed": True, "restored_slice": restored}
-
-    def verify(self, slug: str) -> dict[str, Any]:
-        """Return ok=true with kernel evidence from both sides, or ok=false."""
-        slug = validate_slug(slug)
-        self._require_gate()
-        entry = self._entry(slug)
-        plan = entry["plan"]
-        uid = int(entry.get("uid", 0)) or int(self._cell(slug)["uid"])
-        evidence = self.executor.run_plan_probe(slug, uid, plan)
-        ok = bool(evidence.get("ok"))
-        audit.write_audit(
-            self.data_root,
-            tenant_slug=slug,
-            verb="plan_verify",
-            exit_code=0 if ok else 1,
-        )
-        return {
-            "slug": slug,
-            "ok": ok,
-            "slice": slice_name(slug),
-            "cgroup_path": slice_cgroup_path(slug),
-            "plan": plan,
-            "evidence": evidence,
-        }
+# Lifecycle (apply/remove/verify) lives in ``materializer.py``.  plans.json is
+# now only a cache of the last applied state; the DB in the Apps plugin is the
+# source of truth and is never read implicitly here.
 
 
 # --- host adapter mixin ----------------------------------------------------

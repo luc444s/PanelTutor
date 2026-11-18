@@ -9,13 +9,14 @@ from __future__ import annotations
 import importlib.metadata
 import json
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 import click.core
 import typer
 from typer.core import TyperOption
 
-from . import alloc, plans
+from . import alloc, materializer, plans
 from . import doctor as doctor_mod
 from .cells import CellNotFound, CellService, ProvisionRefused
 from .executor import LocalExecutor
@@ -261,8 +262,8 @@ plan_app = typer.Typer(
 app.add_typer(plan_app, name="plan")
 
 
-def _plan_service(data_root: str) -> plans.PlanService:
-    return plans.PlanService(
+def _plan_service(data_root: str) -> materializer.PlanMaterializer:
+    return materializer.PlanMaterializer(
         LocalExecutor(), data_root, probe=doctor_mod.HostProbe()
     )
 
@@ -278,7 +279,9 @@ def plan_set(
 ) -> None:
     """Install tenant-<slug>.slice, attach the user manager and save the plan."""
     result = _execute(
-        lambda: _plan_service(data_root).set(slug, memory, cpus, pids),
+        lambda: _plan_service(data_root).apply(
+            slug, {"memory": memory, "cpus": cpus, "pids": pids}
+        ),
         json_output,
         "plan_set",
     )
@@ -324,3 +327,33 @@ def plan_verify(
     _emit(result, json_output)
     if not result.get("ok"):
         raise typer.Exit(code=1)
+
+
+def _import_plans(from_file: str, data_root: str) -> dict[str, Any]:
+    """Explicit migration: materialize every entry of a legacy plans.json."""
+    payload = json.loads(Path(from_file).read_text(encoding="utf-8"))
+    entries = payload.get("plans", {})
+    if not isinstance(entries, dict):
+        raise plans.InvalidPlan("plans.json has no 'plans' object")
+    service = _plan_service(data_root)
+    imported = [
+        service.apply(slug, entry["plan"])
+        for slug, entry in sorted(entries.items())
+        if isinstance(entry, dict) and isinstance(entry.get("plan"), dict)
+    ]
+    return {"imported": imported, "source": from_file, "cache_only": True}
+
+
+@plan_app.command("import")
+def plan_import(
+    from_file: str = typer.Option(
+        ..., "--from", help="plans.json cache to import explicitly."
+    ),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+    data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
+) -> None:
+    """Migrate a legacy plans.json to the materializer (no silent fallback)."""
+    result = _execute(
+        lambda: _import_plans(from_file, data_root), json_output, "plan_import"
+    )
+    _emit(result, json_output)

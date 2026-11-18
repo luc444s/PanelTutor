@@ -13,7 +13,8 @@
     "apps.applications.create",
     "apps.deployments.create",
     "apps.applications.delete",
-    "apps.secrets.read"
+    "apps.secrets.read",
+    "apps.plans.manage"
   ],
   "tenant_admin_permissions": [
     "apps.github.connect",
@@ -24,7 +25,8 @@
   ],
   "platform_permissions": [
     "apps.deployments.create",
-    "apps.applications.delete"
+    "apps.applications.delete",
+    "apps.plans.manage"
   ],
   "events": [],
   "description": "Tenant-aware asynchronous Compose application deployments"

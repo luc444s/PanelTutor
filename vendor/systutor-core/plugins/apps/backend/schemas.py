@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from datetime import datetime
 from typing import Literal
 
@@ -364,5 +365,42 @@ class RepositoryView(BaseModel):
     disabled: bool
     observed_at: datetime | None = None
     removed_at: datetime | None = None
+
+    model_config = {"from_attributes": True}
+
+
+class TenantPlanRequest(BaseModel):
+    """Aggregate limits; the host materializer owns the systemd/slice details."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    memory_bytes: int = Field(gt=0, le=2**63 - 1, strict=True)
+    cpus: float = Field(gt=0, le=4096)
+    pids: int = Field(gt=0, le=1_000_000, strict=True)
+    cpuset: str | None = Field(default=None, max_length=255)
+
+    @field_validator("cpuset")
+    @classmethod
+    def safe_cpuset(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = value.strip()
+        if not value or not re.fullmatch(
+            r"[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*", value
+        ):
+            raise ValueError("cpuset must be a list of CPU ids/ranges")
+        return value
+
+
+class TenantPlanView(BaseModel):
+    tenant_id: str
+    tenant_slug: str
+    memory_bytes: int
+    cpus: float
+    pids: int
+    cpuset: str | None = None
+    updated_at: datetime | None = None
+    slice: str
+    cgroup_path: str
 
     model_config = {"from_attributes": True}

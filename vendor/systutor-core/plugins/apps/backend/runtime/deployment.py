@@ -23,6 +23,7 @@ from ..hardening.contracts import HardeningPolicy
 from ..symlinks import symlink_target
 from .docker_audit import _is_definitely_non_root_user
 from .source import _inside
+from .tenant_plan import TenantPlan, current_tenant_plan, service_limits
 from .transport import Runner
 from .types import (
     MANIFEST,
@@ -129,6 +130,7 @@ def _override(
     non_root: bool,
     external_env: Path | None = None,
     image_tag: str = "latest",
+    plan: TenantPlan | None = None,
 ) -> str:
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", image_tag):
         raise AppDeployError("release image tag is invalid")
@@ -182,6 +184,16 @@ def _override(
             if not source.get("cpus"):
                 config["cpus"] = 1.0
         services[service] = config
+    effective_plan = plan if plan is not None else current_tenant_plan()
+    if effective_plan is not None:
+        # A plan replaces the fixed defaults: containers are placed under the
+        # tenant slice and their limits are derived from the tenant aggregate.
+        # Without a plan this block is a no-op and the override is byte-identical
+        # to the previous behaviour (see test_no_invasive_hardening).
+        derived = service_limits(effective_plan, data["services"])
+        for service, config in services.items():
+            config["cgroup_parent"] = effective_plan.slice
+            config.update(derived.get(service, {}))
     output: dict[str, Any] = {"services": services}
     if data.get("volumes"):
         managed_volumes = {}

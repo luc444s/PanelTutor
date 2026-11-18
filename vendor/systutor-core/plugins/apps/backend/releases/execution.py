@@ -19,18 +19,18 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..managed_environment import MANAGED_DATABASE_NAMES
-from ..models import Application, Deployment, Operation
+from ..models import Application, AppsTenantPlan, Deployment, Operation
 from ..runtime import AppDeployError, Runner
+from ..runtime.scoped_execution import deploy_scoped
+from ..runtime.tenant_plan import TenantPlan
+from ..runtime.tenant_runtime import tenant_slug
 from .pipeline import create_release, release_result
 from .planner import DeployScope, plan_deployment
-from .scoped_execution import (
-    ScopedDeployFailed,
-    ScopedRestoreError,
-    deploy_scoped,
-)
+from .scoped_execution import ScopedDeployFailed, ScopedRestoreError
 from .store import find_release, release_store_root
 from .trusted import TrustedRelease
 from .verify import verify_release
@@ -224,6 +224,17 @@ class ReleaseExecution:
         with self.session_factory() as db:
             current_app = db.get(Application, application_id)
             tenant_id = current_app.tenant_id if current_app is not None else None
+            resource_plan: TenantPlan | None = None
+            if tenant_id is not None:
+                plan_row = db.scalar(
+                    select(AppsTenantPlan).where(
+                        AppsTenantPlan.tenant_id == tenant_id
+                    )
+                )
+                if plan_row is not None:
+                    resource_plan = TenantPlan.from_row(
+                        plan_row, tenant_slug(db, tenant_id)
+                    )
             previous = (
                 db.get(Deployment, current_app.active_deployment_id)
                 if current_app is not None and current_app.active_deployment_id else None
@@ -253,6 +264,7 @@ class ReleaseExecution:
                     runner,
                     release,
                     plan=plan,
+                    resource_plan=resource_plan,
                     scope=requested,
                     project=source[3],
                     previous_manifest=previous_manifest,

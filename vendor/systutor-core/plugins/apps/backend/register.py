@@ -28,6 +28,9 @@ class AppsResources:
     github: GithubClient
     _cipher: TokenCipher | None = None
     _states: OneTimeStates | None = None
+    # Injected by the host: the real (gated) root/systemd materializer. Without
+    # it the plan API fails loudly with 503 instead of faking success.
+    plan_materializer: object | None = None
 
     def cipher(self) -> TokenCipher:
         if self._cipher is None:

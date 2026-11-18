@@ -10,6 +10,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     LargeBinary,
@@ -153,6 +154,27 @@ class Deployment(Base):
     public_error: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AppsTenantPlan(Base):
+    """Aggregate resource plan for one tenant (DB is the single source of truth).
+
+    ``plans.json`` on the host is only a cache of the last applied state; this
+    row is what the API manages and what the deploy pipeline reads.
+    """
+
+    __tablename__ = "apps_tenant_plans"
+    __table_args__ = (UniqueConstraint("tenant_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    memory_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    cpus: Mapped[float] = mapped_column(Float, nullable=False)
+    pids: Mapped[int] = mapped_column(Integer, nullable=False)
+    cpuset: Mapped[str | None] = mapped_column(String(255))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
 
 
 class Operation(Base):

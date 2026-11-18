@@ -719,13 +719,15 @@ class PlanAwareExecutor(FakeExecutor):
 
 
 def test_repair_and_provision_preserve_an_active_tenant_plan(tmp_path, monkeypatch) -> None:
-    from scripts.tenant_cell import plans
+    from scripts.tenant_cell import materializer, plans
 
     monkeypatch.setenv("SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS", "1")
     executor = PlanAwareExecutor()
     svc = CellService(FakeProbe(), executor, tmp_path)
     svc.provision("acme")
-    plans.PlanService(executor, tmp_path).set("acme", "512M", 0.5, 128)
+    materializer.PlanMaterializer(executor, tmp_path).apply(
+        "acme", {"memory": "512M", "cpus": 0.5, "pids": 128}
+    )
     executor.calls.clear()
 
     svc.repair("acme")
