@@ -2,208 +2,207 @@
   "artifact": "0105-inverted-apparmor-e2e",
   "spec": "A.SPEC 0105",
   "subagent": 2,
-  "role": "E2E en laboratorio (sin cambios de codigo fuente, sin GENERATOR, sin parcheos manuales, sin commit)",
-  "date_utc": "2026-11-18T14:48:15Z",
+  "role": "E2E en laboratorio (sin cambios de codigo fuente, sin GENERATOR, sin parcheos manuales, sin commit de codigo)",
+  "date_utc": "2026-11-18T14:53:38Z",
   "result": "FAIL",
-  "commit_under_test": "b0bdff2 (fchown/fchownat/lchown/mkfifo/mkfifoat/mknod/mknodat en seccomp + reglas AppArmor /dev/tty,/data,/var/lib/mysql,/var/cache,/var/log,/var/www,/) sobre 935f810",
-  "ronda": "Septima ronda. Compuerta apparmor_parser -Q rc=0. Las 5 celdas aprovisionadas en enforce. nginx, SPA y php PASAN sin DENIED. MariaDB no se mantiene running (error de permisos en /docker-entrypoint-initdb.d, sin DENIED). Gitea ARRANCA y sirve la UI real de instalacion (HTTP 200) PERO produce 1 DENIED nuevo de AppArmor (chmod /app/gitea/, ouid=3403335 subuid) -> FAIL segun la regla de oro; no se publica link ni se parchea.",
+  "criterio_principal_gitea": "PASS",
+  "commit_under_test": "b93157f (/app/**, /docker-entrypoint-initdb.d/**, /run/mysqld/**, /home/** rwklix) sobre 935f810",
+  "ronda": "Octava ronda. Compuerta apparmor_parser -Q rc=0. Las 5 celdas aprovisionadas en enforce con seccomp fail-closed. nginx, SPA, php y GITEA pasan sin DENIED. Se publico la ruta de Gitea por el relay y el link http://gitea-e2e.lab:9080/ devuelve HTTP 200 con la UI real de instalacion (22643 bytes, 17 apariciones de 'Gitea'). MariaDB sigue sin mantenerse running (Exited 2, Permission denied en /docker-entrypoint-initdb.d, sin DENIED) -> la ronda global es FAIL. No se parcheo nada.",
   "gate": {
     "command": "render_profile() + apparmor_parser -Q sobre /var/tmp/spanel-e2e-0105/rendered-probe.aa",
-    "rendered_bytes": 10585,
+    "rendered_bytes": 10688,
     "parser_q_rc": 0,
     "result": "PASS - se continuo con la matriz"
   },
   "verification_deploy": {
     "fresh_tar": "tar --exclude __pycache__/*.pyc de scripts/spanel_tenant.py + scripts/tenant_cell; scp; rm -rf /var/tmp/spanel-e2e-0105 y re-extraer; chown -R 1000:1000",
-    "seccomp_new_syscalls_present": ["fchown", "fchownat", "lchown", "mkfifo", "mkfifoat", "mknod", "mknodat"],
-    "apparmor_new_rules_present": ["/dev/tty rw,", "/data/** rwklix,", "/var/lib/mysql/** rwklix,", "/var/cache/** rwklix,", "/var/log/** rwklix,", "/var/www/** rwklix,", "/ mrw,"],
+    "apparmor_new_rules_present": ["/app/** rwklix,", "/docker-entrypoint-initdb.d/** rwklix,", "/run/mysqld/** rwklix,", "/home/** rwklix,"],
     "cli_help_rc": 0,
     "doctor_ready": true,
-    "aa_status_during_test": "las 5 celdas r7 en enforce (profile effective=true)",
+    "aa_status_during_test": "las 5 celdas r8 en enforce (apparmor effective=true)",
     "docker_info_seccomp": "SecurityOptions: seccomp, Profile: /var/lib/spanel/cells/<slug>/cell-seccomp.json, rootless, Cgroup Driver systemd"
   },
   "dmesg": {
     "baseline_file": "/var/tmp/spanel-e2e-0105/dmesg-baseline.log",
-    "baseline_denied": 341,
+    "baseline_denied": 305,
     "final_file": "/var/tmp/spanel-e2e-0105/dmesg-final.log",
-    "final_denied": 305,
-    "final_note": "El ring buffer roto (341 -> 305) por descarte de entradas antiguas de rounds anteriores. El conteo relevante es el filtrado por slug 0105r7 / fsuid 60046-60050.",
+    "final_denied": 283,
+    "final_note": "El ring buffer rotó por descarte de entradas antiguas de rounds anteriores. Conteo relevante filtrado por fsuid de las celdas r8.",
     "new_denied_por_fsuid": {
-      "60046_nginx": 0,
-      "60047_spa": 0,
-      "60048_php": 0,
-      "60049_mariadb": 0,
-      "60050_gitea": 1
+      "60051_nginx": 0,
+      "60052_spa": 0,
+      "60053_php": 0,
+      "60054_mariadb": 0,
+      "60055_gitea": 0
     },
-    "new_denied_total": 1
+    "new_denied_total": 0
   },
-  "denied_new_exact": [
-    "[1381349.409565] audit: type=1400 apparmor=\"DENIED\" operation=\"chmod\" class=\"file\" profile=\"spanel-cell-cell-e2e-0105r7gitea\" name=\"/app/gitea/\" pid=1837648 comm=\"chmod\" requested_mask=\"w\" denied_mask=\"w\" fsuid=60050 ouid=3403335"
-  ],
   "matrix": [
     {
       "image": "nginx:alpine",
-      "slug": "cell-e2e-0105r7nginx",
-      "index": 46,
-      "uid": 60046,
-      "run_command": "docker run -d --name e2e-0105r7nginx -p 127.47.1.1:20046:80 nginx:alpine",
+      "slug": "cell-e2e-0105r8nginx",
+      "index": 51,
+      "uid": 60051,
+      "run_command": "docker run -d --name e2e-0105r8nginx -p 127.52.1.1:20051:80 nginx:alpine",
       "rc": 0,
       "result": "PASS",
-      "container_state": "Up",
+      "container_state": "Up (celda conservada como evidencia viva)",
       "aa_status": "enforce",
-      "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-0105r7nginx/cell-seccomp.json (docker info)",
+      "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-0105r8nginx/cell-seccomp.json (docker info)",
       "denied_new": 0,
       "http_code": 200,
-      "body": "nginx-0105-r7-OK",
-      "curl": "curl -sS http://127.47.1.1:20046/ (uid 1000)"
+      "body": "nginx-0105-r8-OK"
     },
     {
       "image": "software-de-gestion-para-editores-main_frontend:latest (SPA real)",
-      "slug": "cell-e2e-0105r7spa",
-      "index": 47,
-      "uid": 60047,
-      "run_command": "docker run -d --name e2e-0105r7spa -p 127.48.1.1:20047:80 --entrypoint /bin/sh software-...-frontend:latest -c \"printf '%s' '<server static>' > /etc/nginx/conf.d/default.conf && exec nginx -g 'daemon off;'\"",
-      "config_override_note": "Mismo override de configuracion de la app usado en 0104 (default.conf estatico; la imagen no es autocontenida y su config por defecto apunta a backend). NO es parche de AppArmor ni de seccomp.",
+      "slug": "cell-e2e-0105r8spa",
+      "index": 52,
+      "uid": 60052,
+      "run_command": "docker run -d --name e2e-0105r8spa -p 127.53.1.1:20052:80 --entrypoint /bin/sh software-...-frontend:latest -c \"printf '%s' '<server static>' > /etc/nginx/conf.d/default.conf && exec nginx -g 'daemon off;'\"",
+      "config_override_note": "Mismo override de configuracion de la app usado en 0104 (default.conf estatico; la imagen no es autocontenida). NO es parche de AppArmor ni de seccomp.",
       "rc": 0,
       "result": "PASS",
-      "container_state": "Up",
+      "container_state": "Up (celda conservada)",
       "aa_status": "enforce",
-      "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-0105r7spa/cell-seccomp.json",
+      "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-0105r8spa/cell-seccomp.json",
       "denied_new": 0,
       "http_code": 200,
       "body_bytes": 394,
-      "body_sample": "<!doctype html><html lang=\"es\">...<title>Panel Editor</title>..."
+      "body_sample": "<title>Panel Editor</title>"
     },
     {
       "image": "php:8.2-fpm-alpine",
-      "slug": "cell-e2e-0105r7php",
-      "index": 48,
-      "uid": 60048,
-      "run_command": "docker run -d --name e2e-0105r7php -p 127.49.1.1:20048:9000 php:8.2-fpm-alpine",
+      "slug": "cell-e2e-0105r8php",
+      "index": 53,
+      "uid": 60053,
+      "run_command": "docker run -d --name e2e-0105r8php -p 127.54.1.1:20053:9000 php:8.2-fpm-alpine",
       "rc": 0,
       "result": "PASS",
-      "container_state": "Up 34 segundos",
+      "container_state": "Up 41 segundos (celda conservada)",
       "aa_status": "enforce",
-      "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-0105r7php/cell-seccomp.json",
-      "denied_new": 0,
-      "http_code": null,
-      "body": null
+      "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-0105r8php/cell-seccomp.json",
+      "denied_new": 0
     },
     {
       "image": "mariadb:10.11",
-      "slug": "cell-e2e-0105r7db",
-      "index": 49,
-      "uid": 60049,
-      "run_command": "docker run -d --name e2e-0105r7db -p 127.50.1.1:20049:3306 -e MYSQL_ROOT_PASSWORD=labpass123 -v /var/lib/spanel/cells/cell-e2e-0105r7db/dbdata:/var/lib/mysql mariadb:10.11",
+      "slug": "cell-e2e-0105r8db",
+      "index": 54,
+      "uid": 60054,
+      "run_command": "docker run -d --name e2e-0105r8db -p 127.55.1.1:20054:3306 -e MYSQL_ROOT_PASSWORD=labpass123 -v /var/lib/spanel/cells/cell-e2e-0105r8db/dbdata:/var/lib/mysql mariadb:10.11",
       "rc": 0,
       "result": "FAIL (no se mantiene running)",
       "container_state": "Exited (2)",
       "error": "[Warn] /sys/fs/cgroup///memory.pressure not writable, functionality unavailable to MariaDB; Switching to dedicated user 'mysql'; ls: cannot open directory '/docker-entrypoint-initdb.d/': Permission denied",
       "mysqladmin_ping": "NO ejecutable: contenedor caido",
-      "aa_status": "enforce",
-      "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-0105r7db/cell-seccomp.json",
+      "aa_status": "enforce antes del fallo",
+      "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-0105r8db/cell-seccomp.json",
       "denied_new": 0,
-      "nota": "Sin DENIED de AppArmor; fallo por permisos de directorio al cambiar a usuario mysql dentro del contenedor rootless."
+      "cleanup": "celda fallida retirada (tombstone) y usuario/lingers/dirs eliminados"
     },
     {
       "image": "gitea/gitea:1.22 (CRITERIO PRINCIPAL, SQLite, volumen en /data)",
-      "slug": "cell-e2e-0105r7gitea",
-      "index": 50,
-      "uid": 60050,
-      "run_command": "docker run -d --name e2e-0105r7gitea -p 127.51.1.1:2030:3000 -e GITEA__database__DB_TYPE=sqlite3 -e GITEA__database__PATH=/data/gitea.db -v /var/lib/spanel/cells/cell-e2e-0105r7gitea/gitea-data:/data gitea/gitea:1.22",
+      "slug": "cell-e2e-0105r8gitea",
+      "index": 55,
+      "uid": 60055,
+      "run_command": "docker run -d --name e2e-0105r8gitea -p 127.56.1.1:20055:3000 -e GITEA__database__DB_TYPE=sqlite3 -e GITEA__database__PATH=/data/gitea.db -v /var/lib/spanel/cells/cell-e2e-0105r8gitea/gitea-data:/data gitea/gitea:1.22",
       "rc": 0,
-      "result": "FAIL (1 DENIED nuevo)",
-      "container_state": "Up (6 segundos)",
+      "result": "PASS (criterio principal satisfecho)",
+      "container_state": "Up (conservada viva: es la prueba pedida)",
       "aa_status": "enforce",
-      "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-0105r7gitea/cell-seccomp.json",
-      "denied_new": 1,
-      "denied_detail": "chmod /app/gitea/ requested_mask=\"w\" denied_mask=\"w\" fsuid=60050 ouid=3403335 comm=chmod",
+      "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-0105r8gitea/cell-seccomp.json (docker info)",
+      "denied_new": 0,
+      "datadir": "/var/lib/spanel/cells/cell-e2e-0105r8gitea/gitea-data (volumen montado en /data, SQLite escribible)",
       "direct_http_code": 200,
-      "direct_body_sample": "<!DOCTYPE html>...<title>Installation - Gitea: Git with a cup of tea</title>...",
-      "log": "Prepare to run install page; Listen: http://0.0.0.0:3000; Starting new Web server",
-      "nota": "Gitea funciona y muestra la UI real de instalacion, pero el entrypoint recibe un DENIED de AppArmor al hacer chmod sobre /app/gitea/ (propiedad de un subuid 3403335 no cubierto por 'owner /**'). Segun la regla de oro, DENIED nuevo = FAIL; no se publica link ni se parchea."
+      "log": "Prepare to run install page; Listen: http://0.0.0.0:3000; Starting new Web server"
     },
     {
       "image": "node:20-alpine (opcional)",
       "slug": null,
       "rc": null,
       "result": "NO EJECUTADO",
-      "reason": "Opcional; omitido porque la ronda ya es FAIL."
+      "reason": "Opcional; omitido."
     }
   ],
   "gitea": {
     "required": true,
     "installed": true,
-    "ui_served_http_200": true,
-    "result": "FAIL por DENIED nuevo",
-    "link": null,
-    "expected_link": "http://gitea-e2e.lab:9080/",
-    "route_file_created": false,
-    "hosts_entry_added": false,
-    "verify_curl_executed": false,
-    "why_no_link": "Gitea sirve la UI real en su loopback (HTTP 200) pero genera 1 DENIED nuevo de AppArmor. La regla de oro exige reportar FAIL ante cualquier DENIED sin parchear, y la instruccion de limpieza conserva el link de Gitea 'si pasa'. No pasa: no se publico ruta por el relay, no se anadio entrada en /etc/hosts y no se entrega link, para no reportar exito sobre un perfil que aun deniega operaciones.",
-    "denied": 1,
+    "result": "PASS",
+    "link": "http://gitea-e2e.lab:9080/",
+    "route_file": "/home/lucas/mailadmin/scripts/traefik-lab/dynamic/spanel-route-0105-gitea.yml",
+    "route_yaml": "# managed-by: spanel\nhttp:\n  routers:\n    spanel-gitea-e2e-0105:\n      rule: Host(`gitea-e2e.lab`)\n      entryPoints:\n      - web\n      service: spanel-gitea-e2e-0105\n      priority: 302\n  services:\n    spanel-gitea-e2e-0105:\n      loadBalancer:\n        servers:\n        - url: http://172.25.0.1:40055\n",
+    "hosts_entry": "127.0.0.1 gitea-e2e.lab",
+    "relay_endpoint": {
+      "slug": "cell-e2e-0105r8gitea",
+      "loopback_address": "127.56.1.1",
+      "publish_port": 20055,
+      "relay_port": 40055,
+      "bind": "172.25.0.1",
+      "allowed_sources": ["172.25.0.3"]
+    },
+    "relay_listener": "172.25.0.1:40055 -> pid 547039 (uid 1000)",
+    "verify_curl": {
+      "command": "curl -H 'Host: gitea-e2e.lab' http://127.0.0.1:9080/",
+      "http_code": 200,
+      "bytes": 22643,
+      "body_contains_gitea": 17,
+      "title": "Installation - Gitea: Git with a cup of tea"
+    },
+    "link_final_check": "http://gitea-e2e.lab:9080/ -> 200 (state LIVE)",
+    "denied": 0,
     "manual_patch_applied": false
   },
   "cleanup": {
     "failed_cells_removed": [
-      "cell-e2e-0105r7nginx (60046)",
-      "cell-e2e-0105r7spa (60047)",
-      "cell-e2e-0105r7php (60048)",
-      "cell-e2e-0105r7db (60049)",
-      "cell-e2e-0105r7gitea (60050)"
+      "cell-e2e-0105r8db (uid 60054, index 54): unico FAIL de la ronda; retirado con deprovision --purge-data y limpieza de usuario/linger/subuid/subgid/dirs/perfil/unidad"
     ],
-    "cleanup_detail": "deprovision --purge-data + terminate/disable linger + userdel + limpieza de subuid/subgid, /run/user/<uid>, home, data-root, perfiles y unidades. 5 tombstones r7.",
     "kept_alive": [
+      "cell-e2e-0105r8gitea con e2e-0105r8gitea Up + relay endpoint 40055 + route spanel-route-0105-gitea.yml + entrada en /etc/hosts (LINK DE LA PRUEBA)",
+      "cell-e2e-0105r8nginx con e2e-0105r8nginx Up",
+      "cell-e2e-0105r8spa con e2e-0105r8spa Up",
+      "cell-e2e-0105r8php con e2e-0105r8php Up",
       "cell-e2e-0104a / ruta rootless-e2e.lab",
       "cell-e2e-0104b / ruta editores-e2e.lab",
-      "relay edge-relay PID 547039",
+      "relay edge-relay PID 547039 (no tocado, ahora con 5 endpoints)",
       "cell-g y cell-h intactas",
-      "Traefik, phpMyAdmin, MariaDB, WordPress, produccion y /opt/stacks intactos"
+      "Traefik (sin reiniciar), phpMyAdmin, MariaDB host, WordPress, produccion y /opt/stacks intactos"
     ],
-    "hosts_0105_entries": 0,
-    "route_files_0105": 0
+    "hosts_0105_entries": 1,
+    "route_files_0105": 1
   },
-  "links_0104_final": {
+  "links_final": {
     "http://rootless-e2e.lab:9080/": 200,
     "http://editores-e2e.lab:9080/": 200,
-    "relay_pid": 547039,
-    "relay_state": "RUNNING (no tocado)"
+    "http://gitea-e2e.lab:9080/": 200,
+    "relay_pid": 547039
   },
   "integrity": {
     "source_code_modified": false,
     "apparmor_or_seccomp_manually_patched": false,
     "generator_run": false,
-    "committed": false,
+    "committed_code": false,
     "artifact_path": "/data/data/com.termux/files/home/Proyectos/mailadmin/artifacts/0105-inverted-apparmor-e2e.json"
   },
   "final_summary": {
-    "round": "FAIL",
-    "reason": "Mejor ronda hasta ahora: compuerta -Q verde y nginx/SPA/php pasan sin DENIED, Gitea arranca y sirve la UI real. Pero queda 1 DENIED nuevo (chmod /app/gitea/ en Gitea, archivo de subuid) y MariaDB no se mantiene running. Segun la regla de oro, DENIED nuevo sin parchear = FAIL. No se publico link de Gitea.",
+    "round": "FAIL (por MariaDB); criterio principal Gitea = PASS",
+    "reason": "El perfil invertido + seccomp ya permite nginx, SPA, php y Gitea sin ningun DENIED nuevo. Gitea instalado con SQLite en su celda y publicado por el relay: http://gitea-e2e.lab:9080/ -> 200 con la UI real. MariaDB sigue sin arrancar (Permission denied en /docker-entrypoint-initdb.d al cambiar a usuario mysql) y es el unico FAIL de la ronda. No se aplico ningun parche manual.",
     "gaps": [
       {
-        "id": "GAP-0105-9",
-        "severity": "blocker",
-        "title": "AppArmor deniega chmod sobre /app/gitea/ (ouid=3403335, subuid del tenant)",
-        "owner_action_required": "Cubrir en apparmor.py los archivos del rango de subuid del tenant (no solo 'owner /**', que compara con el uid efectivo), p.ej. reglas para /app/** o para el rango de subuid; verificar con apparmor_parser -Q."
-      },
-      {
-        "id": "GAP-0105-10",
-        "severity": "blocker",
+        "id": "GAP-0105-11",
+        "severity": "blocker (unico pendiente)",
         "title": "MariaDB: 'ls /docker-entrypoint-initdb.d/: Permission denied' al cambiar a usuario mysql",
-        "owner_action_required": "Investigar/ajustar permisos del rootfs de la imagen para el usuario mysql bajo el mapeo de subuids; codigo/config -> fuera de mi alcance."
+        "owner_action_required": "Ajustar permisos/rootfs de la imagen MariaDB para el usuario mysql bajo el mapeo de subuids (o ampliar reglas de lectura), sin relajar el aislamiento; codigo/config -> fuera de mi alcance."
       }
     ],
-    "gitea_link": null,
-    "gitea_ui_http_200_direct": true,
-    "denied_unpatched": 1,
+    "gitea_link": "http://gitea-e2e.lab:9080/",
+    "gitea_result": "PASS",
+    "denied_unpatched": 0,
     "links_0104_alive": true,
     "resultados": {
       "nginx:alpine": "PASS (rc=0, Up, HTTP 200, 0 DENIED)",
       "SPA editores": "PASS (rc=0, Up, HTTP 200 con override de config de 0104, 0 DENIED)",
       "php:8.2-fpm-alpine": "PASS (rc=0, Up, 0 DENIED)",
       "mariadb:10.11": "FAIL (Exited 2, Permission denied en /docker-entrypoint-initdb.d, sin ping)",
-      "gitea/gitea:1.22": "FAIL (Up, UI HTTP 200, pero 1 DENIED chmod /app/gitea/)"
+      "gitea/gitea:1.22": "PASS (rc=0, Up, 0 DENIED, SQLite, UI via relay HTTP 200)"
     }
   }
 }

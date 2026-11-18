@@ -73,11 +73,14 @@ def test_render_profile_grants_broad_image_agnostic_rootfs() -> None:
     # which is root-owned and therefore not covered by `owner /**`.
     assert "/runc rix," in profile
     # GAP-0105-8: container-view datadirs and writable mmap of /.
-    for rule in ("/data/** rwklix,", "/var/lib/mysql/** rwklix,",
+    for rule in ("/data/ rwklix,", "/data/** rwklix,",
+                 "/var/lib/mysql/ rwklix,", "/var/lib/mysql/** rwklix,",
                  "/var/cache/** rwklix,", "/var/log/** rwklix,",
-                 "/app/** rwklix,", "/docker-entrypoint-initdb.d/** rwklix,",
-                 "/run/mysqld/** rwklix,", "/home/** rwklix,",
-                 "/dev/tty rw,", "/ mrw,"):
+                 "/app/ rwklix,", "/app/** rwklix,",
+                 "/docker-entrypoint-initdb.d/ rwklix,",
+                 "/docker-entrypoint-initdb.d/** rwklix,",
+                 "/run/mysqld/ rwklix,", "/etc/mysql/ rwklix,",
+                 "/home/ rwklix,", "/dev/tty rw,", "/ mrw,"):
         assert rule in profile
     for image_binary in (
         "/usr/sbin/nginx",

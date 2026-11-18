@@ -94,14 +94,27 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /dev/tty rw,
   # Container view of common writable app datadirs (GAP-0105-8). DAC and the
   # userns keep host paths protected; these are the paths seen after pivot_root.
+  # Directory entries need their own rule (the trailing slash): `/x/**`
+  # covers children, while `/x/` covers the directory inode itself.
+  /data/ rwklix,
   /data/** rwklix,
+  /var/lib/mysql/ rwklix,
   /var/lib/mysql/** rwklix,
+  /var/cache/ rwklix,
   /var/cache/** rwklix,
+  /var/log/ rwklix,
   /var/log/** rwklix,
+  /var/www/ rwklix,
   /var/www/** rwklix,
+  /app/ rwklix,
   /app/** rwklix,
+  /docker-entrypoint-initdb.d/ rwklix,
   /docker-entrypoint-initdb.d/** rwklix,
+  /run/mysqld/ rwklix,
   /run/mysqld/** rwklix,
+  /etc/mysql/ rwklix,
+  /etc/mysql/** rwklix,
+  /home/ rwklix,
   /home/** rwklix,
   / mrw,
   /proc/ r,
