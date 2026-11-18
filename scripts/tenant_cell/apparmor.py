@@ -48,7 +48,7 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /usr/bin/rootlesskit ix,
   /usr/bin/dockerd rix,
   /usr/bin/containerd ix,
-  /usr/sbin/runc ix,
+  /usr/sbin/runc rix,
   /usr/bin/docker-init ix,
   /usr/bin/git ix,
   /usr/bin/slirp4netns ix,
@@ -93,6 +93,9 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /proc/sys/user/max_user_namespaces r,
   /proc/sys/kernel/unprivileged_userns_clone r,
   /proc/sys/net/core/somaxconn r,
+  /proc/sys/kernel/keys/* r,
+  /sys/kernel/mm/hugepages/ r,
+  /usr/share/ca-certificates/** r,
   /proc/sys/net/ipv4/ip_forward rw,
   /proc/sys/net/ipv6/conf/** rw,
   /sys/fs/cgroup/system.slice/spanel-cell-{slug}.service/** r,
@@ -139,6 +142,7 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   mount options=(rw, rbind) /run/.ro*/** -> /etc/**,
   mount fstype=tmpfs options=(rw, nosuid, nodev, noexec) -> /tmp/,
   mount options=(rw, rbind) /var/lib/spanel/cells/{slug}/** -> /run/.ro*/**,
+  umount /run/.ro*/**,
   audit deny mount -> /var/lib/spanel/cells/*/**,
 
   # Container networking inside the cell's netns.
