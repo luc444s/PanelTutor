@@ -49,6 +49,7 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /usr/bin/dockerd rix,
   /usr/bin/containerd ix,
   /usr/sbin/runc ix,
+  /usr/bin/docker-init ix,
   /usr/bin/git ix,
   /usr/bin/slirp4netns ix,
   /usr/bin/pasta ix,
@@ -137,7 +138,15 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   mount options=(rw, rbind) /etc/.ro*/** -> /etc/**,
   mount options=(rw, rbind) /run/.ro*/** -> /etc/**,
   mount fstype=tmpfs options=(rw, nosuid, nodev, noexec) -> /tmp/,
+  mount options=(rw, rbind) /var/lib/spanel/cells/{slug}/** -> /run/.ro*/**,
   audit deny mount -> /var/lib/spanel/cells/*/**,
+
+  # Container networking inside the cell's netns.
+  network inet stream,
+  network inet dgram,
+  network inet6 stream,
+  network inet6 dgram,
+  network unix stream,
 
   # setns between processes of this same cell only; cross-tenant is denied.
   ptrace (read, readby) peer=spanel-cell-{slug},
