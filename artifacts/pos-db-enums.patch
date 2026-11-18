@@ -1,0 +1,44 @@
+--- /var/tmp/pos-e2e/db.py.orig	2026-11-18 10:57:20.704469491 -0500
++++ /var/tmp/pos-e2e/src/back/app/db.py	2026-11-18 10:57:20.708469505 -0500
+@@ -10,8 +10,36 @@
+     pool_pre_ping=True,
+ )
+ 
++# E2E lab fix on the POS copy only: the models declare SAEnum(..., create_type=False),
++# so SQLModel.metadata.create_all() cannot create the native PostgreSQL enum types
++# itself. Create them idempotently before create_all, using the same DO-block
++# pattern as the repo migrations, so a fresh database boots correctly.
++_ENUM_TYPES_SQL = (
++    """DO $$ BEGIN
++    CREATE TYPE user_role AS ENUM ('owner', 'admin', 'kitchen', 'waiter', 'receptionist');
++EXCEPTION WHEN duplicate_object THEN null;
++END $$;""",
++    """DO $$ BEGIN
++    CREATE TYPE staff_contract_kind AS ENUM ('employee', 'freelancer');
++EXCEPTION WHEN duplicate_object THEN null;
++END $$;""",
++    """DO $$ BEGIN
++    CREATE TYPE staff_contract_status AS ENUM (
++        'draft', 'pending_signature', 'active', 'expired', 'superseded'
++    );
++EXCEPTION WHEN duplicate_object THEN null;
++END $$;""",
++    """DO $$ BEGIN
++    CREATE TYPE staff_contract_payment_structure AS ENUM ('payroll', 'invoice');
++EXCEPTION WHEN duplicate_object THEN null;
++END $$;""",
++)
++
+ 
+ def create_db_and_tables() -> None:
++    with engine.begin() as conn:
++        for statement in _ENUM_TYPES_SQL:
++            conn.exec_driver_sql(statement)
+     SQLModel.metadata.create_all(engine)
+ 
+ 
+@@ -26,4 +54,3 @@
+     """
+     with Session(engine) as session:
+         session.exec(select(1)).first()
+-
