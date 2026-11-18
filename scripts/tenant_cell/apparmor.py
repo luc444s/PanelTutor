@@ -45,6 +45,11 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /usr/sbin/ip6tables ix,
   /bin/sh ix,
   /bin/bash ix,
+  # Payload processes of a container inherit this profile. Shell and common
+  # init paths seen from inside the container mount namespace.
+  /usr/bin/dash rix,
+  /bin/dash rix,
+  /usr/bin/sh rix,
   /usr/bin/rootlesskit ix,
   /usr/bin/dockerd rix,
   /usr/bin/containerd rix,
@@ -102,6 +107,8 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /proc/self/fd/* ix,
   /proc/[0-9]*/uid_map r,
   /proc/[0-9]*/{{uid_map,gid_map,setgroups}} w,
+  /proc/self/{{setgroups,uid_map,gid_map}} w,
+  /[0-9]*/{{setgroups,uid_map,gid_map}} rw,
   /proc/self/ns/net r,
   /proc/sys/kernel/random/boot_id r,
   /proc/sys/kernel/threads-max r,
@@ -110,13 +117,21 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /proc/sys/net/core/somaxconn r,
   /proc/sys/kernel/keys/* r,
   /sys/kernel/mm/hugepages/ r,
+  /sys/devices/** r,
+  /sys/fs/cgroup/cpuset.mems.effective r,
   /usr/share/ca-certificates/** r,
-  /proc/sys/net/ipv4/ip_forward rw,
+  /proc/sys/net/ipv4/* rw,
+  /sys/net/ipv4/* rw,
   /proc/sys/net/ipv6/conf/** rw,
+  /sys/fs/cgroup/cgroup.controllers r,
+  /sys/fs/cgroup/cpuset.cpus.effective r,
+  /sys/fs/cgroup/system.slice/ rwkl,
+  /sys/fs/cgroup/system.slice/cgroup.type r,
   /sys/fs/cgroup/system.slice/spanel-cell-{slug}.service/** r,
   # rootlesskit/dockerd look up the delegated cgroup of the cell's uid.
   /sys/fs/cgroup/user.slice/user-[0-9]*.slice/ r,
   /sys/fs/cgroup/user.slice/user-[0-9]*.slice/** r,
+  /[0-9]*/stat r,
 
   # /etc and /run writes happen only inside rootlesskit's private tmpfs
   # copy-up (--copy-up=/etc --copy-up=/run), never on the host mounts.
@@ -144,6 +159,8 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   # Mount rules observed from a real rootlesskit boot. Targets are scoped to
   # the cell's own tmpfs copy-up paths; cross-cell mounts are denied.
   mount options=(rw, private) -> /,
+  mount options=(rw, private) -> /var/lib/spanel/cells/{slug}/**,
+  mount options=(rw, rprivate) -> /var/lib/spanel/cells/{slug}/**,
   mount options=(rw, rslave) -> /,
   mount options=(rw, move) /tmp/rootlesskit-*/ -> /etc/.ro*/,
   mount options=(rw, move) /tmp/rootlesskit-*/ -> /run/.ro*/,
@@ -165,9 +182,29 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   mount fstype=overlay -> /run/user/[0-9]*/**,
   mount fstype=overlay overlay -> /run/.ro*/**,
   mount fstype=overlay -> /run/.ro*/**,
+  mount fstype=proc options=(rw, nosuid, nodev, noexec) -> /var/lib/spanel/cells/{slug}/**,
+  mount fstype=proc -> /var/lib/spanel/cells/{slug}/**,
+  # Container-internal filesystems mounted by runc into the cell rootfs.
+  mount fstype=tmpfs -> /var/lib/spanel/cells/{slug}/**,
+  mount fstype=tmpfs options=(ro) -> /proc/**,
+  mount fstype=tmpfs options=(ro) -> /sys/**,
+  mount fstype=devpts -> /var/lib/spanel/cells/{slug}/**,
+  mount fstype=sysfs -> /var/lib/spanel/cells/{slug}/**,
+  mount fstype=mqueue -> /var/lib/spanel/cells/{slug}/**,
+  mount fstype=cgroup2 -> /var/lib/spanel/cells/{slug}/**,
   mount options=(rw, rbind) /var/lib/spanel/cells/{slug}/** -> /run/.ro*/**,
   mount options=(rw, rbind) /var/lib/spanel/cells/{slug}/** -> /var/lib/spanel/cells/{slug}/**,
+  mount options=(rw, bind) /dev/** -> /var/lib/spanel/cells/{slug}/**,
+  mount options=(rw, bind) /proc/** -> /var/lib/spanel/cells/{slug}/**,
+  mount options=(rw, rbind) /proc/** -> /var/lib/spanel/cells/{slug}/**,
+  mount options=(rw, rbind) /proc/** -> /proc/**,
+  mount options=(rw, bind) /proc/[0-9]*/ns/* -> /run/user/[0-9]*/**,
+  mount options=(rw, bind) / -> /run/.ro*/**,
+  mount options=(ro, nosuid, nodev, noexec, remount, bind) /** -> /proc/**,
+  remount options=(ro, nosuid, nodev, noexec, bind) /proc/**,
+  umount /,
   umount /run/.ro*/**,
+  pivot_root /var/lib/spanel/cells/{slug}/**,
   umount /var/lib/spanel/cells/{slug}/**,
   # No blanket "deny mount -> cells/*/**" here: AppArmor's '*' also matches
   # this cell and would override the allow rules above. Other cells are
@@ -179,6 +216,7 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   network inet6 stream,
   network inet6 dgram,
   network unix stream,
+  network packet dgram,
 
   # setns between processes of this same cell only; cross-tenant is denied.
   ptrace (read, readby) peer=spanel-cell-{slug},

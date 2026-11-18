@@ -113,6 +113,12 @@ class FakeExecutor(Executor):
     def ensure_dirs(self, cell_dir, uid, gid):
         self._rec("ensure_dirs", cell_dir=cell_dir, uid=uid, gid=gid)
 
+    def ensure_user_manager(self, name, uid):
+        self._rec("ensure_user_manager", name=name, uid=uid)
+
+    def write_daemon_config(self, cell_dir, uid, gid):
+        self._rec("write_daemon_config", cell_dir=cell_dir, uid=uid, gid=gid)
+
     def install_profile(self, name, content):
         self._rec("install_profile", name=name, content=content)
 
@@ -185,6 +191,8 @@ def test_provision_creates_cell_with_host_observed_uid_map(tmp_path) -> None:
     # The socket is created by the cell user path, never the global docker.sock.
     assert "/var/run/docker.sock" not in result["socket_path"]
     assert "ensure_user" in executor.names()
+    assert "ensure_user_manager" in executor.names()
+    assert "write_daemon_config" in executor.names()
     assert "apply_network" in executor.names()
 
 
@@ -374,6 +382,7 @@ def test_systemd_unit_uses_rootlesskit_netns_and_no_host_iptables() -> None:
     assert "XDG_RUNTIME_DIR=/run/user/60000" in unit
     assert "AppArmorProfile=spanel-cell-acme" in unit
     assert "DOCKERD_ROOTLESS_ROOTLESSKIT_SLIRP4NETNS_SANDBOX=false" in unit
+    assert "--config-file=/var/lib/spanel/cells/acme/daemon.json" in unit
 
 
 def test_local_executor_creates_output_chain_before_rules(monkeypatch) -> None:

@@ -121,6 +121,14 @@ class CellService:
         if not applied.get("dirs"):
             self.executor.ensure_dirs(str(self.cell_dir(slug)), cell["uid"], cell["gid"])
             applied["dirs"] = True
+        if not applied.get("user_manager"):
+            self.executor.ensure_user_manager(name, cell["uid"])
+            applied["user_manager"] = True
+        if not applied.get("daemon_config"):
+            self.executor.write_daemon_config(
+                str(self.cell_dir(slug)), cell["uid"], cell["gid"]
+            )
+            applied["daemon_config"] = True
         if not applied.get("apparmor"):
             self.executor.install_profile(
                 apparmor.profile_name(slug), apparmor.render_profile(slug)

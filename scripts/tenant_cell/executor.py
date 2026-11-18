@@ -92,7 +92,8 @@ def systemd_unit(slug: str, uid: int, cgroup_path: str) -> str:
         # nf_tables iptables inside the userns is denied on this host; the
         # rootlesskit port driver publishes loopback ports without iptables.
         f"ExecStart=/usr/bin/dockerd-rootless.sh --data-root {cell_dir} "
-        f"--host unix://{socket} --iptables=false --ip6tables=false\n"
+        f"--host unix://{socket} --config-file={cell_dir}/daemon.json "
+        "--iptables=false --ip6tables=false\n"
         "Restart=on-failure\n"
         "\n"
         "[Install]\n"
@@ -153,6 +154,28 @@ class LocalExecutor(Executor):
         home = Path(pwd.getpwuid(uid).pw_dir)
         for target in (base, base / "apps", Path(f"/run/user/{uid}"), home):
             self._run([*common, str(target)])
+
+    def ensure_user_manager(self, name: str, uid: int) -> None:
+        # rootlesskit needs the delegated cgroup of the cell's uid
+        # (user-<uid>.slice). Without a linger user manager that slice does
+        # not exist and dockerd cannot start containers.
+        self._ensure_gate()
+        subprocess.run(["loginctl", "enable-linger", name], check=True)
+        for _ in range(20):
+            active = subprocess.run(
+                ["systemctl", "is-active", "--quiet", f"user@{uid}.service"],
+                check=False,
+            ).returncode
+            if active == 0:
+                return
+            time.sleep(0.5)
+
+    def write_daemon_config(self, cell_dir: str, uid: int, gid: int) -> None:
+        # systemd cgroup driver needs the system dbus, which the cell user
+        # cannot reach; cgroupfs writes directly into its delegated slice.
+        config = '{"exec-opts": ["native.cgroupdriver=cgroupfs"]}\n'
+        self._write_file_once(Path(cell_dir) / "daemon.json", config)
+        self._run(["chown", f"{uid}:{gid}", f"{cell_dir}/daemon.json"])
 
     def install_profile(self, name: str, content: str) -> None:
         self._ensure_gate()
