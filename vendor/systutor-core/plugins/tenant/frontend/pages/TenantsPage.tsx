@@ -6,6 +6,7 @@ import {
   addTenantDomain,
   createTenant,
   listTenants,
+  listTenantResources,
   listTenantDomains,
   removeTenantDomain,
   tenantKeys,
@@ -13,6 +14,7 @@ import {
   type TenantResponse,
 } from "../api";
 import { TenantUsersDialog } from "../components/TenantUsersDialog";
+import { TenantResourcesDialog } from "../components/TenantResourcesDialog";
 import { Alert } from "@systutor/shell/ui/alert";
 import { Button } from "@systutor/shell/ui/button";
 import { Dialog } from "@systutor/shell/ui/dialog";
@@ -41,10 +43,17 @@ export default function TenantsPage() {
   const [domainError, setDomainError] = useState<string | null>(null);
 
   const [showUsers, setShowUsers] = useState<TenantResponse | null>(null);
+  const [showResources, setShowResources] = useState<TenantResponse | null>(null);
   const [page, setPage] = useState(1);
   const TENANTS_PAGE_SIZE = 10;
 
   const tenantsQuery = useQuery({ queryKey: tenantKeys.tenants, queryFn: listTenants });
+  const inventoryQuery = useQuery({
+    queryKey: tenantKeys.resources(tenantsQuery.data?.tenants[0]?.id ?? ""),
+    queryFn: () => listTenantResources(tenantsQuery.data!.tenants[0].id),
+    enabled: Boolean(tenantsQuery.data?.tenants.length),
+    retry: false,
+  });
 
   const domainsQuery = useQuery({
     queryKey: tenantKeys.domains(selectedTenant?.id ?? ""),
@@ -257,6 +266,11 @@ export default function TenantsPage() {
                       >
                         {t("Users")}
                       </Button>
+                      {inventoryQuery.isSuccess && (
+                        <Button size="sm" variant="secondary" onClick={() => setShowResources(tenant)}>
+                          {t("Resources")}
+                        </Button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -336,6 +350,7 @@ export default function TenantsPage() {
       </Dialog>
 
       <TenantUsersDialog tenant={showUsers} onClose={() => setShowUsers(null)} />
+      <TenantResourcesDialog tenant={showResources} onClose={() => setShowResources(null)} />
     </section>
   );
 }

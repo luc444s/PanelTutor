@@ -69,6 +69,14 @@ const messages: Record<string, string> = {
   "Target Tenant ID": "Target Tenant ID",
   "Destination tenant UUID": "UUID del tenant destino",
   "Reassign": "Reasignar",
+  "Resources": "Recursos",
+  "Resources — {name}": "Recursos — {name}",
+  "Loading resources...": "Cargando recursos...",
+  "No resources": "No hay recursos",
+  "Resource action dispatched": "Acción de recurso enviada",
+  "Start": "Iniciar",
+  "Stop": "Detener",
+  "Restart": "Reiniciar",
 };
 
 export default messages;

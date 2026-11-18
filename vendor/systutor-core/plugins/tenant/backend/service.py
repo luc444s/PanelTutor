@@ -7,7 +7,11 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from plugins.tenant.backend.models import TenantDomain, TenantSiteSettings
+from plugins.tenant.backend.models import (
+    TenantDomain,
+    TenantResourceRuntime,
+    TenantSiteSettings,
+)
 from systutor.contracts.domain_namespace import (
     DomainConflictError,
     domain_usage,
@@ -37,6 +41,12 @@ class TenantNotFoundError(ValueError):
 
 class UserAlreadyInTenantError(ValueError):
     """Raised when a user is already assigned to a tenant."""
+
+
+get_runtime = TenantResourceRuntime.get_runtime
+ensure_runtime = TenantResourceRuntime.ensure_runtime
+set_runtime = TenantResourceRuntime.set_runtime
+list_runtimes = TenantResourceRuntime.list_runtimes
 
 
 def _get_or_create_tenant_admin_role(db: Session, tenant_id: str) -> Role:

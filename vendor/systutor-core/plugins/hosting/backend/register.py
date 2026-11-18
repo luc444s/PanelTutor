@@ -10,6 +10,10 @@ from plugins.hosting.backend.settings import get_hosting_settings, register_host
 from plugins.hosting.backend.static import files_root_for
 from systutor.contracts.domain_ownership import OwnedSite, register_site_provider
 from systutor.contracts.file_targets import FileTarget, register_file_target
+from systutor.contracts.resource_runtime import (
+    ManagedResource,
+    register_resource_provider,
+)
 from systutor.sdk.context import PluginContext
 
 
@@ -27,6 +31,36 @@ def resolve_hosting_sites(db: Session, tenant_id: str | None) -> list[OwnedSite]
         )
         for site in db.scalars(stmt)
     ]
+
+
+def resolve_hosting_resources(
+    db: Session, tenant_id: str | None
+) -> list[ManagedResource]:
+    stmt = select(HostingSite)
+    if tenant_id is not None:
+        stmt = stmt.where(HostingSite.tenant_id == tenant_id)
+    resources: list[ManagedResource] = []
+    for site in db.scalars(stmt):
+        image = "unknown"
+        if site.kind == "static" and site.profile_id:
+            from plugins.hosting.backend.models import StaticProfile
+
+            profile = db.get(StaticProfile, site.profile_id)
+            if profile is not None:
+                image = profile.image or "unknown"
+        resources.append(
+            ManagedResource(
+                kind=site.kind,
+                resource_id=site.id,
+                name=site.container_name,
+                container_name=site.container_name,
+                domain=site.domain,
+                state="unknown",
+                image=image,
+                endpoint=f"https://{site.domain}" if site.domain else None,
+            )
+        )
+    return resources
 
 
 def resolve_hosting_files(
@@ -60,3 +94,6 @@ def register(context: PluginContext) -> None:
     if context.router_registry is not None:
         register_file_target(context.router_registry, "hosting", resolve_hosting_files)
         register_site_provider(context.router_registry, "hosting", resolve_hosting_sites)
+        register_resource_provider(
+            context.router_registry, "hosting", resolve_hosting_resources
+        )

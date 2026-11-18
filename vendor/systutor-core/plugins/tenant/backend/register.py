@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import os
+
 from sqlalchemy.orm import Session
 
 from plugins.tenant.backend.rbac_router import router as rbac_router
-from plugins.tenant.backend.router import router
+from plugins.tenant.backend.router import inventory_router, router
 from plugins.tenant.backend.service import (
     claim_domain_for_tenant,
     get_managed_domain_owner,
@@ -52,6 +54,13 @@ def domain_release_provider_factory(app: object | None):
 def register(context: PluginContext) -> None:
     context.register_router(router)
     context.register_router(rbac_router)
+    if os.environ.get("SPANEL_TENANT_RESOURCE_INVENTORY", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        context.register_router(inventory_router)
     app = context.router_registry
     if app is not None:
         register_site_suffix_provider(app, "tenant", site_suffix_provider)

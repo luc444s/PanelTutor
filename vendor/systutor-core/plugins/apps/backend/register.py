@@ -20,6 +20,10 @@ from plugins.apps.backend.router import router
 from plugins.apps.backend.settings import AppsSettings
 from plugins.apps.backend.states import OneTimeStates
 from systutor.contracts.domain_ownership import OwnedSite, register_site_provider
+from systutor.contracts.resource_runtime import (
+    ManagedResource,
+    register_resource_provider,
+)
 from systutor.sdk.context import PluginContext
 
 
@@ -84,6 +88,47 @@ def resolve_apps_sites(db: Session, tenant_id: str | None) -> list[OwnedSite]:
     return result
 
 
+def resolve_apps_resources(
+    db: Session, tenant_id: str | None
+) -> list[ManagedResource]:
+    stmt = select(Application).where(Application.deleted_at.is_(None))
+    if tenant_id is not None:
+        stmt = stmt.where(Application.tenant_id == tenant_id)
+    resources: list[ManagedResource] = []
+    for application in db.scalars(stmt):
+        if not application.active_deployment_id:
+            continue
+        deployment = db.get(Deployment, application.active_deployment_id)
+        manifest = deployment.manifest if deployment is not None else None
+        manifest = manifest if isinstance(manifest, dict) else {}
+        containers = manifest.get("containers")
+        names = manifest.get("container_names")
+        images = manifest.get("images")
+        containers = containers if isinstance(containers, dict) else {}
+        names = names if isinstance(names, dict) else {}
+        images = images if isinstance(images, dict) else {}
+        for service, container_id in sorted(containers.items()):
+            container = str(names.get(service) or container_id or "").strip()
+            if not container:
+                continue
+            state = str(application.status or "unknown").strip() or "unknown"
+            image = str(images.get(service) or "unknown").strip() or "unknown"
+            domain = application.domain if service == application.ingress_service else None
+            resources.append(
+                ManagedResource(
+                    kind="app",
+                    resource_id=f"{application.id}:{service}",
+                    name=f"{application.name} / {service}",
+                    container_name=container,
+                    domain=domain,
+                    state=state,
+                    image=image,
+                    endpoint=f"https://{domain}" if domain else None,
+                )
+            )
+    return resources
+
+
 def _build_plan_materializer(settings: AppsSettings) -> HostPlanMaterializerClient | None:
     """Wire the bounded socket client when the operator configured the agent.
 
@@ -121,3 +166,4 @@ def register(context: PluginContext) -> None:
         )
         app.state.rootless_routes = rootless
         register_site_provider(app, "apps", resolve_apps_sites)
+        register_resource_provider(app, "apps", resolve_apps_resources)

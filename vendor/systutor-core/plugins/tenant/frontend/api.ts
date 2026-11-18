@@ -55,6 +55,28 @@ export type TenantDomainsResponse = {
   domains: TenantDomainItem[];
 };
 
+export type TenantResource = {
+  kind: string;
+  resource_id: string;
+  name: string;
+  container_name: string;
+  domain: string | null;
+  state: string;
+  image: string;
+  endpoint: string | null;
+  runtime: "rootful" | "rootless";
+};
+
+export type TenantResourcesResponse = { resources: TenantResource[] };
+
+export type TenantResourceActionResponse = {
+  action: "start" | "stop" | "restart" | "remove";
+  dry_run: boolean;
+  runtime: "rootful" | "rootless";
+  resource: TenantResource;
+  result: Record<string, unknown> | null;
+};
+
 export type CreateTenantPayload = {
   name: string;
   slug: string;
@@ -89,6 +111,7 @@ export const tenantKeys = {
   roles: (tenantId: string) => ["tenant", tenantId, "roles"] as const,
   permissions: (tenantId: string) => ["tenant", tenantId, "permissions"] as const,
   domains: (tenantId: string) => ["tenant", tenantId, "domains"] as const,
+  resources: (tenantId: string) => ["tenant", tenantId, "resources"] as const,
 };
 
 export function listTenants() {
@@ -154,6 +177,26 @@ export function removeTenantDomain(tenantId: string, domain: string) {
   return apiRequest<void>(
     `/api/v1/plugins/tenant/tenants/${tenantId}/domains/${encodeURIComponent(domain)}`,
     { method: "DELETE" }
+  );
+}
+
+export function listTenantResources(tenantId: string) {
+  return apiRequest<TenantResourcesResponse>(
+    `/api/v1/plugins/tenant/tenants/${tenantId}/resources`,
+  );
+}
+
+export function actOnTenantResource(
+  tenantId: string,
+  resource: Pick<TenantResource, "kind" | "resource_id">,
+  action: "start" | "stop" | "restart" | "remove",
+  dryRun = false,
+) {
+  const kind = encodeURIComponent(resource.kind);
+  const resourceId = encodeURIComponent(resource.resource_id);
+  return apiRequest<TenantResourceActionResponse>(
+    `/api/v1/plugins/tenant/tenants/${tenantId}/resources/${kind}/${resourceId}/actions/${action}?dry_run=${dryRun ? 1 : 0}`,
+    { method: "POST" },
   );
 }
 
