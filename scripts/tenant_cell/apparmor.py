@@ -144,7 +144,9 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   mount options=(rw, rbind) /var/lib/spanel/cells/{slug}/** -> /run/.ro*/**,
   mount options=(rw, rbind) /var/lib/spanel/cells/{slug}/** -> /var/lib/spanel/cells/{slug}/**,
   umount /run/.ro*/**,
-  audit deny mount -> /var/lib/spanel/cells/*/**,
+  # No blanket "deny mount -> cells/*/**" here: AppArmor's '*' also matches
+  # this cell and would override the allow rules above. Other cells are
+  # unreachable because no rule grants their paths.
 
   # Container networking inside the cell's netns.
   network inet stream,
