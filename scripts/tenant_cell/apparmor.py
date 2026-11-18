@@ -48,6 +48,7 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /usr/bin/rootlesskit ix,
   /usr/bin/dockerd rix,
   /usr/bin/containerd rix,
+  /usr/bin/containerd-shim-runc-v2 rix,
   /usr/sbin/runc rix,
   /usr/bin/docker-init ix,
   /usr/bin/git ix,
