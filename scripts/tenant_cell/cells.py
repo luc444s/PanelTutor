@@ -221,7 +221,11 @@ class CellService:
         return {"slug": slug, "state": state, "data_kept": keep_data}
 
     def repair(self, slug: str) -> dict[str, Any]:
-        """Re-install the profile and network rules without touching data."""
+        """Re-install profile, daemon config, unit and network rules.
+
+        Data is untouched. A daemon restart is still required for a newly
+        attached ``AppArmorProfile=`` to take effect on a running cell.
+        """
         slug = alloc.validate_slug(slug)
         reg = alloc.load_registry(self.data_root)
         cell = reg["allocations"].get(slug)
@@ -231,10 +235,18 @@ class CellService:
         self.executor.install_profile(
             apparmor.profile_name(slug), apparmor.render_profile(slug)
         )
+        self.executor.write_daemon_config(
+            str(self.cell_dir(slug)), cell["uid"], cell["gid"]
+        )
+        self.executor.install_systemd_unit(
+            slug, cell["uid"], self.cgroup_path(slug)
+        )
         self.executor.apply_network(
             network.build_network_spec(slug, cell, cell.get("network_mode", "skuid"))
         )
         applied["apparmor"] = True
+        applied["daemon_config"] = True
+        applied["systemd"] = True
         applied["network"] = True
         alloc.update_allocation(
             self.data_root,

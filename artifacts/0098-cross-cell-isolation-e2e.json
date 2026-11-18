@@ -7,12 +7,12 @@
     "cell-g": "cleaned",
     "cell-h": "cleaned"
   },
-  "finished_at": "2026-11-18T02:01:54.816024+00:00",
+  "finished_at": "2026-11-18T02:09:56.197037+00:00",
   "ok": true,
-  "started_at": "2026-11-18T02:01:51.685455+00:00",
+  "started_at": "2026-11-18T02:09:52.719638+00:00",
   "steps": {
     "apparmor_cross_denied": {
-      "at": "2026-11-18T02:01:52.442755+00:00",
+      "at": "2026-11-18T02:09:53.516877+00:00",
       "detail": {
         "cell-g": {
           "confined_denied": true,
@@ -26,7 +26,7 @@
       "ok": true
     },
     "cross_engine_id": {
-      "at": "2026-11-18T02:01:52.383662+00:00",
+      "at": "2026-11-18T02:09:53.474680+00:00",
       "detail": {
         "cell-g->cell-h": "cat: /var/lib/spanel/cells/cell-h/engine-id: Permiso denegado",
         "cell-h->cell-g": "cat: /var/lib/spanel/cells/cell-g/engine-id: Permiso denegado"
@@ -34,7 +34,7 @@
       "ok": true
     },
     "cross_socket": {
-      "at": "2026-11-18T02:01:52.163859+00:00",
+      "at": "2026-11-18T02:09:53.272984+00:00",
       "detail": {
         "cell-g->cell-h": "permission denied while trying to connect to the docker API at unix:///var/lib/spanel/cells/cell-h/docker.sock",
         "cell-h->cell-g": "permission denied while trying to connect to the docker API at unix:///var/lib/spanel/cells/cell-g/docker.sock"
@@ -42,7 +42,7 @@
       "ok": true
     },
     "daemon_confinement": {
-      "at": "2026-11-18T02:01:52.539897+00:00",
+      "at": "2026-11-18T02:09:53.601679+00:00",
       "detail": {
         "cell-g": {
           "confined": true,
@@ -54,19 +54,19 @@
           ]
         },
         "cell-h": {
-          "confined": false,
+          "confined": true,
           "dockerd_pids": [
-            "3157739"
+            "3674694"
           ],
           "profiles": [
-            "rootlesskit (unconfined)"
+            "spanel-cell-cell-h (enforce)"
           ]
         }
       },
       "ok": true
     },
     "failure_isolation": {
-      "at": "2026-11-18T02:01:52.626245+00:00",
+      "at": "2026-11-18T02:09:53.685320+00:00",
       "detail": {
         "cell_g_leaked_resources": false,
         "cell_h_canary_intact": true,
@@ -75,7 +75,7 @@
       "ok": true
     },
     "preflight": {
-      "at": "2026-11-18T02:01:51.685888+00:00",
+      "at": "2026-11-18T02:09:52.720394+00:00",
       "detail": {
         "nft_tables": [
           "cell-g",
@@ -89,7 +89,7 @@
       "ok": true
     },
     "profile_rules": {
-      "at": "2026-11-18T02:01:52.539102+00:00",
+      "at": "2026-11-18T02:09:53.600362+00:00",
       "detail": {
         "cell-g": {
           "cross_cell_grants": 0,
@@ -103,7 +103,7 @@
       "ok": true
     },
     "rollback_isolation": {
-      "at": "2026-11-18T02:01:53.529731+00:00",
+      "at": "2026-11-18T02:09:54.789725+00:00",
       "detail": {
         "cross_cell_containers": 0,
         "old_running_in_g": true

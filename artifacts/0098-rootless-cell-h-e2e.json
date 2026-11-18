@@ -1,0 +1,105 @@
+{
+  "cleanup": {
+    "container": {
+      "removed": true
+    },
+    "image": {
+      "removed": true
+    },
+    "network": {
+      "removed": true
+    },
+    "volume": {
+      "removed": true
+    }
+  },
+  "finished_at": "2026-11-18T02:09:44.684310+00:00",
+  "ok": true,
+  "slug": "cell-h",
+  "socket": "/var/lib/spanel/cells/cell-h/docker.sock",
+  "started_at": "2026-11-18T02:09:36.078869+00:00",
+  "steps": {
+    "build": {
+      "at": "2026-11-18T02:09:40.059153+00:00",
+      "detail": {
+        "tag": "cell-e2e:cell-h-1794967776",
+        "tail": []
+      },
+      "ok": true
+    },
+    "create_start": {
+      "at": "2026-11-18T02:09:40.993357+00:00",
+      "detail": {
+        "container": "cell-e2e-app-cell-h-1794967776",
+        "id": "cell-e2e-app"
+      },
+      "ok": true
+    },
+    "healthcheck": {
+      "at": "2026-11-18T02:09:41.363590+00:00",
+      "detail": {
+        "status": "healthy"
+      },
+      "ok": true
+    },
+    "logs": {
+      "at": "2026-11-18T02:09:43.487581+00:00",
+      "detail": {
+        "tail": [
+          "heartbeat 1",
+          "heartbeat 2"
+        ]
+      },
+      "ok": true
+    },
+    "network": {
+      "at": "2026-11-18T02:09:40.908620+00:00",
+      "detail": {
+        "id": "6e0876aead20ce378c989252e269d14336cd43b798a4afa45bc35acfc5b5a5d6",
+        "internal": "true",
+        "network": "cell-e2e-net-cell-h-1794967776"
+      },
+      "ok": true
+    },
+    "networked": {
+      "at": "2026-11-18T02:09:44.063406+00:00",
+      "detail": {
+        "peer_connect": "ok",
+        "via": "cell-e2e-app-cell-h-1794967776:8080"
+      },
+      "ok": true
+    },
+    "preflight": {
+      "at": "2026-11-18T02:09:36.079597+00:00",
+      "detail": {
+        "docker_host": "unix:///var/lib/spanel/cells/cell-h/docker.sock",
+        "rootful_access": "denied",
+        "security_options": "[name=seccomp,profile=builtin name=rootless name=cgroupns]"
+      },
+      "ok": true
+    },
+    "pull": {
+      "at": "2026-11-18T02:09:36.785785+00:00",
+      "detail": {
+        "last_line": "docker.io/library/alpine:3.20"
+      },
+      "ok": true
+    },
+    "volume": {
+      "at": "2026-11-18T02:09:40.961281+00:00",
+      "detail": {
+        "name": "cell-e2e-vol-cell-h-1794967776",
+        "volume": "cell-e2e-vol-cell-h-1794967776"
+      },
+      "ok": true
+    },
+    "volume_data": {
+      "at": "2026-11-18T02:09:43.530240+00:00",
+      "detail": {
+        "boot_marker": "cell-e2e boot 2026-11-18T02:09:41Z"
+      },
+      "ok": true
+    }
+  },
+  "uid": 60009
+}

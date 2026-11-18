@@ -295,6 +295,20 @@ def test_status_never_exposes_secret_fields(tmp_path) -> None:
         assert secret not in blob
 
 
+def test_repair_restores_daemon_config_and_unit_for_a_legacy_cell(tmp_path) -> None:
+    """Repair must bring an old cell up to the current unit/profile contract."""
+    svc, _, executor = _service(tmp_path)
+    svc.provision("acme")
+    executor.calls.clear()
+    result = svc.repair("acme")
+    names = [name for name, _ in executor.calls]
+    assert "install_profile" in names
+    assert "write_daemon_config" in names
+    assert "install_systemd_unit" in names
+    assert "apply_network" in names
+    assert result["apparmor"]["effective"] is True
+
+
 def test_apparmor_profile_uses_only_validated_slug() -> None:
     profile = apparmor.render_profile("acme")
     assert "spanel-cell-acme" in profile
