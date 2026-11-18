@@ -52,6 +52,7 @@ from .runtime import (
     purge_orphaned_project,
     runtime_snapshot,
 )
+from .runtime.tenant_runtime import TenantRuntimeRegistry, tenant_slug
 from .service import audit as record_apps_audit
 
 logger = logging.getLogger(__name__)
@@ -68,10 +69,12 @@ class AppsWorker:
         github: GithubClient | None = None,
         route_cleanup: Callable[[Session, str, str], None] | None = None,
         route_refresh: Callable[[Session, str, str], None] | None = None,
+        runtime_registry: TenantRuntimeRegistry | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.cipher = cipher
         self.runner_factory = runner_factory
+        self.runtime_registry = runtime_registry
         self.publisher = publisher
         self.github = github or UrllibGithubClient()
         self.route_cleanup = route_cleanup
@@ -153,6 +156,18 @@ class AppsWorker:
     def _transport() -> str:
         value = os.environ.get("SPANEL_DOCKER_TRANSPORT", "local").strip()
         return value if value in {"local", "ssh"} else "local"
+
+    def _runner(self, tenant_id: str) -> Runner:
+        """Select the authenticated tenant's rootless socket when configured.
+
+        Without an injected registry the worker is byte-identical to before:
+        one global Runner inherited from the worker environment.
+        """
+        if self.runtime_registry is None:
+            return self.runner_factory(self._transport())
+        with self.session_factory() as db:
+            slug = tenant_slug(db, tenant_id)
+        return self.runtime_registry.for_tenant(tenant_id, slug).runner()
 
     def _source_operation(self, operation_id: str, application_id: str, kind: str) -> dict:
         from systutor.core.errors import AppError
@@ -508,7 +523,7 @@ class AppsWorker:
             # Un borrador (o una inspección/deploy fallido) no tiene runtime
             # publicado: se retiran los recursos etiquetados que sí existan y
             # los metadatos. Los volúmenes solo se eliminan al purgar datos.
-            runner = self.runner_factory(self._transport())
+            runner = self._runner(tenant_id)
             purge_orphaned_project(runner, project, volumes=purge_data)
             project_root = release_store_root(runner.environ) / project
             if project_root.name == project:
@@ -536,7 +551,7 @@ class AppsWorker:
                 "output": "No active deployment; application metadata removed.",
             }
         command = "status" if kind == "refresh" else kind
-        runner = self.runner_factory(self._transport())
+        runner = self._runner(tenant_id)
         result = lifecycle(
             LifecycleOptions(
                 command=command, project=project,
@@ -570,7 +585,7 @@ class AppsWorker:
                 release.parent.parent if release.parent.name == "releases" else release
             )
             if project_root.name == project:
-                runner = self.runner_factory(self._transport())
+                runner = self._runner(tenant_id)
                 if runner.transport == "ssh":
                     runner.run(["rm", "-rf", "--", str(project_root)])
                 elif project_root.exists():

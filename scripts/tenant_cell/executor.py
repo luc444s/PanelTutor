@@ -195,6 +195,8 @@ class LocalExecutor(Executor):
                 "{", "type", "filter", "hook", "output", "priority", "0",
                 ";", "policy", "accept", ";", "}",
             ])
+            # Re-applying must not pile up duplicate rules (repair / re-run).
+            self._run(["nft", "flush", "chain", "inet", table, "output"])
             for rule in spec.get("nft_rules", []):
                 self._run(["nft", *shlex.split(rule)])
         else:
