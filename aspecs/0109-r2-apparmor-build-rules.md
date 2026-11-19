@@ -177,7 +177,7 @@ change_surface:
   de confianza por tenant decidido por el usuario.
 - owner: lucas
 - approver: lucas
-- Commit: (pendiente de asignar al commitear esta spec).
+- Commit: `2140598` (perfil simplificado, tests, spec y artefacto E2E).
 - Evidence: `artifacts/0109-r2-apparmor-build-e2e.json` (**PASS 16/16**, `delta_denied: 0`
   desde el primer arranque, `cleanup_verified: true`). Baseline OLD: build rc=1 con 10 DENIED
   de `apt-get` sobre `/var/lib/apt/lists/**`; perfil reparado con grant amplia sin `owner`,
