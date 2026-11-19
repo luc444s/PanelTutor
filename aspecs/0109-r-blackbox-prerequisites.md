@@ -126,7 +126,7 @@ change_surface:
 - Requirement: hacer pasar el E2E black-box de 0109; correcciones 1/2/4 del plan general.
 - owner: lucas
 - approver: lucas
-- Commit: (pendiente de asignar al commitear esta spec).
+- Commit: `277a2c8` (0109 + 0109-R, specs, migración, tests y artefactos E2E).
 - Evidence: `artifacts/0109-spanel-lab-blackbox-e2e.json` (**PASS 9/9**,
   `cleanup_verified: true`) — login 200, tenant 201 (antes 409), migración kernel aplicada
   (`20261119_0011`, `is_superadmin DEFAULT false`), deploy real por API con DNS/NAT en la

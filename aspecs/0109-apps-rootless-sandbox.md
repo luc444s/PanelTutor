@@ -224,8 +224,10 @@ structural_constraints:
   bandera solo para nuevas migraciones, no borrar rootful hasta confirmar).
 - owner: lucas
 - approver: lucas
-- Commit: (pendiente; NO ejecutada)
-- Evidence: pendiente — `artifacts/0109-apps-rootless-sandbox-e2e.json`.
+- Commit: `277a2c8` (0109 + 0109-R, specs, migración, tests y artefactos E2E).
+- Evidence: `artifacts/0109-apps-rootless-sandbox-e2e.json` (FAIL 3/5, compuerta de estrés
+  PASS) y evidencia final del black-box tras 0109-R:
+  `artifacts/0109-spanel-lab-blackbox-e2e.json` (PASS 9/9, cleanup_verified).
 - Deployment: laboratorio `spanel.lab`; sin producción.
 
 ## Definition of Done
