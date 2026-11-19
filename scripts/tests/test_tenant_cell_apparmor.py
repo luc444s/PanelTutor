@@ -55,34 +55,21 @@ def test_profile_hash_is_deterministic_and_slug_specific() -> None:
 # --- inverted filesystem model ----------------------------------------------
 
 
-def test_render_profile_grants_broad_image_agnostic_rootfs() -> None:
+def test_render_profile_grants_broad_image_agnostic_rootfs_without_owner() -> None:
     profile = _profile()
 
-    # The inversion: broad read/exec of the cell's own rootfs plus read-only
-    # host binaries -- no enumeration of per-image executables.
-    assert "owner /** rix," in profile
-    # GAP-0105-4: real images create sockets, cache dirs and log files;
-    # `w` on the owned rootfs also grants creation (AppArmor 4 has no `c` mode).
-    assert "owner /** rwklix," in profile
-    assert "owner /** m," in profile
-    assert (
-        "/{bin,sbin,usr,lib,lib64,opt,etc,srv,var/tmp,tmp,proc,sys,dev}/** rix,"
-        in profile
-    )
-    # GAP-0105-2: runc re-execs its init through /proc/self/fd -> /runc,
-    # which is root-owned and therefore not covered by `owner /**`.
-    assert "/runc rix," in profile
-    # GAP-0105-8: container-view datadirs and writable mmap of /.
-    for rule in ("/data/ rwklix,", "/data/** rwklix,",
-                 "/var/lib/mysql/ rwklix,", "/var/lib/mysql/** rwklix,",
-                 "/var/cache/** rwklix,", "/var/log/** rwklix,",
-                 "/app/ rwklix,", "/app/** rwklix,",
-                 "/docker-entrypoint-initdb.d/ rwklix,",
-                 "/docker-entrypoint-initdb.d/** rwklix,",
-                 "/run/mysqld/ rwklix,", "/etc/mysql/ rwklix,",
-                 "/var/lib/postgresql/ rwklix,", "/var/lib/postgresql/** rwklix,",
-                 "/home/ rwklix,", "/dev/tty rw,", "/ mrw,"):
+    # A.SPEC 0109-R2: the trust boundary is the tenant, not the uid. The broad
+    # grant is unqualified; other tenants are kept out by their own userns,
+    # mountns and the per-cell nft skuid table, not by AppArmor ownership.
+    for rule in ("/** rix,", "/** rwklix,", "/** m,"):
         assert rule in profile
+    assert "owner /**" not in profile
+    # `w` on the broad grant also covers creation (AppArmor 4 has no `c` mode).
+    # runc's explicit root-owned exec exception and writable mmap of / remain.
+    assert "/runc rix," in profile
+    assert "/ mrw," in profile
+    assert "/dev/tty rw," in profile
+    # Image-specific entrypoints are never hand-listed (OUT OF SCOPE to add).
     for image_binary in (
         "/usr/sbin/nginx",
         "/docker-entrypoint.sh",
@@ -93,10 +80,63 @@ def test_render_profile_grants_broad_image_agnostic_rootfs() -> None:
         assert f"{image_binary} ix," not in profile
 
 
+def test_render_profile_drops_redundant_root_binary_and_datadir_grants() -> None:
+    """A.SPEC 0109-R2: blocks that only compensated `owner` are gone."""
+    profile = _profile()
+
+    # Root-only binary grant (old lines 37-41) -- covered by /** rix and /** m.
+    for rule in (
+        "/{bin,sbin,usr,lib,lib64,opt,etc,srv,var/tmp,tmp,proc,sys,dev}/** rix,",
+        "/{bin,sbin,usr,lib,lib64,opt,etc,srv,var/tmp,tmp,proc,sys,dev}/** m,",
+        "/run/user/[0-9]*/** rix,",
+    ):
+        assert rule not in profile
+    # Per-image datadir list (old lines 95-120) -- covered by /** rwklix.
+    for datadir in (
+        "/data", "/var/lib/mysql", "/var/cache", "/var/log", "/var/www",
+        "/app", "/docker-entrypoint-initdb.d", "/run/mysqld", "/etc/mysql",
+        "/var/lib/postgresql", "/home",
+    ):
+        assert f"{datadir}/ rwklix," not in profile
+        assert f"{datadir}/** rwklix," not in profile
+    # The BuildKit/runc consolidation was corrected after the real-build E2E
+    # FAIL: AppArmor does not match a remount (no srcname, e.g.
+    # flags="ro, remount, rbind") against a two-path `src -> dst` rule. The four
+    # single-path/narrow rules below pre-existed in HEAD and are restored
+    # verbatim -- restoring them is not adding new rules. Compare against rule
+    # lines only, since the template comment quotes each one for E2E tracing.
+    rule_lines = [
+        line.strip()
+        for line in profile.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+    # The single-path remount rule is required (the request has no srcname).
+    assert (
+        "remount options in (ro, rw, nosuid, nodev, noexec, bind, rbind) "
+        "/var/lib/spanel/cells/acme/**,"
+    ) in rule_lines
+    # The three read-only rbind/remount variants are restored too.
+    for rule in (
+        "mount options=(ro, rbind) /var/lib/spanel/cells/acme/** -> /var/lib/spanel/cells/acme/**,",
+        "mount options=(ro, remount, rbind) /var/lib/spanel/cells/acme/** -> /var/lib/spanel/cells/acme/**,",
+        "mount options=(ro, nosuid, nodev, noexec, remount, rbind) /var/lib/spanel/cells/acme/** -> /var/lib/spanel/cells/acme/**,",
+    ):
+        assert rule in rule_lines
+    # The broad two-path union rule (identical to HEAD) is retained.
+    assert (
+        "mount options in (ro, rw, bind, rbind, remount, nosuid, nodev, noexec) "
+        "/var/lib/spanel/cells/acme/** -> /var/lib/spanel/cells/acme/**," in rule_lines
+    )
+
+
 def test_rendered_profile_parses_when_apparmor_parser_is_available(
     tmp_path: Path,
 ) -> None:
-    """Catch invalid modes such as `r/ix` or `c` before the lab does (GAP-0105-5)."""
+    """Catch invalid syntax/modes before the lab does (GAP-0105-5, 0109-R2).
+
+    Skipped with an explicit reason when apparmor_parser is not installed on
+    the host; the E2E subagent validates the real build in the lab.
+    """
     parser = shutil.which("apparmor_parser")
     if parser is None:
         pytest.skip("apparmor_parser is not installed on this host")
@@ -115,7 +155,11 @@ def test_render_profile_scopes_writes_to_cell_and_image_trees() -> None:
     assert "/var/lib/spanel/cells/acme/** rwkl," in profile
     assert "/home/spanel-acme/** rwkl," in profile
     assert "/run/user/[0-9]*/** rwkl," in profile
-    # No global write grant: other tenants' trees stay unreachable for writes.
+    # The cell's internal docker.sock stays explicitly allowed: intra-tenant
+    # access is permitted by design (A.SPEC 0109-R2 trust decision).
+    assert "owner /var/lib/spanel/cells/acme/docker.sock rw," in profile
+    # No separate plain `/** rwkl,` grant (the broad grant is `/** rwklix,`),
+    # and no `owner`-qualified global grant survived the simplification.
     assert "\n  /** rwkl," not in profile
     assert "\n  owner /** rwkl," not in profile
 
@@ -128,7 +172,8 @@ def test_render_matrix_covers_real_images_without_patching() -> None:
         assert f"profile spanel-cell-{slug} " in profile
         assert f"/var/lib/spanel/cells/{slug}/** rwkl," in profile
         assert f"owner /var/lib/spanel/cells/{slug}/docker.sock rw," in profile
-        assert "owner /** rix," in profile
+        assert "/** rix," in profile
+        assert "owner /**" not in profile
         assert apparmor.profile_hash(slug) == apparmor.profile_hash(slug)
         # Image-specific entrypoints are never hand-listed.
         assert f"/usr/sbin/{app} ix," not in profile
@@ -151,6 +196,21 @@ def test_render_profile_denies_host_and_kernel_paths() -> None:
         "audit deny /dev/{sd,vd,hd,nvme}[a-z0-9]* rw,",
     ):
         assert rule in profile
+    # All eight Core denials are still present -- none weakened or removed.
+    assert sum(
+        1 for line in profile.splitlines() if line.strip().startswith("audit deny ")
+    ) == 8
+
+
+def test_render_profile_has_no_other_tenant_paths() -> None:
+    """A.SPEC 0109-R2: the profile must never name another tenant's cell."""
+    profile = _profile("acme")
+
+    assert "/var/lib/spanel/cells/other" not in profile
+    assert "/var/lib/spanel/cells/*/" not in profile
+    assert "/home/spanel-other" not in profile
+    assert "/var/lib/spanel/cells/acme/** rwkl," in profile
+    assert "/home/spanel-acme/** rwkl," in profile
 
 
 def test_render_profile_allows_only_the_session_bus() -> None:
@@ -158,7 +218,8 @@ def test_render_profile_allows_only_the_session_bus() -> None:
 
     assert "dbus (send, receive) bus=session," in profile
     assert "dbus (send, receive) bus=system," not in profile
-    assert "/run/user/[0-9]*/** rix," in profile
+    # The redundant /run/user rix grant was folded into /** rix (0109-R2).
+    assert "/run/user/[0-9]*/** rix," not in profile
 
 
 def test_render_profile_has_no_complain_or_unconfined() -> None:
@@ -194,6 +255,35 @@ def test_render_profile_keeps_capabilities_ptrace_and_mounts_scoped() -> None:
     # No wildcard that allows mounting over another cell or the host.
     assert "mount /** -> /," not in profile
     assert "/var/lib/spanel/cells/other" not in profile
+
+
+def test_single_path_remount_rule_is_present_for_no_srcname_remounts() -> None:
+    """E2E 0109-R2: AppArmor will not match a remount (no srcname) to a
+    two-path `src -> dst` rule, so the HEAD single-path rule must be restored.
+
+    The real build failed at BuildKit's mount with 6 remount + 2 pivot DENIED,
+    `flags="ro, remount, rbind"`, `info="failed flags match"`, when only the
+    consolidated two-path rule was present. Restoring is not adding a rule.
+    """
+    profile = _profile()
+    rule_lines = [
+        line.strip()
+        for line in profile.splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    ]
+
+    # Single-path remount rule (no `-> srcname`): mandatory for BuildKit.
+    assert (
+        "remount options in (ro, rw, nosuid, nodev, noexec, bind, rbind) "
+        "/var/lib/spanel/cells/acme/**,"
+    ) in rule_lines
+    # All other HEAD mount rules in this block are restored as well.
+    for rule in (
+        "mount options=(ro, rbind) /var/lib/spanel/cells/acme/** -> /var/lib/spanel/cells/acme/**,",
+        "mount options=(ro, remount, rbind) /var/lib/spanel/cells/acme/** -> /var/lib/spanel/cells/acme/**,",
+        "mount options=(ro, nosuid, nodev, noexec, remount, rbind) /var/lib/spanel/cells/acme/** -> /var/lib/spanel/cells/acme/**,",
+    ):
+        assert rule in rule_lines
 
 
 # --- seccomp profile ---------------------------------------------------------

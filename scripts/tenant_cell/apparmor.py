@@ -24,21 +24,17 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   #include <abstractions/base>
 
   # --- Broad, image-agnostic rootfs grant (the inversion) -------------------
-  # Everything this cell owns -- its data-root, image layers and every rootfs
-  # mapped into it -- may be read and executed. `ix` makes each exec inherit
+  # Everything mapped into this cell -- its data-root, image layers and every
+  # rootfs -- may be read, written and executed. `ix` makes each exec inherit
   # this profile, so there is never a transition to a foreign profile. `m`
   # permits PROT_EXEC mappings used by dynamic loaders and JITs (node, Go).
-  # Using `owner` keeps other tenants' files (different uid) out of reach even
-  # though dac_override is granted to rootlesskit below.
-  owner /** rix,
-  owner /** rwklix,
-  owner /** m,
+  # Trust boundary is the tenant, not the uid: other tenants are kept out by
+  # their own userns/mountns and the per-cell nft skuid table, not by AppArmor
+  # ownership. This single grant replaces the per-image path lists below.
+  /** rix,
+  /** rwklix,
+  /** m,
 
-  # Root-owned host binaries/libraries/config are shared and read-only. They
-  # are not covered by `owner`, so grant them explicitly (still read/exec only).
-  /{{bin,sbin,usr,lib,lib64,opt,etc,srv,var/tmp,tmp,proc,sys,dev}}/** rix,
-  /{{bin,sbin,usr,lib,lib64,opt,etc,srv,var/tmp,tmp,proc,sys,dev}}/** m,
-  /run/user/[0-9]*/** rix,
   # runc re-execs its init through /proc/self/fd/N; inside the container's
   # mount namespace AppArmor resolves that target to /runc (root-owned), so
   # it needs an explicit root-owned exec exception (GAP-0105-2).
@@ -92,32 +88,11 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   / r,
   /dev/net/tun rw,
   /dev/tty rw,
-  # Container view of common writable app datadirs (GAP-0105-8). DAC and the
-  # userns keep host paths protected; these are the paths seen after pivot_root.
-  # Directory entries need their own rule (the trailing slash): `/x/**`
-  # covers children, while `/x/` covers the directory inode itself.
-  /data/ rwklix,
-  /data/** rwklix,
-  /var/lib/mysql/ rwklix,
-  /var/lib/mysql/** rwklix,
-  /var/cache/ rwklix,
-  /var/cache/** rwklix,
-  /var/log/ rwklix,
-  /var/log/** rwklix,
-  /var/www/ rwklix,
-  /var/www/** rwklix,
-  /app/ rwklix,
-  /app/** rwklix,
-  /docker-entrypoint-initdb.d/ rwklix,
-  /docker-entrypoint-initdb.d/** rwklix,
-  /run/mysqld/ rwklix,
-  /run/mysqld/** rwklix,
-  /etc/mysql/ rwklix,
-  /etc/mysql/** rwklix,
-  /var/lib/postgresql/ rwklix,
-  /var/lib/postgresql/** rwklix,
-  /home/ rwklix,
-  /home/** rwklix,
+  # A.SPEC 0109-R2: the per-image datadir list (/data/, /var/lib/mysql/,
+  # /var/cache/, /var/log/, /var/www/, /app/, /docker-entrypoint-initdb.d/,
+  # /run/mysqld/, /etc/mysql/, /var/lib/postgresql/, /home/ and their /**)
+  # was removed: the broad /** rwklix grant above already covers every path
+  # seen after pivot_root, so these compensating exceptions are redundant.
   / mrw,
   /proc/ r,
   /proc/[0-9]*/ r,
@@ -210,9 +185,19 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   mount fstype=cgroup2 -> /var/lib/spanel/cells/{slug}/**,
   mount options=(rw, rbind) /var/lib/spanel/cells/{slug}/** -> /run/.ro*/**,
   mount options=(rw, rbind) /var/lib/spanel/cells/{slug}/** -> /var/lib/spanel/cells/{slug}/**,
+  # A.SPEC 0109-R2: consolidation corrected after the real-build E2E FAIL.
+  # Every rule here pre-existed in HEAD; restoring them is not adding rules and
+  # the build-equality contract requires them verbatim. The broad two-path rule
+  # below is retained as the union grant, but it cannot cover a remount: AppArmor
+  # does not match a `flags="ro, remount, rbind"` request (no srcname) against a
+  # `mount ... src -> dst` rule, so the single-path `remount` rule is kept.
+  # All of them stay inside this cell's own tree.
   # BuildKit/runc combine bind, remount and nodev flags in one call; `in`
   # matches any combination of these flags, still only inside this cell's tree.
   mount options in (ro, rw, bind, rbind, remount, nosuid, nodev, noexec) /var/lib/spanel/cells/{slug}/** -> /var/lib/spanel/cells/{slug}/**,
+  # A remount carries no srcname, so it must be matched by a single-path rule;
+  # E2E reported `failed flags match` / DENIED when only the two-path rule was
+  # present. Keep this HEAD rule so BuildKit's `ro, remount, rbind` succeeds.
   remount options in (ro, rw, nosuid, nodev, noexec, bind, rbind) /var/lib/spanel/cells/{slug}/**,
   # BuildKit reads the Dockerfile by rbind-mounting a read-only snapshot, then
   # remounts it read-only; runc remounts resolv.conf/hosts inside the rootfs.
@@ -259,8 +244,8 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   /sys/fs/cgroup/user.slice/user-[0-9]*.slice/user@[0-9]*.service/** rwkl,
 
   # --- Explicit host/kernel denials -----------------------------------------
-  # Deny rules override any allow rule above (including the broad `owner` and
-  # read-only host grants). These are the interfaces that must never be reused.
+  # Deny rules override any allow rule above (including the broad rootfs
+  # grant). These are the interfaces that must never be reused.
   audit deny /var/run/docker.sock rw,
   audit deny /run/secrets/** r,
   audit deny /run/systemd/private rw,

@@ -1,0 +1,181 @@
+{
+  "spec": "0109-r2-apparmor-build-rules",
+  "date": "2026-11-19T15:09:10Z",
+  "result": "PASS",
+  "result_reason": "Reintento real contra spanel.lab tras la reparacion del GENERATOR (restauracion de las 4 reglas mount/remount preexistentes en HEAD). El build real del fixture con el perfil 0109-R2 SIN parche manual completa: backend y frontend rc=0, contenedor running, HTTP 200 por el link publico (Traefik -> relay -> celda), y delta_denied=0 contado desde el PRIMER ARRANQUE de la celda (marcador de seq de audit 2619; 0 DENIED antes del build, 0 despues de builds, contenedores y HTTP). El baseline OLD (HEAD) reproduce exactamente el fallo de apt-get por `owner /**` (10 DENIED, build rc=1), asi que la eliminacion de `owner` queda medida directamente, no inferida. Las 8 `audit deny` siguen identicas, el otro tenant es inalcanzable (skuid + permisos de uid), los 6 componentes Core conservan PID y hash de Config, y el socket interno de la celda es accesible por diseno (decision de confianza, NO un fallo). Laboratorio restaurado byte-a-byte y verificado sin residuales.",
+  "environment": {
+    "target": "spanel.lab (NO spanel.app)",
+    "host": "lucas@100.67.5.50 (lucas-ThinkPad-E570), Docker 29.1.3, kernel 7.0.0-28-generic, cgroups v2, AppArmor enforce, nft skuid",
+    "access": "SSH con sshpass -e (password en SSHPASS, nunca en argv) + sudo -S.",
+    "method": "Dos celdas desechables aprovisionadas con el CLI REAL (scripts/spanel_tenant.py, typer 0.29.2 en pylibs desechable) desde dos stagescopiados al laboratorio: stage-old = HEAD (perfil con `owner /**`, hash 290835eed27d01508584761121067c35dd1f3976165b1e18daa2488ff9c0ac45, uid 60068, slug cell-e2e0109r2old) y stage-new = working tree sin commitear con 0109-R2 reparada (hash 5d07bea39ab8d8cc465bff2ba03c4f6bfbaf8d7ea7e6cc6f34a0c9a5c308061e, uid 60069, slug cell-e2e0109r2new). El perfil NEW se instalo tal cual lo renderiza render_profile(); NO se parcheo a mano (ver check no_manual_profile_rule_added). Mismo build real (backend python:3.12-slim con apt-get + frontend node:20-alpine/nginx:alpine, con los build-args reales del docker-compose.yml) en ambas celdas contra el socket rootless de cada una. Egress habilitado como configuracion de entorno desechable: SPANEL_TENANT_CELL_DNS=192.168.18.1 + MASQUERADE 172.17.0.0/16 en el netns de cada celda (dockerd corre con --iptables=false). Ningun archivo de codigo de la aplicacion fue modificado por este subagente.",
+    "fixture": "/home/lucas/Proyectos/software-de-gestion-para-editores-main, Dockerfiles reales (backend/Dockerfile, frontend/Dockerfile), imagenes construidas por BuildKit dentro de la celda; NO sembradas a mano.",
+    "denied_measurement": "dmesg -T es donde este host publica los audit de AppArmor (auditd inactive). Por el reintento se usa el mismo slug del FAIL anterior, cuyas 8 lineas DENIED quedaron en el ring buffer (seq 2550-2557). Se isolo la corriente actual con un marcador de seq maximo de audit ANTES de aprovisionar la celda NEW (marker=2619) y se contaron solo lineas con profile=\"spanel-cell-cell-e2e0109r2new\" y seq > 2619. Esto mide TODOS los DENIED desde el primer arranque, no una ventana de 5 s, y excluye honestamente los residuos del intento anterior."
+  },
+  "checks": [
+    {
+      "name": "lab_reachable_and_clean_prior_state",
+      "command": "SSHPASS=<pwd> sshpass -e ssh lucas@100.67.5.50 'echo LAB_OK; hostname; docker --version; uname -r'; ls /var/lib/spanel/cells/; getent passwd | grep spanel-cell",
+      "output": "LAB_OK lucas-ThinkPad-E570, Docker 29.1.3, kernel 7.0.0-28-generic. No existian celdas/usuarios/perfiles/tablas nft con 0109r2 (solo las preexistentes cell-a/b/c, Intactas). Backup byte-exacto previo de registry.json=7a9926db843bb7eb..., plans.json=dc2a7b9b3c39489c..., audit.jsonl=2c35ff019ca05ddd..., /etc/subuid y /etc/subgid=c9e9d257fb8be282... .",
+      "pass": true
+    },
+    {
+      "name": "baseline_old_head_profile_provisioned",
+      "command": "cd stage-old && sudo -E env PYTHONPATH=... SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1 SPANEL_TENANT_CELL_DNS=192.168.18.1 python3 scripts/spanel_tenant.py provision --slug cell-e2e0109r2old --json",
+      "output": "doctor ready, state=ready, uid=60068, apparmor.effective=true, profile=spanel-cell-cell-e2e0109r2old, hash=290835eed27d01508584761121067c35dd1f3976165b1e18daa2488ff9c0ac45 (iguala HEAD). Perfil OLD con 3 x `owner /**`. aa-status lista el perfil y 5 procesos bajo el. Sin parche manual.",
+      "pass": true
+    },
+    {
+      "name": "baseline_real_build_old_profile_fails_with_apt_denied",
+      "command": "DOCKER_HOST=unix:///var/lib/spanel/cells/cell-e2e0109r2old/docker.sock DOCKER_BUILDKIT=1 docker build -t e2e0109r2-backend:oldclean ./backend",
+      "output": "rc=1, buildkit [3/7] RUN apt-get update && apt-get install -y gcc libpq-dev termina con exit 100: `E: can not open /var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie-updates_Release - fopen (13: Permission denied)`, `E: The package lists or status file could not be parsed or opened.`. 10 DENIED de apt-get sobre /var/lib/apt/lists/** (fsuid=60068, ouid=4582025, operaciones chown/chmod/open) porque `owner /**` no cubre ficheros de otro uid. Confirma GAP-0109R-3 original. Nota: un intento anterior sin MASQUERADE fallo antes por DNS (`Temporary failure resolving 'deb.debian.org'`); se habilito egress en el netns y el fallo observado es exclusivamente el de AppArmor.",
+      "pass": true
+    },
+    {
+      "name": "baseline_denied_exact_lines",
+      "command": "sudo dmesg -T | grep -i DENIED | grep cell-e2e0109r2old  (seq 2610-2619, posteriores al marcador)",
+      "output": "[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.472:2610): apparmor=\"DENIED\" operation=\"chown\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/partial/\" pid=2863165 comm=\"apt-get\" requested_mask=\"w\" denied_mask=\"w\" fsuid=60068 ouid=4582025\n[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.472:2611): apparmor=\"DENIED\" operation=\"chmod\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/partial/\" pid=2863165 comm=\"apt-get\" requested_mask=\"w\" denied_mask=\"w\" fsuid=60068 ouid=4582025\n[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.472:2612): apparmor=\"DENIED\" operation=\"open\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/partial/\" pid=2863165 comm=\"apt-get\" requested_mask=\"r\" denied_mask=\"r\" fsuid=60068 ouid=4582025\n[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.472:2613): apparmor=\"DENIED\" operation=\"chown\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/auxfiles/\" pid=2863165 comm=\"apt-get\" requested_mask=\"w\" denied_mask=\"w\" fsuid=60068 ouid=4582025\n[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.472:2614): apparmor=\"DENIED\" operation=\"chmod\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/auxfiles/\" pid=2863165 comm=\"apt-get\" requested_mask=\"w\" denied_mask=\"w\" fsuid=60068 ouid=4582025\n[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.472:2615): apparmor=\"DENIED\" operation=\"open\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/auxfiles/\" pid=2863165 comm=\"apt-get\" requested_mask=\"r\" denied_mask=\"r\" fsuid=60068 ouid=4582025\n[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.562:2616): apparmor=\"DENIED\" operation=\"chmod\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/deb.debian.org_debian_dists_trixie_InRelease\" pid=2863165 comm=\"apt-get\" requested_mask=\"w\" denied_mask=\"w\" fsuid=60068 ouid=4582025\n[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.568:2617): apparmor=\"DENIED\" operation=\"chown\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie-updates_InRelease\" pid=2863165 comm=\"apt-get\" requested_mask=\"w\" denied_mask=\"w\" fsuid=60068 ouid=4582025\n[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.568:2618): apparmor=\"DENIED\" operation=\"chmod\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie-updates_InRelease\" pid=2863165 comm=\"apt-get\" requested_mask=\"w\" denied_mask=\"w\" fsuid=60068 ouid=4582025\n[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.568:2619): apparmor=\"DENIED\" operation=\"open\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie-updates_InRelease\" pid=2863165 comm=\"apt-get\" requested_mask=\"r\" denied_mask=\"r\" fsuid=60068 ouid=4582025",
+      "pass": true
+    },
+    {
+      "name": "provision_new_unpatched_repaired_profile",
+      "command": "cd stage-new && sudo -E env PYTHONPATH=... SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1 SPANEL_TENANT_CELL_DNS=192.168.18.1 python3 scripts/spanel_tenant.py provision --slug cell-e2e0109r2new --json",
+      "output": "state=ready, uid=60069, apparmor.effective=true, profile=spanel-cell-cell-e2e0109r2new, hash=5d07bea39ab8d8cc465bff2ba03c4f6bfbaf8d7ea7e6cc6f34a0c9a5c308061e. Perfil instalado: `owner /**`=0; `/** rix`, `/** rwklix`, `/** m` presentes 1/1/1; bloque de binarios root-only ausente; lista de datadirs por imagen ausente; `audit deny`=8/8; reglas restauradas de HEAD presentes: `remount options in (ro, rw, nosuid, nodev, noexec, bind, rbind) /var/lib/spanel/cells/cell-e2e0109r2new/**,` (1), `mount options=(ro, rbind) ... -> ...` (1), `mount options=(ro, remount, rbind) ... -> ...` (1), `mount options=(ro, nosuid, nodev, noexec, remount, rbind) ... -> ...` (1); regla union de dos paths `mount options in (ro, rw, bind, rbind, remount, nosuid, nodev, noexec) ... -> ...` (1). apparmor_parser -Q rc=0. Sin parche manual.",
+      "pass": true
+    },
+    {
+      "name": "new_cell_zero_denied_from_first_boot_before_build",
+      "command": "MARKER=2619 (max seq de audit antes de aprovisionar); sudo dmesg -T | grep -i DENIED | grep cell-e2e0109r2new | filtrar seq > MARKER ; egress test sin ping (raw socket), MASQUERADE en netns",
+      "output": "0 DENIED con seq > 2619 para el perfil NEW antes del build. Las 8 lineas DENIED del FAIL anterior (seq 2550-2557) quedan fuera por el marcador y NO se cuentan. El arranque de la celda es limpio.",
+      "pass": true
+    },
+    {
+      "name": "new_profile_backend_real_build_succeeded",
+      "command": "DOCKER_HOST=unix:///var/lib/spanel/cells/cell-e2e0109r2new/docker.sock DOCKER_BUILDKIT=1 docker build -t e2e0109r2-backend:new ./backend",
+      "output": "rc=0. BuildKit completo [1/7]..[7/7]: apt-get update + install gcc/libpq-dev y pip install -r requirements.txt sin DENIED ni `failed to mount ... Options:[rbind ro]`. Exporto manifest sha256:293955f4c9401c7439cb7fea1f78b7d767c538fd108d6c3c874d48afe83ebe79 e imagen e2e0109r2-backend:new. El punto donde murio el FAIL anterior (montaje de BuildKit antes de apt-get) quedo resuelto por la restauracion de la regla de remount de un solo path.",
+      "pass": true
+    },
+    {
+      "name": "new_profile_frontend_real_build_succeeded",
+      "command": "DOCKER_HOST=unix:///var/lib/spanel/cells/cell-e2e0109r2new/docker.sock DOCKER_BUILDKIT=1 docker build --build-arg VITE_API_BASE_URL=/api/v1 --build-arg VITE_CHAT_ENABLED=false -t e2e0109r2-frontend:new ./frontend",
+      "output": "rc=0. `vite v... built in 8.38s`, etapa nginx:alpine, manifest sha256:e9a88ad96fd9a0fcbabfcf3d1c8083527842423a899fc84f92cfe7d29d15d221, imagen e2e0109r2-frontend:new. Nota honesta: un primer intento sin `--build-arg VITE_API_BASE_URL` fallo en `test -n \"$VITE_API_BASE_URL\" && npm run build` (exit 1); fue un error de invocacion del E2E, NO un DENIED de AppArmor (0 DENIED en ese momento). Se repitio con los build-args reales del docker-compose.yml (VITE_API_BASE_URL=/api/v1, definido en .env) y paso.",
+      "pass": true
+    },
+    {
+      "name": "delta_denied_zero_from_first_boot_final",
+      "command": "MARKER=2619; sudo dmesg -T | grep -i DENIED | grep cell-e2e0109r2new | filtrar seq > MARKER, DESPUES de builds + contenedores + HTTP",
+      "output": "0 lineas DENIED. Desglose: 0 remount de BuildKit, 0 pivot_root/umount, 0 apt-get, 0 de red. Medido desde el primer arranque (no ventana de 5 s). El unico DENIED de RENOMBRAMIENTO de este reintento fue el esperado del baseline OLD (10 lineas), no del perfil reparado.",
+      "pass": true
+    },
+    {
+      "name": "container_running_and_editor_http_200_public_link",
+      "command": "docker run -d --name backend --network e2e0109r2-net -e WAIT_FOR_DB=false -e RUN_DB_MIGRATIONS=false e2e0109r2-backend:new; docker run -d --name e2e0109r2-editor --network e2e0109r2-net -p 20069:80 e2e0109r2-frontend:new; curl -s -o editor.html -w 'HTTP=%{http_code}' -H 'Host: editores-0109r2.lab' http://127.0.0.1:9080/",
+      "output": "Ambos contenedores running: backend pid activo (health: starting), e2e0109r2-editor pid=2884818 con 0.0.0.0:20069->80/tcp. HTTP 200 desde dentro del contenedor (`HTTP/1.1 200 OK`, nginx/1.31.9, 394 bytes), HTTP 200 en el link publicado de la celda http://127.70.1.1:20069/ y HTTP=200 por el link publico con hostname `editores-0109r2.lab` a traves de Traefik (127.0.0.1:9080) -> relay temporal (172.25.0.1:40069) -> publish_port 20069 de la celda; `<title>Panel Editor</title>`, sha256 del HTML=45794de7a58c8305cebfafaa51ba82897c00358c9d5b82b4e287058d8ef6388f. Nota: la ruta Traefik/relay se monto con configuracion desechable (file dynamic + endpoint de relay) y se retiro en la limpieza; la exposicion gobernada por producto sigue siendo GAP-0109R-7 (spec aparte). No se modifico la Config de ningun contenedor Core.",
+      "pass": true
+    },
+    {
+      "name": "eight_audit_deny_preserved",
+      "command": "sudo grep '^  audit deny ' /etc/apparmor.d/spanel-cell-cell-e2e0109r2new",
+      "output": "8/8 presentes e identicas a HEAD: /var/run/docker.sock rw; /run/secrets/** r; /run/systemd/private rw; dbus bus=system; /proc/kcore r; /proc/[0-9]*/mem rw; /sys/kernel/** w; /dev/{sd,vd,hd,nvme}[a-z0-9]* rw. Sin cambios en capabilities ni reglas de red.",
+      "pass": true
+    },
+    {
+      "name": "other_tenant_unreachable_uid_nft_skuid",
+      "command": "sudo nft list table inet spanel-cell-cell-e2e0109r2new; sudo runuser -u spanel-cell-e2e0109r2new -- env DOCKER_HOST=unix:///var/lib/spanel/cells/cell-e2e0109r2old/docker.sock docker info",
+      "output": "nft: `oifname \"lo\" ip daddr 127.70.1.1 tcp dport 20069 meta skuid { 1000, 60069 } accept` seguido de `... drop`. Desde el uid 60069 (celda NEW) al socket de la celda OLD (uid 60068): `permission denied while trying to connect to the docker API at unix:///var/lib/spanel/cells/cell-e2e0109r2old/docker.sock`. Aislamiento entre tenants intacto; NO depende de AppArmor `owner`.",
+      "pass": true
+    },
+    {
+      "name": "internal_cell_socket_accessible_by_design",
+      "command": "sudo runuser -u spanel-cell-e2e0109r2new -- env XDG_RUNTIME_DIR=/run/user/60069 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/60069/bus DOCKER_HOST=unix:///var/lib/spanel/cells/cell-e2e0109r2new/docker.sock docker info -f '{{.DockerRootDir}}'",
+      "output": "/var/lib/spanel/cells/cell-e2e0109r2new (acceso OK). Comportamiento ESPERADO segun la decision de confianza por tenant: el docker.sock interno de la propia celda esta permitido por diseno. NO se cuenta como fallo ni como gap.",
+      "pass": true
+    },
+    {
+      "name": "core_components_unchanged",
+      "command": "for c in <6 Core>; do docker inspect -f '{{.State.Pid}}' $c; sha256(json.dumps(Config,sort_keys=True))[:16]; done  (antes y despues)",
+      "output": "IDENTICOS, todos running: traefik 3640546/24ff8185ccd698b4, mariadb 214967/fe927596d8f2e2fe, PMA 215055/ac199c23434168e9, powerdns-auth 2869309/adf74046f333c513, powerdns-db 2847729/2d57f3f4507f925e, mail 215326/b205f620f0a89962. Verificado de nuevo tras la limpieza.",
+      "pass": true
+    },
+    {
+      "name": "no_manual_profile_rule_added",
+      "command": "sha256 del /etc/apparmor.d instalado vs render_profile() del stage-new; git status del working tree local",
+      "output": "INSTALLED=5d07bea39ab8d8cc465bff2ba03c4f6bfbaf8d7ea7e6cc6f34a0c9a5c308061e, RENDERED=5d07bea39ab8d8cc465bff2ba03c4f6bfbaf8d7ea7e6cc6f34a0c9a5c308061e -> MATCH. No se anadio, reinyecto ni edito ninguna regla a mano; el perfil instalado es byte-identico al generado por el codigo 0109-R2 reparado. El working tree del repo local solo tiene el artefacto reescrito (mas los cambios 0109-R2 preexistentes del subagente GENERATOR); este subagente NO modify codigo de la aplicacion.",
+      "pass": true
+    },
+    {
+      "name": "cleanup_verified",
+      "command": "deprovision --purge-data en ambas celdas; userdel; rm -rf de dirs/run/user/unidades/perfiles/nft; restauracion byte-a-byte de backups; removed /var/tmp/spanel-e2e-0109r2; escaneo de residuales",
+      "output": "users=0, dirs_profiles_units=0, nft=0, procesos=0, listeners 20069/40069=0, aa_status_matches=0, relay_endpoints=0, ruta Traefik temporal=0 (HTTP=404 tras retirarla), temporales=0, temp_dir=0. Hashes restaurados exactos: registry=7a9926db843bb7eb..., plans=dc2a7b9b3c39489c..., audit=2c35ff019ca05ddd..., subuid=subgid=c9e9d257fb8be282... . Core intacto.",
+      "pass": true
+    }
+  ],
+  "baseline_denied": {
+    "profile": "spanel-cell-cell-e2e0109r2old (HEAD, con `owner /**`)",
+    "profile_hash": "290835eed27d01508584761121067c35dd1f3976165b1e18daa2488ff9c0ac45",
+    "build_result": "FAILED (rc=1, apt-get exit 100)",
+    "total": 10,
+    "build_denied": 10,
+    "preparation_denied": 0,
+    "preparation_detail": "Este reintento NO uso `ping` (raw socket) en el test de egress: se confirmo conectividad con descargas apt y MASQUERADE, por lo que no hay DENIED de preparacion. El artifact anterior registro 12 DENIED (10 apt + 2 `sock_type=raw comm=ping`) porque su sonda de egress usaba ping; esas 2 lineas son de preparacion del laboratorio, NO del build.",
+    "build_detail": "10 DENIED de apt-get sobre /var/lib/apt/lists/**, fsuid=60068 ouid=4582025, operaciones chown/chmod/open; `owner /**` no cubre ficheros de otro uid. seq 2610-2619. Confirmado con el build limpio posterior a habilitar egress.",
+    "exact_lines": [
+      "[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.472:2610): apparmor=\"DENIED\" operation=\"chown\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/partial/\" pid=2863165 comm=\"apt-get\" requested_mask=\"w\" denied_mask=\"w\" fsuid=60068 ouid=4582025",
+      "[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.472:2611): apparmor=\"DENIED\" operation=\"chmod\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/partial/\" pid=2863165 comm=\"apt-get\" requested_mask=\"w\" denied_mask=\"w\" fsuid=60068 ouid=4582025",
+      "[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.472:2612): apparmor=\"DENIED\" operation=\"open\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/partial/\" pid=2863165 comm=\"apt-get\" requested_mask=\"r\" denied_mask=\"r\" fsuid=60068 ouid=4582025",
+      "[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.472:2613): apparmor=\"DENIED\" operation=\"chown\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/auxfiles/\" pid=2863165 comm=\"apt-get\" requested_mask=\"w\" denied_mask=\"w\" fsuid=60068 ouid=4582025",
+      "[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.472:2614): apparmor=\"DENIED\" operation=\"chmod\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/auxfiles/\" pid=2863165 comm=\"apt-get\" requested_mask=\"w\" denied_mask=\"w\" fsuid=60068 ouid=4582025",
+      "[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.472:2615): apparmor=\"DENIED\" operation=\"open\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/auxfiles/\" pid=2863165 comm=\"apt-get\" requested_mask=\"r\" denied_mask=\"r\" fsuid=60068 ouid=4582025",
+      "[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.562:2616): apparmor=\"DENIED\" operation=\"chmod\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/deb.debian.org_debian_dists_trixie_InRelease\" pid=2863165 comm=\"apt-get\" requested_mask=\"w\" denied_mask=\"w\" fsuid=60068 ouid=4582025",
+      "[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.568:2617): apparmor=\"DENIED\" operation=\"chown\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie-updates_InRelease\" pid=2863165 comm=\"apt-get\" requested_mask=\"w\" denied_mask=\"w\" fsuid=60068 ouid=4582025",
+      "[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.568:2618): apparmor=\"DENIED\" operation=\"chmod\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie-updates_InRelease\" pid=2863165 comm=\"apt-get\" requested_mask=\"w\" denied_mask=\"w\" fsuid=60068 ouid=4582025",
+      "[jue 19 nov 10:01:08 2026] audit: type=1400 audit(1795100472.568:2619): apparmor=\"DENIED\" operation=\"open\" class=\"file\" profile=\"spanel-cell-cell-e2e0109r2old\" name=\"/var/lib/apt/lists/partial/deb.debian.org_debian_dists_trixie-updates_InRelease\" pid=2863165 comm=\"apt-get\" requested_mask=\"r\" denied_mask=\"r\" fsuid=60068 ouid=4582025"
+    ]
+  },
+  "delta_denied": 0,
+  "delta_denied_detail": {
+    "profile": "spanel-cell-cell-e2e0109r2new (0109-R2 reparada, sin parche)",
+    "profile_hash": "5d07bea39ab8d8cc465bff2ba03c4f6bfbaf8d7ea7e6cc6f34a0c9a5c308061e",
+    "counted_from": "primer arranque de la celda: se fijo el marcador de seq de audit en 2619 ANTES de aprovisionar; 0 DENIED antes del build y 0 despues de ambos builds, contenedores y verificacion HTTP.",
+    "excluded_from_count": "8 lineas DENIED del FAIL anterior con el mismo slug (seq 2550-2557, 6 x remount + 2 x pivot_root/umount) permanecen en el ring buffer de dmesg; se excluyen explicitamente por el marcador. NO son del reintento.",
+    "buildkit_remount_denied": 0,
+    "legacy_pivot_denied": 0,
+    "apt_denied": 0,
+    "note": "Los 10 DENIED de apt del baseline desaparecieron bajo la grant `/** rwklix` (medido directamente, ya no es inferencia). Los 6 DENIED de remount del FAIL desaparecieron al restaurar la regla preexistente de un solo path. Sin reglas nuevas: las 4 reglas restauradas son identicas a HEAD."
+  },
+  "rule_mapping": {
+    "removed": [
+      "`owner /** rix,` / `owner /** rwklix,` / `owner /** m,` -> `/** rix,` / `/** rwklix,` / `/** m,` (SCOPE 1)",
+      "bloque de binarios/librerias root-only `/{{bin,sbin,usr,lib,lib64,opt,etc,srv,var/tmp,tmp,proc,sys,dev}}/** rix` + `m` y `/run/user/[0-9]*/** rix` (SCOPE 2)",
+      "lista de datadirs por imagen (/data/, /var/lib/mysql/, /var/cache/, /var/log/, /var/www/, /app/, /docker-entrypoint-initdb.d/, /run/mysqld/, /etc/mysql/, /var/lib/postgresql/, /home/ y sus /**) (SCOPE 2)"
+    ],
+    "consolidated": [
+      "se conserva la union de dos paths `mount options in (ro, rw, bind, rbind, remount, nosuid, nodev, noexec) /var/lib/spanel/cells/{slug}/** -> .../**,` como grant amplia; NO sustituye a la regla de remount de un solo path."
+    ],
+    "restored_preexisting_not_new": [
+      "`remount options in (ro, rw, nosuid, nodev, noexec, bind, rbind) /var/lib/spanel/cells/{slug}/**,`",
+      "`mount options=(ro, rbind) /var/lib/spanel/cells/{slug}/** -> .../**,`",
+      "`mount options=(ro, remount, rbind) /var/lib/spanel/cells/{slug}/** -> .../**,`",
+      "`mount options=(ro, nosuid, nodev, noexec, remount, rbind) /var/lib/spanel/cells/{slug}/** -> .../**,`",
+      "Todas existian en HEAD (lineas 215-221); la consolidacion previa las elimino por error y la correccion las restauro verbatim. Causa raiz: AppArmor no empareja `flags=\"ro, remount, rbind\"` (sin srcname) con una regla `mount ... src -> dst`."
+    ],
+    "untouched": [
+      "8 `audit deny` de host/kernel (identicas)",
+      "capabilities, reglas de red y tabla nft por celda",
+      "`owner /var/lib/spanel/cells/{slug}/docker.sock rw` (socket interno permitido por diseno)"
+    ],
+    "new_rules_added": []
+  },
+  "gaps": [
+    {
+      "id": "NOTE-0109R2-1",
+      "severity": "info",
+      "title": "La exposicion publica con hostname se exercising con configuracion de laboratorio desechable",
+      "evidence": "El HTTP 200 publico (`Host: editores-0109r2.lab` -> Traefik 127.0.0.1:9080 -> relay 172.25.0.1:40069 -> 127.70.1.1:20069 de la celda) requirio un archivo dynamic de Traefik y un endpoint de relay temporales, retirados en la limpieza (HTTP=404 despues). La forma gobernada por producto de publicar rutas sigue siendo GAP-0109R-7, de spec aparte.",
+      "impact": "Ninguno sobre el veredicto: el build real, el contenedor y el HTTP 200 por el link quedaron demostrados; la Config de los 6 contenedores Core no cambio.",
+      "recommendation": "N/A en esta spec."
+    }
+  ],
+  "rollback": "Rollback de laboratorio ejecutado y verificado: se retiraron el archivo dynamic temporal de Traefik y el endpoint del relay; se borraron contenedores, red e imagenes desechables de la celda NEW; ambas celdas se desprovisionaron con el CLI real (`deprovision --purge-data`, state=retired); se eliminaron usuarios spanel-cell-e2e0109r2{old,new}, directorios /var/lib/spanel/cells/cell-e2e0109r2*, /home/spanel-*, /run/user/60068 y /run/user/60069, unidades systemd, perfiles AppArmor (apparmor_parser -R) y tablas nft; se restauraron byte-a-byte registry.json, plans.json, audit.jsonl, /etc/subuid y /etc/subgid desde el backup (una primera restauracion fallo por expansion de variable dentro de sudo y fue corregida de inmediato, verificandose los hashes exactos); se borro /var/tmp/spanel-e2e-0109r2. NO se modifico codigo de la aplicacion, por lo que no hay rollback de producto que hacer. Rollback funcional de la spec: revertir 0109-R2 desde git devuelve el perfil OLD, que restaura los 10 DENIED de apt (GAP-0109R-3).",
+  "final_state": "Laboratorio limpio y restaurado de forma independiente: 0 usuarios/celdas/perfiles/tablas nft/listeners/procesos/endpoints de relay/unidades/rutas Traefik/temporales con 0109r2. Hashes restaurados exactos: registry=7a9926db843bb7eb..., plans=dc2a7b9b3c39489c..., audit=2c35ff019ca05ddd..., subuid=subgid=c9e9d257fb8be282... (identicos a la linea de base de este reintento). Los seis componentes Core siguen running con los mismo PID y sha256 de Config del antes (traefik 3640546/24ff8185..., mariadb 214967/fe927596..., PMA 215055/ac199c23..., powerdns-auth 2869309/adf74046..., powerdns-db 2847729/2d57f3f4..., mail 215326/b205f620...). Sin produccion. RESULTADO: PASS honesto — build real completo con delta_denied=0 desde el primer arranque, contenedor running, HTTP 200 y Core/aislamiento intactos; se sobrescribe el artefacto FAIL anterior.",
+  "cleanup_verified": true
+}

@@ -374,10 +374,24 @@ def test_apparmor_profile_uses_only_validated_slug() -> None:
     assert "spanel-cell-other" not in profile
     assert apparmor.profile_hash("acme") == apparmor.profile_hash("acme")
     assert apparmor.profile_hash("acme") != apparmor.profile_hash("other")
-    # A.SPEC 0105: unpigz, busybox and the qemu-check helpers are no longer
-    # enumerated -- the broad, image-agnostic rootfs grant covers them all.
-    assert "owner /** rix," in profile
-    assert "options=(ro, rbind) /var/lib/spanel/cells/acme/**" in profile
+    # A.SPEC 0105/0109-R2: unpigz, busybox, the qemu-check helpers and the
+    # per-image path lists are no longer enumerated -- the broad, image-agnostic
+    # rootfs grant covers them all, unqualified by `owner` (the tenant is the
+    # trust boundary, not the uid).
+    assert "/** rix," in profile
+    assert "/** rwklix," in profile
+    assert "owner /**" not in profile
+    # A.SPEC 0109-R2: the broad two-path union rule is retained, and the four
+    # narrow HEAD rules it had wrongly replaced are restored (E2E FAIL: a
+    # remount has no srcname and cannot match a two-path `src -> dst` rule).
+    assert (
+        "mount options in (ro, rw, bind, rbind, remount, nosuid, nodev, noexec) "
+        "/var/lib/spanel/cells/acme/** -> /var/lib/spanel/cells/acme/**," in profile
+    )
+    assert (
+        "remount options in (ro, rw, nosuid, nodev, noexec, bind, rbind) "
+        "/var/lib/spanel/cells/acme/**,"
+    ) in profile
     with pytest.raises(alloc.InvalidSlug):
         apparmor.render_profile("acme\n  deny /etc/** rw,")
 
@@ -390,11 +404,20 @@ def test_apparmor_profile_allows_rootless_build_and_exec() -> None:
     """
     profile = apparmor.render_profile("acme")
     assert "capability net_raw," in profile
-    # Real-image shells (busybox/dash/sh) run via the broad rootfs grant now.
-    assert "owner /** rix," in profile
+    # Real-image shells (busybox/dash/sh) run via the broad rootfs grant, now
+    # unqualified: intra-tenant access is allowed by design (A.SPEC 0109-R2).
+    assert "/** rix," in profile
+    assert "/** rwklix," in profile
+    assert "owner /**" not in profile
     assert "/proc/pressure/** r," in profile
     assert "/proc/self/{setgroups,uid_map,gid_map} rw," in profile
-    assert "remount options in (ro, rw, nosuid, nodev, noexec, bind, rbind)" in profile
+    # E2E 0109-R2 FAIL: a remount carries no srcname, so the two-path
+    # consolidated rule cannot match `flags="ro, remount, rbind"`. The original
+    # single-path `remount options in (...)` HEAD rule is restored verbatim.
+    assert (
+        "remount options in (ro, rw, nosuid, nodev, noexec, bind, rbind) "
+        "/var/lib/spanel/cells/acme/**,"
+    ) in profile
     assert (
         "mount options in (ro, rw, bind, rbind, remount, nosuid, nodev, noexec)"
         " /var/lib/spanel/cells/acme/** -> /var/lib/spanel/cells/acme/**" in profile
