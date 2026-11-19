@@ -1,0 +1,76 @@
+{
+  "spec": "0109-spanel-app-blackbox",
+  "date": "2026-11-19T05:48:27Z",
+  "result": "FAIL",
+  "environment": {
+    "target": "spanel.app",
+    "user": "sihuen8@gmail.com",
+    "how_accessed": "El nombre spanel.app NO resuelve en ningún DNS consultado (ver check 1 y 2): registro público HINFO RFC8482 sin A/AAAA, sin entrada en /etc/hosts del host del lab, sin peer de Tailscale y sin ruta en Traefik (HTTP 404 con Host: spanel.app). Se accedió al mismo demo por la superficie pública alcanzable http://100.67.5.50:3000 (Tailscale), que responde título 'PanelTutor' y acepta Host: spanel.app con HTTP 200. Login por API pública POST /api/v1/auth/login con sihuen8@gmail.com / 1408slal -> HTTP 200 + JWT (usuario System Admin, tenant demo, permisos core.platform.admin y tenant.tenants.manage). Observación a nivel host por SSH lucas@100.67.5.50 con sshpass -e (password en SSHPASS, nunca en argv). NO se leyó código interno de la app; solo OpenAPI público, JS público servido al navegador, respuestas HTTP y docker/cgroups del host."
+  },
+  "checks": [
+    {
+      "name": "target_dns_resolution",
+      "command": "dig +noall +answer spanel.app ANY @8.8.8.8; dig +short spanel.app A @8.8.8.8; curl -sS -o /dev/null -w 'HTTP %{http_code}\\n' -L --max-time 20 https://spanel.app/",
+      "output": ";spanel.app.\t3600\tIN\tHINFO\t\"RFC8482\" \"\"\n(sin salida para la consulta A)\ncurl: (6) Could not resolve host: spanel.app\nHTTP 000\nNota: NS del dominio = viddy.ns.cloudflare.com / paislee.ns.cloudflare.com, pero sin registro A/AAAA público.",
+      "pass": false
+    },
+    {
+      "name": "target_resolution_on_lab_host",
+      "command": "ssh lucas@100.67.5.50 'getent ahosts spanel.app; grep -i spanel /etc/hosts; curl -sS -o /dev/null -w HTTP=%{http_code} -H \"Host: spanel.app\" --max-time 10 http://127.0.0.1:9080/; tailscale status'",
+      "output": "getent ahosts spanel.app -> (vacío)\n/etc/hosts: 127.0.0.1 lucas.spanel / 127.0.0.1 mail.lucas.spanel / 127.0.0.1 spanel.lab  (NO spanel.app)\ncurl -H 'Host: spanel.app' http://127.0.0.1:9080/ -> HTTP=404  (Host: spanel.lab -> HTTP=200)\ntailscale status -> 11 peers, ninguno llamado spanel.app\nConclusión: spanel.app no es alcanzable por su nombre desde Termux ni desde el host del demo; el mismo demo sí responde en http://100.67.5.50:3000/ (HTTP 200, <title>PanelTutor).",
+      "pass": false
+    },
+    {
+      "name": "login_public_api",
+      "command": "curl -sS -i -X POST http://100.67.5.50:3000/api/v1/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"sihuen8@gmail.com\",\"password\":\"1408slal\"}'",
+      "output": "HTTP/1.1 200 OK\n{\"access_token\":\"eyJhbGciOiJIUzI1NiIs...\", \"token_type\":\"bearer\", \"expires_in\":3600, \"user\":{\"email\":\"sihuen8@gmail.com\",\"full_name\":\"System Admin\",\"tenant_id\":\"658e5ca2-00a4-4672-b5c5-f093db3066fa\",\"tenant_name\":\"Demo Tenant\",\"permissions\":[\"core.platform.admin\",\"tenant.tenants.manage\",...]}}\nGET /api/v1/system/health con el token -> {\"status\":\"ok\",\"service\":\"api\",\"version\":\"0.1.0\",\"env\":\"development\"} HTTP=200",
+      "pass": true
+    },
+    {
+      "name": "create_disposable_tenant_via_public_api",
+      "command": "TOKEN=$(curl -sS -X POST http://100.67.5.50:3000/api/v1/auth/login -H 'Content-Type: application/json' -d '{\"email\":\"sihuen8@gmail.com\",\"password\":\"1408slal\"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)[\"access_token\"])'); curl -sS -w ' HTTP=%{http_code}\\n' -X POST http://100.67.5.50:3000/api/v1/plugins/tenant/tenants -H \"Authorization: Bearer $TOKEN\" -H 'Content-Type: application/json' -d '{\"name\":\"E2E 0109 spanel.app <suffix>\",\"slug\":\"e2e-0109-spanelapp-<suffix>\",\"domain\":\"<unico>\",\"user_email\":\"<unico>\",\"user_password\":\"E2e0109!Strong\"}'  # repetido con 9 combinaciones únicas de name/slug/domain/email, con y sin domain, contraseña de 8 y de 16 caracteres",
+      "output": "HTTP=409 {\"error\":{\"code\":\"tenant_conflict\",\"message\":\"The domain, slug, or email is already in use\"}}\nidéntico para: slug=e2e-0109-spanelapp-1119004525 / e2e0109a / e2e0109b / e2e0109c / e2e0109d1129 / e2e0109spanelapp / zzzqqqxx1129 / zza0933a35b57e (UUID aleatorio), con domain=null, domain=\"\", dominios .invalid/.test.local/.com/.spanel.app y emails únicos.\nControl con dominio traslapado: HTTP=409 {\"error\":{\"code\":\"tenant_site_suffix_conflict\",\"message\":\"The suffix e2e0109x.spanel.site overlaps with that of tenant Demo Tenant (demo)\"}} -> la validación de sufijo sí corre, pero cualquier payload no traslapado cae en tenant_conflict genérico.\nPayload inválido {}, como control: HTTP=422 (camppos name/slug/user_email/user_password requeridos) -> el endpoint existe y está activo (plugin tenant state=enabled).\nGET /api/v1/plugins/tenant/tenants después de todos los intentos: count=2 (demo, systutot) -> no se creó ningún tenant.",
+      "pass": false
+    },
+    {
+      "name": "editor_http_200_in_created_tenant",
+      "command": "NO EJECUTADO: no existe tenant creado (check anterior en FAIL). No se reutilizó el tenant 'demo' porque el guion exige el tenant nuevo y el usuario solo autorizó crear uno desechable.",
+      "output": "Sin app, sin contenedor y sin ruta nueva. La UI del editor (título 'Panel Editor') no pudo desplegarse dentro de un tenant de prueba. No se aplicó ningún workaround (docker load / imagen preconstruida) porque eso no sería el flujo público exigido.",
+      "pass": false
+    },
+    {
+      "name": "memory_max_2gb_effective_cgroup_v2",
+      "command": "NO EJECUTADO sobre el objetivo: no hay contenedor nuevo que inspeccionar. Comando de observación preparado: ls -d /sys/fs/cgroup/user.slice/user-*.slice/user@*.service; cat <slice>/memory.max  # esperado 2147483648",
+      "output": "Host: cgroup2fs. Slices presentes ANTES y DESPUÉS idénticos: user-1000.slice, user-60008.slice, user-60067.slice (ninguno nuevo, ninguno con memory.max=2147483648 creado por esta prueba). docker ps -a | grep -iE 'e2e|0109' -> (none). Además, la API pública no expone ningún campo de límite de memoria: ApplicationCreate={name,installation_id,repository_id,branch,compose_file,domain,ingress_service,ingress_port}, DeployRequest={environment,hardening,scope} sin memory/limit; no hay endpoint de 'plan' en los 175 paths de /openapi.json. No se pudo establecer ni observar 2 GB.",
+      "pass": false
+    },
+    {
+      "name": "tenant_isolation_and_core_health",
+      "command": "curl -sS -H \"Authorization: Bearer $TOKEN\" http://100.67.5.50:3000/api/v1/system/health; curl -sS -H \"Authorization: Bearer $TOKEN\" http://100.67.5.50:3000/api/v1/plugins/tenant/tenants; ssh lucas@100.67.5.50 'docker ps -q | wc -l; docker ps -a --format \"{{.Names}}\" | grep -iE e2e|0109 || echo (none); for c in ...; do docker inspect -f \"{{.State.Pid}}|{{.State.Status}}\" $c; done'",
+      "output": "Core SANO: {\"status\":\"ok\",\"service\":\"api\",\"version\":\"0.1.0\",\"env\":\"development\"} HTTP=200.\nTenants: count=2 (demo/spanel.site, systutot/systutor.com) -> sin tenant nuevo.\ndocker ps = 23 contenedores (idéntico al baseline), sin contenedores e2e/0109.\nCore PIDs idénticos antes/después: spanel-app-1=2811506/running, spanel-traefik-lab=3640546/running, spanel-lab-mariadb=214967/running, spanel-mail=215326/running, spanel-apps-worker-1=2773575/running.\nPERO el check de aislamiento del guion NO puede satisfacerse: no hay tenant de prueba cuyo userspace inspeccionar ni app dentro de él; solo se confirma que no se tocó a los demás tenants ni al Core.",
+      "pass": false
+    },
+    {
+      "name": "container_runs_in_created_tenant_userspace",
+      "command": "NO EJECUTADO: sin tenant nuevo ni contenedor desplegado. No se invocó docker.sock desde la app ni se creó ninguna celda rootless; no hay evidencia que evaluar.",
+      "output": "Sin datos. Requiere que el check de creación de tenant pase primero.",
+      "pass": false
+    },
+    {
+      "name": "cleanup_and_final_state",
+      "command": "# verificación de no-creación (no hubo nada que borrar)\ncurl -sS -H \"Authorization: Bearer $TOKEN\" .../plugins/tenant/tenants | python3 -c '...'; ssh lucas@100.67.5.50 'docker ps -q | wc -l; docker ps -a --format \"{{.Names}}\" | grep -iE \"e2e|0109\" || echo (none); ls -d /sys/fs/cgroup/user.slice/user-*.slice/user@*.service'; git -C /data/data/com.termux/files/home/Proyectos/mailadmin status --short",
+      "output": " tenants=2 (demo, systutot) igual que el baseline; docker ps=23 igual que el baseline; sin contenedores/celdas/imagenes e2e/0109; cgroup slices idénticos (1000, 60008, 60067); Core con los mismos PID y estado running; git status sin cambios nuevos respecto al inicio (los mismos 5 archivos M y 3 ?? del artefacto previo). No se creó tenant, contenedor ni datos, por lo que la limpieza fue no-op verificada por comparación antes/después.",
+      "pass": true
+    }
+  ],
+  "gaps": [
+    "GAP-A (crítico, entorno): spanel.app no existe como host alcanzable: sin A/AAAA público (HINFO RFC8482), sin entrada /etc/hosts en el host del lab, sin peer Tailscale y sin ruta Traefik (404 con Host: spanel.app). Se usó el mismo demo en 100.67.5.50:3000, que sí acepta Host: spanel.app; el resultado NO es verificable 'en spanel.app' por su nombre.",
+    "GAP-B (crítico, bloqueante): POST /api/v1/plugins/tenant/tenants devuelve 409 tenant_conflict para cualquier payload con slug/email/dominio únicos (9 variantes probadas). Sin tenant nuevo no se pueden ejecutar los pasos 3, 4 ni 5 del guion. La validación específica de sufijo (tenant_site_suffix_conflict) sí funciona, lo que indica que el endpoint está vivo pero la creación efectiva está inutilizable en este demo.",
+    "GAP-C: la API pública no ofrece parámetro de límite de memoria ni de plan de tenant (ni en ApplicationCreate ni en DeployRequest; no hay endpoint de plan entre 175 paths). Aun con tenant, no quedó demostrado desde la superficie pública cómo pedir 2 GB (memory.max=2147483648); no se usó el CLI de host porque no es una superficie pública de la app.",
+    "GAP-D: el fixture luc444s/software-de-gestion-para-editores (repo id a16790c8-6447-4181-9b45-f7a7786625cf, instalación c5785e78-891a-4333-9cfc-85ca50d4dc65) está disponible vía GitHub App, pero no se pudo crear/app desplegar en el tenant de prueba. No se reproducen aquí los fallos de red del E2E previo en spanel.lab porque el flujo no avanzó lo suficiente; NO se asume que estén resueltos.",
+    "GAP-E: navegador (browser/cromite) no conectado en esta sesión ('No desktop browser is connected' / 'Failed to fetch browser webSocket URL'). La UI no se pudo ejercer; se validó el payload del formulario en el JS público servido al navegador (usa exactamente el mismo endpoint ZP -> POST /api/v1/plugins/tenant/tenants), por lo que el mismo 409 aplicaría a la UI."
+  ],
+  "rollback": "No fue necesario: no se creó ningún tenant, app, contenedor, imagen, ruta, fichero ni dato. No se modificó código del repositorio ni de la app (git status idéntico al inicio: mismos 5 archivos M y 3 ?? del trabajo previo del usuario). El token JWT de sesión es efímero (expires_in=3600) y no constituye estado persistente. Verificado por comparación de estado antes/después: tenants 2->2, docker ps 23->23, 0 contenedores e2e/0109, 3 slices de cgroup idénticos, PIDs del Core idénticos.",
+  "final_state": "Demo de spanel (accesible como 100.67.5.50:3000; NO como spanel.app) intacto y Core sano (HTTP 200). No hay tenant de prueba, contenedor ni datos nuevos. RESULTADO FAIL: la prueba no pudo completarse porque el nombre objetivo no resuelve y la creación de tenant por la API pública falla con 409 tenant_conflict de forma sistemática. No se emitió ningún PASS falso; los checks de editor 200, memory.max=2 GB, aislamiento y userspace del tenant quedan en pass:false por no ejecución/evidencia inexistente.",
+  "cleanup_verified": true
+}

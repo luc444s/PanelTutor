@@ -37,6 +37,10 @@ class AppsSettings:
     # behaviour (PathRoute default); false is an explicit opt-out that renders
     # the plain HTTP document of the A.SPEC 0104 artifact. Never touches Traefik.
     rootless_routes_https: bool = True
+    # A.SPEC 0109: this gate only selects the runtime for new deployments.
+    # Existing resource-runtime records are never rewritten while it is off.
+    tenants_rootless: bool = False
+    tenants_data_root: Path = Path("/var/lib/spanel")
 
     @classmethod
     def from_env(cls) -> AppsSettings:
@@ -58,6 +62,10 @@ class AppsSettings:
             plan_agent_allowed_uids=os.environ.get("SPANEL_PLAN_AGENT_ALLOWED_UIDS", ""),
             rootless_routes_https=_env_bool(
                 "SPANEL_ROOTLESS_ROUTES_HTTPS", default=True
+            ),
+            tenants_rootless=_env_bool("SPANEL_TENANTS_ROOTLESS"),
+            tenants_data_root=Path(
+                os.environ.get("SPANEL_TENANTS_DATA_ROOT", "/var/lib/spanel")
             ),
         )
 

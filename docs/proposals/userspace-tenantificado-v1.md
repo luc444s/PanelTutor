@@ -211,5 +211,39 @@ silencioso.
   **Compuerta abierta: 0109 y 0110 ya pueden ejecutarse.**
 - 0108 commiteada y pusheada: `5d88462` (implementación + reparación de 3 gaps de E2E)
   y `2e118f3` (trazabilidad).
-- 0109 redactada (`aspecs/0109-apps-rootless-sandbox.md`), **sin ejecutar**; pendiente de
-  aprobación para correr GENERATOR + E2E con el guion editor → estrés → aislamiento.
+- 0109 ejecutada con GENERATOR (`gpt-5.6-sol#medium`) y reparada por **0109-R**.
+  - E2E inicial en `spanel.lab`: FAIL 3/5, pero la compuerta del usuario (estrés aislado)
+    **PASS** (`artifacts/0109-apps-rootless-sandbox-e2e.json`); el deploy por API falló por
+    falta de red en la celda.
+  - Black-box contra `spanel.app` (corregido después a `spanel.lab`): BLOCKED por 409 al
+    crear tenant (`artifacts/0109-spanel-app-e2e.json`).
+  - Causa raíz del 409 diagnosticada en el lab: `users.is_superadmin` NOT NULL sin DEFAULT
+    (drift de esquema); 0109-R añade la migración del kernel, DNS/NAT en la celda y plan
+    público de RAM.
+  - **E2E black-box final: PASS 9/9, `cleanup_verified: true`**
+    (`artifacts/0109-spanel-lab-blackbox-e2e.json`): tenant 201, editor HTTP 200 vía
+    relay/Traefik, 2 GB efectivos, socket de celda, Core intacto, limpieza total.
+    7 gaps de laboratorio documentados (ver artefacto): cap 512 MB por servicio, NAT
+    adicional, AppArmor de build, worker dramatiq, catálogo GitHub tenant-scoped, etc.
+  - Pendiente: commit de 0109 + 0109-R sobre `remove-hardener`.
+
+## 8. Post-0109: retirar los controles compensatorios anti-root
+
+**Decisión condicional del usuario:** si la E2E de 0109 pasa (editor en sandbox rootless
+con estrés aislado), entonces debemos **quitar todo límite que la app imponía para
+contener el root**: el rechazo de binds de host y la prohibición de `docker.sock` en
+inyecciones (`apps/backend/runtime/types.py`, `releases/verify.py`), la detección de
+`rootful_socket` en probes (`runtime/probes.py`) y los defaults compensatorios
+(`cap_drop: ALL`, `no-new-privileges`, `apparmor=docker-default`, seccomp) cuando el
+recurso corre dentro de su propio userspace rootless con AppArmor invertido, seccomp
+fail-closed y cgroups propios (0105/0108).
+
+**Racional:** con un daemon rootless por tenant, el «root» dentro del contenedor es el
+subuid del tenant, no root del host. La frontera la pone el userspace, no el Dockerfile;
+mantener esos parches después sería hardening invasivo redundante, que las condiciones
+generales de esta v1 prohíben.
+
+**No ejecutar ahora.** Requiere: (1) E2E de 0109 en PASS, (2) hosting migrado (0110) y
+creación por defecto (0111), y (3) una A.SPEC propia de cierre (0112) con
+`change_surface` explícita, tests, E2E y rollback. Hasta entonces los controles siguen
+vigentes para cualquier recurso rootful que quede.

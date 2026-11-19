@@ -70,18 +70,29 @@ class AppsWorker:
         route_cleanup: Callable[[Session, str, str], None] | None = None,
         route_refresh: Callable[[Session, str, str], None] | None = None,
         runtime_registry: TenantRuntimeRegistry | None = None,
+        runtime_recorder: Callable[[Session, str, list[str], str], dict[str, str]]
+        | None = None,
         rootless_routes: Any | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.cipher = cipher
         self.runner_factory = runner_factory
         self.runtime_registry = runtime_registry
+        self.runtime_recorder = runtime_recorder
         self.publisher = publisher
         self.rootless_routes = rootless_routes
         if self.rootless_routes is None:
             from .rootless_routes import build_rootless_routes
 
-            self.rootless_routes = build_rootless_routes()
+            previous_transport = os.environ.get("SPANEL_DOCKER_TRANSPORT")
+            try:
+                self.rootless_routes = build_rootless_routes()
+            finally:
+                if self.runtime_registry is None:
+                    if previous_transport is None:
+                        os.environ.pop("SPANEL_DOCKER_TRANSPORT", None)
+                    else:
+                        os.environ["SPANEL_DOCKER_TRANSPORT"] = previous_transport
         self.github = github or UrllibGithubClient()
         self.route_cleanup = route_cleanup
         self.route_refresh = route_refresh
@@ -113,7 +124,10 @@ class AppsWorker:
             elif kind in {"inspect", "deploy", "harden"}:
                 if application_id is None:
                     raise RuntimeError("Application not found")
-                result = self._source_operation(operation_id, application_id, kind)
+                if kind == "deploy" and self.runtime_registry is not None:
+                    result = self._rootless_deploy(operation_id, application_id)
+                else:
+                    result = self._source_operation(operation_id, application_id, kind)
             elif kind == "rollback":
                 if application_id is None:
                     raise RuntimeError("Application not found")
@@ -175,6 +189,80 @@ class AppsWorker:
         with self.session_factory() as db:
             slug = tenant_slug(db, tenant_id)
         return self.runtime_registry.for_tenant(tenant_id, slug).runner()
+
+    def _rootless_deploy(self, operation_id: str, application_id: str) -> dict:
+        """Complete the rootless cutover only after deploy, probe and route."""
+        with self.session_factory() as db:
+            app = db.get(Application, application_id)
+            if app is None:
+                raise RuntimeError("Application not found")
+            tenant_id = app.tenant_id
+            previous_deployment_id = app.active_deployment_id
+            previous_status = app.status
+        result = self._source_operation(operation_id, application_id, "deploy")
+        try:
+            resource_ids = self._publish_and_verify_rootless_route(
+                tenant_id, application_id, result
+            )
+            if self.runtime_recorder is not None:
+                with self.session_factory() as db:
+                    self.runtime_recorder(db, tenant_id, resource_ids, "rootless")
+                    db.commit()
+        except Exception as exc:
+            self._restore_deploy_cutover(
+                tenant_id,
+                application_id,
+                previous_deployment_id,
+                previous_status,
+            )
+            if isinstance(exc, AppDeployError):
+                raise
+            raise AppDeployError("Rootless deployment cutover failed") from exc
+        return result
+
+    def _publish_and_verify_rootless_route(
+        self, tenant_id: str, application_id: str, result: dict
+    ) -> list[str]:
+        deployment_id = result.get("deployment_id")
+        if result.get("status") != "running" or not isinstance(deployment_id, str):
+            raise AppDeployError("Rootless deployment was not verified")
+        with self.session_factory() as db:
+            app = db.get(Application, application_id)
+            deployment = db.get(Deployment, deployment_id)
+            if app is None or deployment is None or app.active_deployment_id != deployment.id:
+                raise AppDeployError("Rootless deployment was not published")
+            manifest = deployment.manifest if isinstance(deployment.manifest, dict) else {}
+            containers = manifest.get("containers")
+            if not isinstance(containers, dict) or not containers:
+                raise AppDeployError("Rootless deployment has no verified containers")
+            if app.domain:
+                if self.rootless_routes is None:
+                    raise AppDeployError("Rootless route publisher is unavailable")
+                published = self.rootless_routes.refresh(db, tenant_id, application_id)
+                domains = published.get("published", []) if isinstance(published, dict) else []
+                if app.domain not in domains:
+                    raise AppDeployError("Rootless route publication failed")
+            return [f"{application_id}:{service}" for service in sorted(containers)]
+
+    def _restore_deploy_cutover(
+        self,
+        tenant_id: str,
+        application_id: str,
+        previous_deployment_id: str | None,
+        previous_status: str,
+    ) -> None:
+        """Restore metadata and routes; intentionally retain every container/volume."""
+        with self.session_factory() as db:
+            app = db.get(Application, application_id)
+            if app is not None:
+                app.active_deployment_id = previous_deployment_id
+                app.status = previous_status
+                db.commit()
+        with self.session_factory() as db:
+            if self.rootless_routes is not None:
+                self.rootless_routes.cleanup(db, tenant_id, application_id)
+            if self.route_refresh is not None and previous_deployment_id is not None:
+                self.route_refresh(db, tenant_id, application_id)
 
     def _source_operation(self, operation_id: str, application_id: str, kind: str) -> dict:
         from systutor.core.errors import AppError

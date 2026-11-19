@@ -488,7 +488,21 @@ def test_systemd_unit_uses_rootlesskit_netns_and_no_host_iptables() -> None:
     assert "XDG_RUNTIME_DIR=/run/user/60000" in unit
     assert "AppArmorProfile=spanel-cell-acme" in unit
     assert "DOCKERD_ROOTLESS_ROOTLESSKIT_SLIRP4NETNS_SANDBOX=false" in unit
+    assert "DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=true" in unit
+    assert "Environment=SPANEL_TENANT_CELL_DNS=10.0.2.3" in unit
+    assert "--dns ${SPANEL_TENANT_CELL_DNS}" in unit
     assert "--config-file=/var/lib/spanel/cells/acme/daemon.json" in unit
+
+
+def test_cell_dns_is_configurable_and_rejects_host_loopback(monkeypatch) -> None:
+    monkeypatch.setenv("SPANEL_TENANT_CELL_DNS", "100.100.100.100")
+    unit = systemd_unit("acme", 60000, "/some/path", "systemd")
+    assert "Environment=SPANEL_TENANT_CELL_DNS=100.100.100.100" in unit
+    assert "DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=true" in unit
+
+    monkeypatch.setenv("SPANEL_TENANT_CELL_DNS", "127.0.0.53")
+    with pytest.raises(ValueError, match="reachable unicast resolver"):
+        systemd_unit("acme", 60000, "/some/path", "systemd")
 
 
 def test_local_executor_creates_output_chain_before_rules(monkeypatch) -> None:
@@ -698,6 +712,30 @@ def test_delegate_controllers_cover_the_five_required() -> None:
 
 class PlanAwareExecutor(FakeExecutor):
     """A cell executor that also records the A.SPEC 0100 plan operations."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.effective: dict[str, str] = {}
+
+    def read_plan_state(self, uid):
+        self._rec("read_plan_state", uid=uid)
+        return {
+            "slice": f"user-{uid}.slice",
+            "properties": {},
+            "effective": dict(self.effective),
+            "owner_uid": str(uid),
+            "cgroup_path": f"/user.slice/user-{uid}.slice/user@{uid}.service",
+        }
+
+    def apply_plan_in_place(self, uid, plan):
+        from scripts.tenant_cell import plans
+
+        self._rec("apply_plan_in_place", uid=uid, plan=plan)
+        self.effective = plans.expected_probe_limits(plan)
+
+    def reset_plan_properties(self, uid):
+        self._rec("reset_plan_properties", uid=uid)
+        self.effective = {}
 
     def install_tenant_slice(self, slug, plan):
         self._rec("install_tenant_slice", slug=slug, plan=plan)

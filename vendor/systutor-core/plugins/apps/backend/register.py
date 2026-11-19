@@ -17,6 +17,7 @@ from plugins.apps.backend.plans_client import HostPlanMaterializerClient
 from plugins.apps.backend.public_url import PublicUrlError, parse_public_url
 from plugins.apps.backend.rootless_routes import build_rootless_routes
 from plugins.apps.backend.router import router
+from plugins.apps.backend.runtime.tenant_runtime import TenantRuntimeRegistry
 from plugins.apps.backend.settings import AppsSettings
 from plugins.apps.backend.states import OneTimeStates
 from systutor.contracts.domain_ownership import OwnedSite, register_site_provider
@@ -39,6 +40,10 @@ class AppsResources:
     plan_materializer: object | None = None
     # A.SPEC 0104: read-only relay endpoint client + rootless route publisher.
     rootless_routes: object | None = None
+    # A.SPEC 0109: generic collaborators keep Apps independent from Tenant's
+    # persistence model. They are absent while the migration gate is disabled.
+    runtime_registry: object | None = None
+    runtime_recorder: object | None = None
 
     def cipher(self) -> TokenCipher:
         if self._cipher is None:
@@ -145,6 +150,31 @@ def _build_plan_materializer(settings: AppsSettings) -> HostPlanMaterializerClie
     )
 
 
+def build_runtime_registry(settings: AppsSettings) -> TenantRuntimeRegistry | None:
+    if not settings.tenants_rootless:
+        return None
+    return TenantRuntimeRegistry(str(settings.tenants_data_root))
+
+
+def build_runtime_recorder(settings: AppsSettings):
+    """Return an injected callback; import Tenant persistence only on use."""
+    if not settings.tenants_rootless:
+        return None
+
+    def record(db: Session, tenant_id: str, resource_ids: list[str], runtime: str):
+        from plugins.tenant.backend.service import get_runtime, set_runtime
+
+        previous = {
+            resource_id: get_runtime(db, tenant_id, "app", resource_id)
+            for resource_id in resource_ids
+        }
+        for resource_id in resource_ids:
+            set_runtime(db, tenant_id, "app", resource_id, runtime)
+        return previous
+
+    return record
+
+
 def register(context: PluginContext) -> None:
     settings = AppsSettings.from_env()
     production = os.environ.get("SYSTUTOR_ENV") == "production"
@@ -157,12 +187,15 @@ def register(context: PluginContext) -> None:
     app = context.router_registry
     if app is not None:
         rootless = build_rootless_routes()
+        runtime_registry = build_runtime_registry(settings)
         app.state.apps_resources = AppsResources(
             settings,
             DramatiqDispatcher(),
             UrllibGithubClient(),
             plan_materializer=_build_plan_materializer(settings),
             rootless_routes=rootless,
+            runtime_registry=runtime_registry,
+            runtime_recorder=build_runtime_recorder(settings),
         )
         app.state.rootless_routes = rootless
         register_site_provider(app, "apps", resolve_apps_sites)

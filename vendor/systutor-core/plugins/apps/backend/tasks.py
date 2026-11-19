@@ -16,6 +16,7 @@ from .dispatcher import DramatiqDispatcher
 from .github import UrllibGithubClient
 from .models import Operation
 from .operations import reconcile
+from .register import build_runtime_recorder, build_runtime_registry
 from .settings import AppsSettings
 from .worker import AppsWorker, build_actor
 
@@ -36,9 +37,15 @@ try:
     route_refresh = getattr(app.state, "domain_routes_refresh", None)
 except Exception:
     publisher = None
+runtime_options = {}
+if settings.tenants_rootless:
+    runtime_options = {
+        "runtime_registry": build_runtime_registry(settings),
+        "runtime_recorder": build_runtime_recorder(settings),
+    }
 worker = AppsWorker(
     session_factory, cipher, publisher=publisher, github=UrllibGithubClient(),
-    route_cleanup=route_cleanup, route_refresh=route_refresh,
+    route_cleanup=route_cleanup, route_refresh=route_refresh, **runtime_options,
 )
 
 

@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .alloc import DEFAULT_CGROUP_DRIVER, LEGACY_CGROUP_DRIVER
+from .network import cell_dns_resolver
 from .plans import PlanExecutorMixin
 
 _SYSTEMD_DIR = Path("/etc/systemd/system")
@@ -164,6 +165,7 @@ def systemd_unit(
     name = f"spanel-{slug}"
     cell_dir = f"{_CELL_ROOT}/{slug}"
     socket = f"{cell_dir}/docker.sock"
+    resolver = cell_dns_resolver()
     if driver == DEFAULT_CGROUP_DRIVER:
         # AppArmor is attached with aa-exec: a user manager cannot use the
         # system unit's AppArmorProfile= directive. The user bus lets runc read
@@ -181,11 +183,14 @@ def systemd_unit(
             f"Environment=DOCKER_HOST=unix://{socket}\n"
             "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_DETACH_NETNS=false\n"
             "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_SLIRP4NETNS_SANDBOX=false\n"
+            "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=true\n"
+            f"Environment=SPANEL_TENANT_CELL_DNS={resolver}\n"
             f"ExecStart=/usr/bin/aa-exec -p spanel-cell-{slug} -- "
             "/usr/bin/dockerd-rootless.sh "
             f"--data-root {cell_dir} "
             f"--host unix://{socket} --config-file={cell_dir}/daemon.json "
-            "--iptables=false --ip6tables=false\n"
+            "--iptables=false --ip6tables=false "
+            "--dns ${SPANEL_TENANT_CELL_DNS}\n"
             "Restart=on-failure\n"
             "\n"
             "[Install]\n"
@@ -209,6 +214,8 @@ def systemd_unit(
         # slirp4netns' own mount sandbox conflicts with AppArmor mount rules;
         # the cell profile supplies confinement instead (verified in lab).
         "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_SLIRP4NETNS_SANDBOX=false\n"
+        "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=true\n"
+        f"Environment=SPANEL_TENANT_CELL_DNS={resolver}\n"
         # Bind the cell profile at exec, not by executable path: all execs in
         # the chain inherit it via the profile's ix rules.
         f"AppArmorProfile=spanel-cell-{slug}\n"
@@ -217,7 +224,8 @@ def systemd_unit(
         # rootlesskit port driver publishes loopback ports without iptables.
         f"ExecStart=/usr/bin/dockerd-rootless.sh --data-root {cell_dir} "
         f"--host unix://{socket} --config-file={cell_dir}/daemon.json "
-        "--iptables=false --ip6tables=false\n"
+        "--iptables=false --ip6tables=false "
+        "--dns ${SPANEL_TENANT_CELL_DNS}\n"
         "Restart=on-failure\n"
         "\n"
         "[Install]\n"

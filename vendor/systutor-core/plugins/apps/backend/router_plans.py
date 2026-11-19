@@ -37,7 +37,15 @@ def _tenant(context: TenantContext, tenant_id: str | None) -> str:
     return tenant_id
 
 
-@router.post("/plan", response_model=TenantPlanView, status_code=201)
+@router.post(
+    "/plan",
+    response_model=TenantPlanView,
+    status_code=201,
+    description=(
+        "Set the public tenant resource plan. The existing AppsTenantPlan "
+        "contract accepts memory_bytes=2147483648 for a 2 GiB plan."
+    ),
+)
 def put_plan(
     body: TenantPlanRequest,
     request: Request,
@@ -46,7 +54,7 @@ def put_plan(
     context: TenantContext = Depends(get_current_tenant_context),
     user: User = Depends(require_permission("apps.plans.manage")),
 ) -> dict:
-    """Persist the plan, materialize the slice, audit, return the effective plan."""
+    """Persist the public plan, including 2 GiB RAM, and return effective limits."""
     return plans_service.set_plan(
         db,
         tenant_id=_tenant(context, tenant_id),

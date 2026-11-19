@@ -9,12 +9,15 @@ Traefik uid; without it the spec falls back to a per-cell netns.
 from __future__ import annotations
 
 import os
+from ipaddress import IPv4Address
 from typing import Any
 
 from .alloc import validate_slug
 
 _TRAEFIK_UID_ENV = "SPANEL_TRAEFIK_UID"
 _DEFAULT_TRAEFIK_UID = 1000  # host uid of the single central Traefik service
+_CELL_DNS_ENV = "SPANEL_TENANT_CELL_DNS"
+_DEFAULT_CELL_DNS = "10.0.2.3"  # slirp4netns DNS reachable inside the rootless netns
 
 
 def traefik_uid() -> int:
@@ -29,6 +32,18 @@ def traefik_uid() -> int:
     if not 0 < value < 2**32:
         raise ValueError(f"{_TRAEFIK_UID_ENV} out of range")
     return value
+
+
+def cell_dns_resolver() -> str:
+    """Return the validated resolver passed to each cell's rootless dockerd."""
+    raw = os.environ.get(_CELL_DNS_ENV, _DEFAULT_CELL_DNS).strip()
+    try:
+        resolver = IPv4Address(raw)
+    except ValueError:
+        raise ValueError(f"{_CELL_DNS_ENV} must be an IPv4 address") from None
+    if resolver.is_loopback or resolver.is_multicast or resolver.is_unspecified:
+        raise ValueError(f"{_CELL_DNS_ENV} must be a reachable unicast resolver")
+    return str(resolver)
 
 
 def loopback_address(index: int) -> str:
