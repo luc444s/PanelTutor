@@ -146,6 +146,10 @@ Ver `aspecs/0107-tenant-resource-runtime-and-inventory.md` (documento de contrat
 - Inyecta `TenantRuntimeRegistry` en producción. Cada app/despliegue persiste su runtime;
   apagar la bandera no pierde lo migrado. Rollback restaura rutas + runtime, sin borrar
   contenedores rootful hasta confirmar recuperación.
+- Criterio E2E simple (definido por el usuario): software para editores en un tenant de
+  **512 MB / 1 núcleo**, revisar HTTP 200 y, tras aplicar estrés dentro del tenant, exigir
+  que el estrés quede aislado (Core y otros tenants intactos) para dar PASS.
+- Impacto en scripts de operador: ver §6 — **`app_deploy.py` será distinto**.
 
 ### A.SPEC 0110 — WP/estáticos → rootless + PMA global + consistencia
 
@@ -172,7 +176,26 @@ Ver `aspecs/0107-tenant-resource-runtime-and-inventory.md` (documento de contrat
   gestionable desde spanel, PMA global alcanzando su DB, mínimo contractual de correo,
   Core intacto, banderas reversibles, producción intacta.
 
-## 6. Estado
+## 6. Impacto en scripts de operador
+
+La 0109 **no modifica ni depreca scripts por contrato** (su `change_surface` no incluye
+`scripts/**`), pero el comportamiento no es uniforme:
+
+| Script | Ruta que usa | Efecto de la v1 |
+|---|---|---|
+| `scripts/spanel_apps.py` | API `/api/v1/plugins/apps` | Sin cambios: hereda el runtime rootless automáticamente, porque pasa por el worker. |
+| `scripts/e2e_apps_*.py` (los que usan API) | API | Sin cambios funcionales; pueden añadir asserts de que el socket es el de la celda. |
+| **`scripts/app_deploy.py`** | importa `apps.backend.runtime` y construye `Runner(transport)` **directamente** | **Será distinto.** Hoy es un escape hatch rootful que se salta el worker y el registry. Deja de ser la vía de creación directa: se le dará el `docker.sock` de la celda del tenant **o** se limitará a auditoría/depuración y se deprecará para creación. Decisión de alcance pendiente (spec de cierre). |
+| `scripts/configure_apps.py`, `configure_apps_release_key.py` | configuración/secretos | Sin cambios. |
+| `scripts/tenant_cell/*` (CLI `spanel-tenant`) | host rootless (0108) | Sin cambios; ya es la herramienta del userspace. |
+| `scripts/benchmark_domains_global.py`, `scripts/e2e_apps_software_editores.py` | runtime directo, solo pruebas | No son rutas de creación del panel; sin cambios. |
+
+**Consecuencia:** desde el panel (API) "crear app" ya nace en sandbox con 0109. Para que
+también sea así desde CLI de operador hay que cerrar explícitamente el caso
+`app_deploy.py`; queda registrado aquí como trabajo pendiente, no como efecto colateral
+silencioso.
+
+## 7. Estado
 
 - Correcciones incorporadas. A.SPEC 0107 redactada, ejecutada con GENERATOR
   (`openai/gpt-5.6-sol#medium`) y verificada: 79 tests + ruff + tsc PASS, y E2E black-box
@@ -186,4 +209,7 @@ Ver `aspecs/0107-tenant-resource-runtime-and-inventory.md` (documento de contrat
   RAM efectiva en cgroups v2 bajo carga, contenedor sin EPERM, dry-run sin mutación,
   `migrate --all` secuencial con DMS excluido y rollback con `systemctl revert`.
   **Compuerta abierta: 0109 y 0110 ya pueden ejecutarse.**
-- Pendiente: commit de 0108 sobre `remove-hardener`.
+- 0108 commiteada y pusheada: `5d88462` (implementación + reparación de 3 gaps de E2E)
+  y `2e118f3` (trazabilidad).
+- 0109 redactada (`aspecs/0109-apps-rootless-sandbox.md`), **sin ejecutar**; pendiente de
+  aprobación para correr GENERATOR + E2E con el guion editor → estrés → aislamiento.
