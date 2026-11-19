@@ -188,15 +188,34 @@ change_surface:
   decisión A + D del usuario, con migración y compatibilidad legacy.
 - owner: lucas
 - approver: lucas
-- Commit: (pendiente; NO ejecutada)
-- Evidence: `artifacts/0109-r3-cell-plumbing-and-cutover-e2e.json` (FAIL 0/4).
+- Commit: `672b0ca` (base R4) + `0cfb879` (cierre: ingress rootless, rollback
+  con plan, cleanup app-aware, check 3/4 y downgrade 005 en PASS).
+- Evidence (oficial PASS):
+  `artifacts/0109-r4-host-nat-and-domains-owned-hosts-e2e.json`
+  (`ok: true`, 4/4 checks, downgrade 005, `cleanup_verified: true`).
+- Evidence (E2E acotado previo): `artifacts/0109-r4-editors-rootless-blackbox-e2e.json`.
+- Report: `artifacts/0109-r4-informe-final.md`.
 - Deployment: laboratorio `spanel.lab`; sin producción.
+
+### Surface extension (autorizada por el usuario)
+
+El usuario autorizó expresamente no limitarse al change surface original para
+lograr un PASS real. Además de la superficie planificada se tocaron, con tests:
+
+- `plugins/apps/backend/worker.py`, `runtime/deployment.py`,
+  `runtime/probes.py`, `releases/execution.py`, `releases/scoped_execution.py`,
+  `tasks.py` — publicación real del ingress, red `spanel-ingress`, bindings
+  loopback en rootless, plan de recursos en rollback y cleanup app-aware.
+- `plugins/domains/backend/proxy/core.py` — omitir `middlewares` vacío (Traefik
+  descartaba el documento completo).
+- Tests de regresión en apps y dominios; E2E
+  `scripts/e2e_0109_r4_blackbox.py`.
 
 ## Definition of Done
 
-- [ ] Objective satisfied (4 checks del E2E en PASS sin parches manuales)
-- [ ] Contract satisfied
-- [ ] Invariants preserved (Core, contrato y legacy)
-- [ ] Verification passed
-- [ ] Rollback honest (downgrade 005 ejecutado en VERIFICATION)
-- [ ] E2E black-box PASS + limpieza verificada
+- [x] Objective satisfied (4 checks del E2E en PASS sin parches manuales)
+- [x] Contract satisfied
+- [x] Invariants preserved (Core, contrato y legacy)
+- [x] Verification passed
+- [x] Rollback honest (downgrade 005 ejecutado en VERIFICATION)
+- [x] E2E black-box PASS + limpieza verificada
