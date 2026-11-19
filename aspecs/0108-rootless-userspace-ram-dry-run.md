@@ -294,7 +294,7 @@ structural_constraints:
   `dry-run`, exclusión Core, parada ante fallos).
 - owner: lucas
 - approver: lucas
-- Commit: (pendiente de asignar al commitear esta spec).
+- Commit: `5d88462` (implementación, reparación de gaps, spec, plan y artefacto E2E).
 - Evidence: `artifacts/0108-rootless-userspace-ram-dry-run-e2e.json` (PASS 8/8, 0 gaps;
   OwnerUID y slice preservados, cgroups v2 efectivos bajo carga vía CLI `plan probe`,
   contenedor rootless sin EPERM, dry-run sin mutación, `spanel-mail` excluido, rollback con
