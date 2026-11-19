@@ -1,84 +1,860 @@
 {
-  "spec": "0109-r4-host-nat-and-domains-owned-hosts",
-  "date": "2026-11-19T19:45:00Z",
-  "result": "BLOCKED",
-  "result_reason": "Reintento pausado por el usuario antes de completar los 4 checks. Checks 1 y 2 CONFIRMADOS en PASS con evidencia black-box; check 3 NO convergió (running/claim sostenido, probe de readiness contra la red rootful mientras el deploy rootless creó los contenedores en la celda) y check 4 NO EJECUTADO; downgrade 005 NO EJECUTADO. No se ha escrito ningún PASS inferido. Este artefacto sobrescribe el FAIL 0/4 anterior con el estado real parcial de este reintento.",
-  "environment": {
-    "target": "spanel.lab (NO spanel.app)",
-    "host": "lucas@100.67.5.50 (lucas-ThinkPad-E570), Docker 29.1.3, kernel 7.0.0-28-generic, cgroups v2, AppArmor enforce, nft skuid",
-    "access": "SSH con sshpass -e (password en SSHPASS, nunca en argv); sudo -S con la misma credencial.",
-    "code_under_test": "Working tree sin commitear de remove-hardener copiado sin .git a /var/tmp/spanel-e2e-0109r4v2/stage. Hashes verificados: executor=447a67cf5f27d8d1..., cells=94abae56e04b386e..., host_agent=54ac555e62b3371f..., network=8263396d14db5cc2..., 005=821b1d4bdcde4d5..., app_hosts=e8e2ed83ff7721459.... No se modificó código de la aplicación, perfil ni migración.",
-    "database": "Clon desechable sysadmin_e2e0109r4v2 de sysadmin (pg_dump/pg_restore). Solo en el clon se cambió el slug del Demo Tenant a e2e0109r4v2 y se ejecutó el seed del propio entrypoint para sincronizar permisos (apps.plans.manage). La BD viva no se modificó; el clon se eliminó al final.",
-    "method": "API publica en 127.0.0.1:3010 con Host: spanel.lab (image spanel-app:latest con el stage montado sobre /app/vendor/systutor-core y /app/plugins), worker dramatiq apps + events, plan-agent y edge-relay privilegiados. Observacion externa con systemd --user, docker, cgroups, ss, nsenter+iptables dentro/fuera del netns, AppArmor, dmesg y PID/hash de los 6 Core. Sin MASQUERADE manual, sin puente TCP y sin Alembic CLI.",
-    "harness_config": "SPANEL_TENANTS_ROOTLESS=true y SPANEL_APPS_PROBE_BASELINE=rootless se fijaron SOLO en el entorno desechable para ejercer la via rootless. Se monto /var/lib/spanel/cells en el worker para alcanzar el socket de la celda. El relay preexistente tenia su ejecutable borrado antes de este run (ya documentado en el artefacto R4 anterior) y se restauro en su ruta original /home/lucas/.local/lib/spanel-edge-relay desde el stage, con el mismo --bind 172.25.0.1. Ninguno de estos puntos es un parche de codigo.",
-    "fixture": "luc444s/software-de-gestion-para-editores, branch feature/workflow-diseno, docker-compose.dokploy.yml, tres servicios (backend, database, frontend)",
-    "migration_runtime": "El runtime migrador de plugins aplico 005 al habilitar domains: plugin_registry.migration_version=005_rootless_app_hosts, state=enabled, tabla domains_app_hosts creada con https BOOLEAN DEFAULT false. POST/GET /api/v1/plugins/domains/app-hosts quedaron montados (presentes en OpenAPI). El DOWNGRADE de 005 NO se ejecuto porque el run se pauso antes de completar check 3."
+  "active_deployment": "20873c0f-118e-4455-8d3d-0bbae9c347ab",
+  "agents": {
+    "edge_relay": {
+      "bind": "172.25.0.1",
+      "listener": "LISTEN 0      16                                172.25.0.1:40070      0.0.0.0:*    users:((\"python\",pid=265216,fd=3))",
+      "pid": 265216,
+      "relay_port": 40070,
+      "source": "172.25.0.3"
+    },
+    "plan_agent": {
+      "pid": 265193,
+      "socket": "/run/spanel/plan-agent.sock"
+    },
+    "token_sha256": "aec0283697c113bac187e0636bebaf0d1d12ac24fe89b18a8f1cfd17fff9653a"
   },
+  "app_host": {
+    "application_id": "a291b616-0292-4beb-a1f7-31469a6897b3",
+    "domain": "editores-e2e0109r4v12.lab",
+    "https": false,
+    "service": "frontend",
+    "site_id": "a291b616-0292-4beb-a1f7-31469a6897b3:frontend",
+    "tenant_id": null
+  },
+  "apparmor": {
+    "audit_deny_rules_preserved": 8,
+    "denied_from_first_boot": 0,
+    "note": "Solo se registra el delta real de dmesg; sin parches de perfil.",
+    "profile": "spanel-cell-e2e0109r4v12 (retirado en la limpieza)"
+  },
+  "application": {
+    "domain": null,
+    "id": "a291b616-0292-4beb-a1f7-31469a6897b3",
+    "slug": "e2e-software-editores-bfcff340",
+    "tenant_id": "658e5ca2-00a4-4672-b5c5-f093db3066fa"
+  },
+  "application_deleted": true,
+  "cell": {
+    "apparmor": {
+      "effective": true,
+      "hash": "e4c7320c9b9bb6988db3d8812ec7c4139213653efeb83f822062ec7404ff4192",
+      "profile": "spanel-cell-e2e0109r4v12"
+    },
+    "cgroup_driver": "systemd",
+    "cgroup_path": "/user.slice/user-60070.slice/user@60070.service/user.slice/spanel-cell-e2e0109r4v12.scope",
+    "gid_map": [
+      {
+        "count": 1,
+        "host_id": 0,
+        "inner_id": 60070
+      },
+      {
+        "count": 65536,
+        "host_id": 1,
+        "inner_id": 4713056
+      }
+    ],
+    "network_mode": "skuid",
+    "slug": "e2e0109r4v12",
+    "socket_path": "/var/lib/spanel/cells/e2e0109r4v12/docker.sock",
+    "state": "ready",
+    "uid": 60070,
+    "uid_map": [
+      {
+        "count": 1,
+        "host_id": 0,
+        "inner_id": 60070
+      },
+      {
+        "count": 65536,
+        "host_id": 1,
+        "inner_id": 4713056
+      }
+    ]
+  },
+  "cell_leftovers": "",
   "checks": [
     {
+      "command": "provision with SPANEL_TENANT_CELL_DNS=192.168.18.1; compare dockerd/MainPID host netns; iptables -t nat -S inside the cell netns and on the host; docker run --rm alpine wget https://registry.npmjs.org/vite; AppArmor dmesg and unit audit",
       "name": "egress_without_manual_nat",
-      "command": "provision --slug e2e0109r4v2 --json con SPANEL_TENANT_CELL_DNS=192.168.18.1; compare /proc/<pid>/ns/net del MainPID y del dockerd real con /proc/1/ns/net; iptables -t nat -S dentro del netns de la celda y en el host; docker run --rm alpine wget https://registry.npmjs.org/vite por el socket de la celda; dmesg audit deny",
-      "output": "PASS. provision -> state=ready, uid=60070, apparmor.effective=true; unidad systemd --user ActiveState=active/SubState=running, MainPID=3566749. El MainPID/rootlesskit esta en net:[4026531833] (netns del host), pero el dockerd real de la celda es PID 3566797 (padre 3566766) en net:[4026535904], inode distinto. Dentro de ese netns: '-A POSTROUTING -s 172.17.0.0/16 -j MASQUERADE'. En el host NO aparecio regla simple nueva: solo la preexistente '-A POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE'. El unit conserva --iptables=false --ip6tables=false sin ExecStartPost/ExecStopPost. wget -> NET_OK sin MASQUERADE manual. 0 DENIED desde el primer arranque; 8 audit deny intactas. El bug de R4 (regla en el host por usar el PID rootlesskit) NO se reproduce.",
+      "output": "{\"audit_deny_rules\": 8, \"cell_postrouting\": [\"-P POSTROUTING ACCEPT\", \"-A POSTROUTING -s 172.17.0.0/16 -j MASQUERADE\"], \"dmesg_denied_after\": 4, \"dmesg_denied_before\": 4, \"dockerd_pid\": 265099, \"egress_exit\": 0, \"egress_output\": \"NET_OK\", \"host_postrouting\": [\"-P POSTROUTING ACCEPT\", \"-A POSTROUTING -s 192.168.32.0/20 ! -o br-ca8621f6c80d -j MASQUERADE\", \"-A POSTROUTING -s 192.168.0.0/20 ! -o br-eaf066cc153c -j MASQUERADE\", \"-A POSTROUTING -s 172.30.0.0/16 ! -o br-d14b056196b0 -j MASQUERADE\", \"-A POSTROUTING -s 172.29.0.0/16 ! -o br-a9af12614a9c -j MASQUERADE\", \"-A POSTROUTING -s 172.28.0.0/16 ! -o br-cfd8c6d5d965 -j MASQUERADE\", \"-A POSTROUTING -s 172.27.0.0/16 ! -o br-05d1d421e960 -j MASQUERADE\", \"-A POSTROUTING -j ts-postrouting\", \"-A POSTROUTING -s 172.26.0.0/16 ! -o br-92b0c29c58d1 -j MASQUERADE\", \"-A POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE\", \"-A POSTROUTING -s 172.24.0.0/16 ! -o br-b90a1d4e52e9 -j MASQUERADE\", \"-A POSTROUTING -s 172.18.0.0/16 ! -o br-9dfa1c15151d -j MASQUERADE\", \"-A POSTROUTING -s 172.22.0.0/16 ! -o br-8839edbd347c -j MASQUERADE\", \"-A POSTROUTING -s 172.21.0.0/16 ! -o br-4b2d3ea1b961 -j MASQUERADE\", \"-A POSTROUTING -s 172.25.0.0/16 ! -o br-019861ab7f35 -j MASQUERADE\", \"-A POSTROUTING -s 172.31.99.0/24 ! -o br-fe51c43c5dc1 -j MASQUERADE\", \"-A POSTROUTING -s 172.19.0.0/16 ! -o br-e53cc14bb122 -j MASQUERADE\", \"-A POSTROUTING -s 172.23.0.0/16 ! -o br-df417a5565e5 -j MASQUERADE\", \"-A POSTROUTING -s 172.20.0.0/16 ! -o br-7556bc5fbb37 -j MASQUERADE\", \"-A POSTROUTING -j LIBVIRT_PRT\"], \"host_rule_absent\": true, \"ip6tables_false\": true, \"iptables_false\": true, \"netns_cell\": \"net:[4026532709]\", \"netns_host\": \"net:[4026531833]\", \"pass\": true, \"uid\": 60070, \"unit\": \"/etc/systemd/user/spanel-cell-e2e0109r4v12.service\", \"unit_has_exec_post\": false}",
       "pass": true
     },
     {
+      "command": "POST /api/v1/plugins/apps/plan {memory_bytes:2147483648, cpus:1, pids:512} before deploy; POST /applications, inspect, deploy; verify 3 services, per-service memory, and user cgroup limits",
       "name": "aggregate_2gb_from_first_deploy",
-      "command": "POST /api/v1/plugins/apps/plan {memory_bytes:2147483648,cpus:1,pids:512} ANTES del deploy; POST /applications; POST /applications/{id}/deployments; GET /operations/{id}; cat /sys/fs/cgroup/user.slice/user-60070.slice/user@60070.service/{memory.max,cpu.max,pids.max}",
-      "output": "PASS. Plan HTTP 201 status=applied, applied_at=2026-11-19T18:23:16Z, memory.max=2147483648, cpu.max='100000 100000', pids.max=512 (verificado de nuevo tras el deploy). App HTTP 201 con domain=null/ingress=null (catalog.py no persiste domain, segun el contrato). Operacion 61284bcd-ab2f-46f2-b982-f16abbc5ef7e -> status=succeeded, phase=complete, result.status=running, effective_services=[backend,database,frontend], memory_budget_bytes=2147483648, per-servicio memory=715827882 (1/3 de 2 GiB). NO aparecio 'service backend memory limit is invalid'. Nota de harness: la primera invocacion del plan dio 403 hasta que se ejecuto el seed del entrypoint que sincroniza apps.plans.manage al rol admin; esto es preparacion del clon, no un resultado de producto.",
+      "output": "{\"active_deployment\": \"ec6166e4-fc8c-47b2-bbaf-51b9e9a2dde7\", \"cgroup_limits_after_deploy\": {\"cpu.max\": \"100000 100000\", \"memory.max\": \"2147483648\", \"pids.max\": \"512\"}, \"cgroup_limits_before_deploy\": {\"cpu.max\": \"100000 100000\", \"memory.max\": \"2147483648\", \"pids.max\": \"512\"}, \"cgroup_uid\": 60070, \"containers\": [\"backend\", \"database\", \"frontend\"], \"deploy_operation\": {\"phase\": \"complete\", \"result\": {\"artifact_sha256\": \"4f4e2d44343162467577681b89a3d8ea1b278ce7cc6913a99c2e8138074f26a3\", \"branch\": \"feature/workflow-diseno\", \"commit\": \"ae33f9d10f6263d975bcb1bfdb8650a7021dff23\", \"compose_sha256\": \"2d1c62149a0fb09a381b50fc614aaa49167b7c1076bd9a42417f1f5152fb432f\", \"created_at\": \"2026-11-19T21:59:41.523340+00:00\", \"deployment_id\": \"ec6166e4-fc8c-47b2-bbaf-51b9e9a2dde7\", \"expires_at\": \"2026-11-20T21:59:41.523340+00:00\", \"gate_sha256\": \"20ba9ac2fee9e045679b96b99b1ea55c763d941014b34c3f8d8b59d4bd5b6a2f\", \"hardened_tree_sha256\": \"b6f6de3d0ef9636a513d041efdfe6f3ba829defd13812b2711e3ca767edb38fd\", \"key_id\": \"165a05fc\", \"policy_sha256\": \"7db9dd3f165b6a04db7d17070569ae678afb336683597b5bc24999dd60c42994\", \"release_id\": \"66db4f7f-4c5f-494c-92b2-b60247ec0f35\", \"repo\": \"luc444s/software-de-gestion-para-editores\", \"scope\": {\"effective_services\": [\"backend\", \"database\", \"frontend\"], \"fallback_reason\": null, \"requested_scope\": \"global\", \"requested_service\": null, \"strategy\": \"initial\"}, \"service_fingerprints\": {\"backend\": \"bb42d0326f8f33373f6346552ae28c8f4f227c8f1958e46938d6ca2988b5b781\", \"database\": \"405675bc4a500f64a50ecdb270de464793d3fdb2c09dbb06c26296345a1fde3c\", \"frontend\": \"b731f96ac21aec6b535e5620084b7312acee9f14230d6f7c0be0fba366f5bf5c\"}, \"shared_fingerprint\": \"5aafd24d71b3252d195d6cd3906c39ea4eaa422d033cbafa48a04bb0d33bc7c4\", \"status\": \"running\"}, \"status\": \"succeeded\"}, \"effective_services\": [\"backend\", \"database\", \"frontend\"], \"expected_per_service_memory\": 715827882, \"manifest_probes\": {\"baseline\": \"rootless\", \"functional\": {\"checks\": [{\"bytes\": 726, \"read_only\": false, \"returncode\": 0, \"sha256\": \"b012b34bbbcb353edb7b2c818f53c83622c8a1b317aba6731a3c8af003b8857e\"}, {\"bytes\": 3, \"read_only\": false, \"returncode\": 0, \"sha256\": \"27badc983df1780b60c2b3fa9d3a19a00e46aac798451f0febdca52920faaddf\"}], \"image\": \"curlimages/curl@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b\"}, \"isolation\": {\"backend\": {\"apparmor\": \"\", \"baseline\": \"rootless\", \"limits\": {\"memory\": 715827882, \"nano_cpus\": 333332992, \"pids\": 170}, \"memory_budget_bytes\": 2147483648, \"network_internal\": {\"app-4b638a921c2948ffac627130_default\": true}, \"networks\": [\"app-4b638a921c2948ffac627130_default\"], \"processes\": 1, \"runtime\": \"runc\", \"seccomp\": \"builtin\", \"user\": \"app\", \"user_namespace\": true, \"writable_rootfs\": true}, \"database\": {\"apparmor\": \"\", \"baseline\": \"rootless\", \"limits\": {\"memory\": 715827882, \"nano_cpus\": 333332992, \"pids\": 170}, \"memory_budget_bytes\": 2147483648, \"network_internal\": {\"app-4b638a921c2948ffac627130_default\": true}, \"networks\": [\"app-4b638a921c2948ffac627130_default\"], \"processes\": 6, \"runtime\": \"runc\", \"seccomp\": \"builtin\", \"user\": \"postgres\", \"user_namespace\": true, \"writable_rootfs\": true}, \"frontend\": {\"apparmor\": \"\", \"baseline\": \"rootless\", \"limits\": {\"memory\": 715827882, \"nano_cpus\": 333332992, \"pids\": 170}, \"memory_budget_bytes\": 2147483648, \"network_internal\": {\"app-4b638a921c2948ffac627130_default\": true, \"app-4b638a921c2948ffac627130_spanel-ingress\": false}, \"networks\": [\"app-4b638a921c2948ffac627130_default\", \"app-4b638a921c2948ffac627130_spanel-ingress\"], \"processes\": 5, \"runtime\": \"runc\", \"seccomp\": \"builtin\", \"user\": \"101\", \"user_namespace\": true, \"writable_rootfs\": true}}, \"network\": \"app-4b638a921c2948ffac627130_default\", \"service_networks\": {\"backend\": [\"app-4b638a921c2948ffac627130_default\"], \"database\": [\"app-4b638a921c2948ffac627130_default\"], \"frontend\": [\"app-4b638a921c2948ffac627130_default\", \"app-4b638a921c2948ffac627130_spanel-ingress\"]}, \"stability\": {\"checks\": 2, \"restart_counts\": {\"backend\": 0, \"database\": 0, \"frontend\": 0}, \"window_seconds\": 4}}, \"pass\": true, \"per_service_memory\": {\"backend\": 715827882, \"database\": 715827882, \"frontend\": 715827882}, \"plan\": {\"applied_at\": \"2026-11-19T21:59:04.578997Z\", \"cgroup_path\": \"/tenant.slice/tenant-e2e0109r4v12.slice\", \"cpus\": 1.0, \"cpuset\": null, \"last_error\": null, \"memory_bytes\": 2147483648, \"pids\": 512, \"slice\": \"tenant-e2e0109r4v12.slice\", \"status\": \"applied\", \"tenant_id\": \"658e5ca2-00a4-4672-b5c5-f093db3066fa\", \"tenant_slug\": \"e2e0109r4v12\", \"updated_at\": \"2026-11-19T21:59:04.583141Z\"}, \"verify\": {\"cgroup_path\": \"/user.slice/user-60070.slice/user@60070.service\", \"evidence\": {\"cgroup_path\": \"/user.slice/user-60070.slice/user@60070.service\", \"cpu_delta_usec\": 3125192, \"cpu_max\": \"100000 100000\", \"eperm\": false, \"expected\": {\"cpu_max\": \"100000 100000\", \"memory_max\": \"2147483648\", \"pids_max\": \"512\"}, \"memory_events\": \"low 0\\nhigh 0\\nmax 0\\noom 0\\noom_kill 0\\noom_group_kill 0\\nsock_throttled 0\", \"memory_max\": \"2147483648\", \"memory_throttled\": false, \"ok\": true, \"owner_uid\": \"60070\", \"pids_max\": \"512\", \"rootless\": {\"container_cgroup\": \"/user.slice/user-60070.slice/user@60070.service/user.slice/docker-759a5b5605a35be4935f9cd55c7ed37c8a33d1bcfc6b8ea2999d6bf504cbfa48.scope\", \"container_pid\": 267695, \"user_manager_cgroup\": \"/user.slice/user-60070.slice/user@60070.service/init.scope\"}, \"slice\": \"user-60070.slice\", \"slug\": \"e2e0109r4v12\"}, \"ok\": true, \"owner_uid\": \"60070\", \"plan\": {\"cpus\": 1.0, \"memory\": 2147483648, \"pids\": 512}, \"properties\": {}, \"slice\": \"user-60070.slice\", \"slug\": \"e2e0109r4v12\", \"tenant_id\": \"658e5ca2-00a4-4672-b5c5-f093db3066fa\", \"tenant_slug\": \"e2e0109r4v12\"}, \"verify_error\": \"POST /api/v1/plugins/apps/plan/verify returned HTTP 502: Plan verification failed\"}",
       "pass": true
     },
     {
+      "command": "POST /plugins/domains/app-hosts {application_id, service:frontend, domain:editores-<slug>.lab, https:false}; process the real outbox; observe cell listener, relay listener, spanel-*.yml and curl -H Host http://127.0.0.1:9080/",
       "name": "published_route_no_bridge",
-      "command": "POST /api/v1/plugins/domains/app-hosts {application_id,service:'frontend',domain:'editores-0109r4v2.lab'}; ver evento domains.domain.added y outbox; refresh via app.state.rootless_routes; observar listener 127.71.1.1:20070, relay 172.25.0.1:40070, spanel-*.yml y curl -H 'Host: editores-0109r4v2.lab' http://127.0.0.1:9080/",
-      "output": "FAIL / NO CONVERGIO. Migracion 005 aplicada y app-hosts activo: POST devolvio HTTP 201 con site_id='<appid>:frontend' y la fila en domains_app_hosts tiene tenant_id=658e5ca2-... (propiedad del tenant correcta). El evento domains.domain.added se emitio (event_logs) y su fila de event_outbox paso a 'processed' tras drenar el outbox con la propia funcion del producto. La llamada directa al metododel producto app.state.rootless_routes.refresh(...) devolvio {'published':['editores-0109r4v2.lab'], 'host':'editores-0109r4v2.lab', 'slug':'e2e0109r4v2', 'endpoint':{loopback_address:'127.71.1.1', publish_port:20070, relay_port:40070, bind:'172.18.0.1'}} y escribio dynamic/spanel-route-216c23962cadb4f85f0a.yml apuntando al relay (backend http://172.18.0.1:40070). El relay se reinicio con SPANEL_EDGE_RELAY_BIND=172.25.0.1 y su status incluia el endpoint de la celda (bind 172.25.0.1:40070 -> 127.71.1.1:20070). PERO: (a) el bind inicial del plan-agent era 172.18.0.1 y el YAML quedo apuntando a esa IP, no a 172.25.0.1; (b) con SPANEL_TENANTS_ROOTLESS=true los contenedores del release se crearon en el daemon rootless de la celda (frontend/backend/database Up y healthy en /var/lib/spanel/cells/e2e0109r4v2/docker.sock), pero no existio el listener 127.71.1.1:20070; (c) la operacion de re-despliegue be6a638a-d55f-4ca2-9160-315afc930dfb quedo en status=running/phase=claim durante las 20 iteraciones del poll; el proceso observable del worker fue 'docker run --rm --network app-60fa545254874f45b836fbb9_default ... curlimages/curl ... curl -sS ... http://frontend:8080/' (red del daemon rootful). No hubo HTTP 200 del editor por el dominio (curl con Host devolvio 301 de redirect HTTPS, sin backend alcanzable). No se uso puente TCP ni MASQUERADE manual. Fallback legacy y HTTP 200 NO demostrados.",
-      "pass": false
+      "output": "{\"backend\": \"172.25.0.1:40070\", \"body_bytes\": 394, \"body_preview\": \"<!doctype html>\\n<html lang=\\\"es\\\">\\n  <head><meta charset=\\\"UTF-8\\\" /><meta name=\\\"viewport\\\" content=\\\"width=device-width, initial-scale=1.0\\\" /><title>Panel Editor</title>  <script type=\\\"module\\\" crossorigin src=\\\"/assets/index-CeSkNvW9.js\\\"></script>\\n  <link rel=\\\"stylesheet\\\" crossorigin href=\\\"/assets/index-B\", \"body_sha256\": \"228253844123c8d6b57e468220393835828eae1438ad7eb18fd00289a7c94895\", \"cell_listener\": \"LISTEN 0      4096                              127.71.1.1:20070      0.0.0.0:*    users:((\\\"rootlesskit\\\",pid=265053,fd=14))\", \"domain\": \"editores-e2e0109r4v12.lab\", \"endpoint\": {\"index\": 70, \"loopback_address\": \"127.71.1.1\", \"publish_port\": 20070, \"relay_port\": 40070, \"slug\": \"e2e0109r4v12\"}, \"http_status\": \"200\", \"manual_tcp_bridge\": false, \"outbox_dispatch\": {\"batches\": [{\"failed\": 0, \"processed\": 13, \"total\": 13}, {\"failed\": 0, \"processed\": 0, \"total\": 0}], \"processed\": 13}, \"pass\": true, \"relay_listener\": \"LISTEN 0      16                                172.25.0.1:40070      0.0.0.0:*    users:((\\\"python\\\",pid=265216,fd=3))\", \"route_documents\": [{\"content\": \"# managed-by: spanel\\nhttp:\\n  routers:\\n    spanel-editores-e2e0109r4v12-lab-route-path-1:\\n      rule: Host(`editores-e2e0109r4v12.lab`)\\n      entryPoints:\\n      - web\\n      service: spanel-editores-e2e0109r4v12-lab-route-path-1\\n      priority: 401\\n  services:\\n    spanel-editores-e2e0109r4v12-lab-route-path-1:\\n      loadBalancer:\\n        servers:\\n        - url: http://172.25.0.1:40070\\n\", \"path\": \"/home/lucas/mailadmin/scripts/traefik-lab/dynamic/spanel-route-fa8f3517c8ce426b7299.yml\", \"sha256\": \"9b3223e77183d4c6bad855f1dce3d40f240c0de94c95bab70bf3e8416975e353\"}]}",
+      "pass": true
     },
     {
+      "command": "second real deploy; POST /applications/{id}/rollback to the first signed release; verify route/runtime restored, rootful fixture preserved, then restart with SPANEL_TENANTS_ROOTLESS=false and verify runtime rows are not rewritten",
       "name": "rollback_rehearsal",
-      "command": "POST /applications/{id}/rollback con deployment real; observar ruta/runtime previos, contenedor rootful conservado y bandera SPANEL_TENANTS_ROOTLESS=false",
-      "output": "FAIL / NO EJECUTADO. No hubo un deploy rootless convergido con ruta publicada que restaurar: el re-despliegue rootless quedo en running/claim y el check 3 no cerro. No se fabrico metadata ni se simulo un cutover. Los contenedores rootful preexistentes del fixture se conservaron con sus IDs y estado Up; la tabla tenant_resource_runtimes del clon estaba vacia (el laboratorio corre rootful por defecto), por lo que tampoco existia un runtime migrado que demostrara que SPANEL_TENANTS_ROOTLESS=false no lo reescribe. Sin ejecutar: rollback real, conservacion de ruta/runtime y verificacion de la bandera.",
-      "pass": false
+      "output": "{\"first_deployment\": \"ec6166e4-fc8c-47b2-bbaf-51b9e9a2dde7\", \"flag_false_active_release\": \"/var/tmp/spanel-e2e-0109r4/state/app-4b638a921c2948ffac627130/releases/66db4f7f-4c5f-494c-92b2-b60247ec0f35\", \"flag_false_api_error\": null, \"flag_false_cell_containers\": [\"app-4b638a921c2948ffac627130-frontend-1\\tUp About a minute (healthy)\", \"app-4b638a921c2948ffac627130-backend-1\\tUp 2 minutes (healthy)\", \"app-4b638a921c2948ffac627130-database-1\\tUp 2 minutes (healthy)\"], \"flag_false_pass\": true, \"flag_false_runtime_after\": [\"a291b616-0292-4beb-a1f7-31469a6897b3:backend=rootless\", \"a291b616-0292-4beb-a1f7-31469a6897b3:database=rootless\", \"a291b616-0292-4beb-a1f7-31469a6897b3:frontend=rootless\"], \"flag_false_runtime_before\": [\"a291b616-0292-4beb-a1f7-31469a6897b3:backend=rootless\", \"a291b616-0292-4beb-a1f7-31469a6897b3:database=rootless\", \"a291b616-0292-4beb-a1f7-31469a6897b3:frontend=rootless\"], \"pass\": true, \"restored_commit\": \"ae33f9d10f6263d975bcb1bfdb8650a7021dff23\", \"restored_deployment\": \"20873c0f-118e-4455-8d3d-0bbae9c347ab\", \"restored_release\": \"/var/tmp/spanel-e2e-0109r4/state/app-4b638a921c2948ffac627130/releases/66db4f7f-4c5f-494c-92b2-b60247ec0f35\", \"rollback_operation\": {\"artifact_sha256\": \"4f4e2d44343162467577681b89a3d8ea1b278ce7cc6913a99c2e8138074f26a3\", \"branch\": \"feature/workflow-diseno\", \"commit\": \"ae33f9d10f6263d975bcb1bfdb8650a7021dff23\", \"compose_sha256\": \"2d1c62149a0fb09a381b50fc614aaa49167b7c1076bd9a42417f1f5152fb432f\", \"created_at\": \"2026-11-19T21:59:41.523340+00:00\", \"deployment_id\": \"20873c0f-118e-4455-8d3d-0bbae9c347ab\", \"expires_at\": \"2026-11-20T21:59:41.523340+00:00\", \"gate_sha256\": \"20ba9ac2fee9e045679b96b99b1ea55c763d941014b34c3f8d8b59d4bd5b6a2f\", \"hardened_tree_sha256\": \"b6f6de3d0ef9636a513d041efdfe6f3ba829defd13812b2711e3ca767edb38fd\", \"key_id\": \"165a05fc\", \"policy_sha256\": \"7db9dd3f165b6a04db7d17070569ae678afb336683597b5bc24999dd60c42994\", \"release_id\": \"66db4f7f-4c5f-494c-92b2-b60247ec0f35\", \"repo\": \"luc444s/software-de-gestion-para-editores\", \"rollback\": true, \"scope\": {\"effective_services\": [], \"fallback_reason\": null, \"requested_scope\": \"global\", \"requested_service\": null, \"strategy\": \"noop\"}, \"service_fingerprints\": {\"backend\": \"bb42d0326f8f33373f6346552ae28c8f4f227c8f1958e46938d6ca2988b5b781\", \"database\": \"405675bc4a500f64a50ecdb270de464793d3fdb2c09dbb06c26296345a1fde3c\", \"frontend\": \"b731f96ac21aec6b535e5620084b7312acee9f14230d6f7c0be0fba366f5bf5c\"}, \"shared_fingerprint\": \"5aafd24d71b3252d195d6cd3906c39ea4eaa422d033cbafa48a04bb0d33bc7c4\", \"status\": \"running\"}, \"rootful_fixture_after\": {\"software-de-gestion-para-editores-main_backend_1\": \"a5be3f828345 Up 2 weeks (healthy)\", \"software-de-gestion-para-editores-main_db_1\": \"bc7e1dece0cd Up 2 weeks (healthy)\", \"software-de-gestion-para-editores-main_frontend_1\": \"32f019b85a1a Up 2 weeks\"}, \"rootful_fixture_before\": {\"software-de-gestion-para-editores-main_backend_1\": \"a5be3f828345 Up 2 weeks (healthy)\", \"software-de-gestion-para-editores-main_db_1\": \"bc7e1dece0cd Up 2 weeks (healthy)\", \"software-de-gestion-para-editores-main_frontend_1\": \"32f019b85a1a Up 2 weeks\"}, \"route_documents_after\": [\"/home/lucas/mailadmin/scripts/traefik-lab/dynamic/spanel-route-fa8f3517c8ce426b7299.yml\"], \"runtime_after_rollback\": [\"a291b616-0292-4beb-a1f7-31469a6897b3:backend=rootless\", \"a291b616-0292-4beb-a1f7-31469a6897b3:database=rootless\", \"a291b616-0292-4beb-a1f7-31469a6897b3:frontend=rootless\"], \"runtime_before_rollback\": [\"a291b616-0292-4beb-a1f7-31469a6897b3:backend=rootless\", \"a291b616-0292-4beb-a1f7-31469a6897b3:database=rootless\", \"a291b616-0292-4beb-a1f7-31469a6897b3:frontend=rootless\"], \"second_deployment\": \"7ff5e5aa-cb01-4a34-926b-e059a98b823e\", \"second_operation\": {\"artifact_sha256\": \"6b075d80ff056f1f6df83b3041608666b2218d6838a23f6368c21014e07aff96\", \"branch\": \"feature/workflow-diseno\", \"commit\": \"ae33f9d10f6263d975bcb1bfdb8650a7021dff23\", \"compose_sha256\": \"2d1c62149a0fb09a381b50fc614aaa49167b7c1076bd9a42417f1f5152fb432f\", \"created_at\": \"2026-11-19T22:05:14.447735+00:00\", \"deployment_id\": \"7ff5e5aa-cb01-4a34-926b-e059a98b823e\", \"expires_at\": \"2026-11-20T22:05:14.447735+00:00\", \"gate_sha256\": \"20ba9ac2fee9e045679b96b99b1ea55c763d941014b34c3f8d8b59d4bd5b6a2f\", \"hardened_tree_sha256\": \"b6f6de3d0ef9636a513d041efdfe6f3ba829defd13812b2711e3ca767edb38fd\", \"key_id\": \"165a05fc\", \"policy_sha256\": \"7db9dd3f165b6a04db7d17070569ae678afb336683597b5bc24999dd60c42994\", \"release_id\": \"0b7c0595-1509-4c2d-ae88-e44170c5a894\", \"repo\": \"luc444s/software-de-gestion-para-editores\", \"scope\": {\"effective_services\": [], \"fallback_reason\": null, \"requested_scope\": \"global\", \"requested_service\": null, \"strategy\": \"noop\"}, \"service_fingerprints\": {\"backend\": \"bb42d0326f8f33373f6346552ae28c8f4f227c8f1958e46938d6ca2988b5b781\", \"database\": \"405675bc4a500f64a50ecdb270de464793d3fdb2c09dbb06c26296345a1fde3c\", \"frontend\": \"b731f96ac21aec6b535e5620084b7312acee9f14230d6f7c0be0fba366f5bf5c\"}, \"shared_fingerprint\": \"5aafd24d71b3252d195d6cd3906c39ea4eaa422d033cbafa48a04bb0d33bc7c4\", \"status\": \"running\"}}",
+      "pass": true
     }
   ],
+  "checks_detail": {
+    "aggregate_2gb_from_first_deploy": {
+      "active_deployment": "ec6166e4-fc8c-47b2-bbaf-51b9e9a2dde7",
+      "cgroup_limits_after_deploy": {
+        "cpu.max": "100000 100000",
+        "memory.max": "2147483648",
+        "pids.max": "512"
+      },
+      "cgroup_limits_before_deploy": {
+        "cpu.max": "100000 100000",
+        "memory.max": "2147483648",
+        "pids.max": "512"
+      },
+      "cgroup_uid": 60070,
+      "containers": [
+        "backend",
+        "database",
+        "frontend"
+      ],
+      "deploy_operation": {
+        "phase": "complete",
+        "result": {
+          "artifact_sha256": "4f4e2d44343162467577681b89a3d8ea1b278ce7cc6913a99c2e8138074f26a3",
+          "branch": "feature/workflow-diseno",
+          "commit": "ae33f9d10f6263d975bcb1bfdb8650a7021dff23",
+          "compose_sha256": "2d1c62149a0fb09a381b50fc614aaa49167b7c1076bd9a42417f1f5152fb432f",
+          "created_at": "2026-11-19T21:59:41.523340+00:00",
+          "deployment_id": "ec6166e4-fc8c-47b2-bbaf-51b9e9a2dde7",
+          "expires_at": "2026-11-20T21:59:41.523340+00:00",
+          "gate_sha256": "20ba9ac2fee9e045679b96b99b1ea55c763d941014b34c3f8d8b59d4bd5b6a2f",
+          "hardened_tree_sha256": "b6f6de3d0ef9636a513d041efdfe6f3ba829defd13812b2711e3ca767edb38fd",
+          "key_id": "165a05fc",
+          "policy_sha256": "7db9dd3f165b6a04db7d17070569ae678afb336683597b5bc24999dd60c42994",
+          "release_id": "66db4f7f-4c5f-494c-92b2-b60247ec0f35",
+          "repo": "luc444s/software-de-gestion-para-editores",
+          "scope": {
+            "effective_services": [
+              "backend",
+              "database",
+              "frontend"
+            ],
+            "fallback_reason": null,
+            "requested_scope": "global",
+            "requested_service": null,
+            "strategy": "initial"
+          },
+          "service_fingerprints": {
+            "backend": "bb42d0326f8f33373f6346552ae28c8f4f227c8f1958e46938d6ca2988b5b781",
+            "database": "405675bc4a500f64a50ecdb270de464793d3fdb2c09dbb06c26296345a1fde3c",
+            "frontend": "b731f96ac21aec6b535e5620084b7312acee9f14230d6f7c0be0fba366f5bf5c"
+          },
+          "shared_fingerprint": "5aafd24d71b3252d195d6cd3906c39ea4eaa422d033cbafa48a04bb0d33bc7c4",
+          "status": "running"
+        },
+        "status": "succeeded"
+      },
+      "effective_services": [
+        "backend",
+        "database",
+        "frontend"
+      ],
+      "expected_per_service_memory": 715827882,
+      "manifest_probes": {
+        "baseline": "rootless",
+        "functional": {
+          "checks": [
+            {
+              "bytes": 726,
+              "read_only": false,
+              "returncode": 0,
+              "sha256": "b012b34bbbcb353edb7b2c818f53c83622c8a1b317aba6731a3c8af003b8857e"
+            },
+            {
+              "bytes": 3,
+              "read_only": false,
+              "returncode": 0,
+              "sha256": "27badc983df1780b60c2b3fa9d3a19a00e46aac798451f0febdca52920faaddf"
+            }
+          ],
+          "image": "curlimages/curl@sha256:d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b"
+        },
+        "isolation": {
+          "backend": {
+            "apparmor": "",
+            "baseline": "rootless",
+            "limits": {
+              "memory": 715827882,
+              "nano_cpus": 333332992,
+              "pids": 170
+            },
+            "memory_budget_bytes": 2147483648,
+            "network_internal": {
+              "app-4b638a921c2948ffac627130_default": true
+            },
+            "networks": [
+              "app-4b638a921c2948ffac627130_default"
+            ],
+            "processes": 1,
+            "runtime": "runc",
+            "seccomp": "builtin",
+            "user": "app",
+            "user_namespace": true,
+            "writable_rootfs": true
+          },
+          "database": {
+            "apparmor": "",
+            "baseline": "rootless",
+            "limits": {
+              "memory": 715827882,
+              "nano_cpus": 333332992,
+              "pids": 170
+            },
+            "memory_budget_bytes": 2147483648,
+            "network_internal": {
+              "app-4b638a921c2948ffac627130_default": true
+            },
+            "networks": [
+              "app-4b638a921c2948ffac627130_default"
+            ],
+            "processes": 6,
+            "runtime": "runc",
+            "seccomp": "builtin",
+            "user": "postgres",
+            "user_namespace": true,
+            "writable_rootfs": true
+          },
+          "frontend": {
+            "apparmor": "",
+            "baseline": "rootless",
+            "limits": {
+              "memory": 715827882,
+              "nano_cpus": 333332992,
+              "pids": 170
+            },
+            "memory_budget_bytes": 2147483648,
+            "network_internal": {
+              "app-4b638a921c2948ffac627130_default": true,
+              "app-4b638a921c2948ffac627130_spanel-ingress": false
+            },
+            "networks": [
+              "app-4b638a921c2948ffac627130_default",
+              "app-4b638a921c2948ffac627130_spanel-ingress"
+            ],
+            "processes": 5,
+            "runtime": "runc",
+            "seccomp": "builtin",
+            "user": "101",
+            "user_namespace": true,
+            "writable_rootfs": true
+          }
+        },
+        "network": "app-4b638a921c2948ffac627130_default",
+        "service_networks": {
+          "backend": [
+            "app-4b638a921c2948ffac627130_default"
+          ],
+          "database": [
+            "app-4b638a921c2948ffac627130_default"
+          ],
+          "frontend": [
+            "app-4b638a921c2948ffac627130_default",
+            "app-4b638a921c2948ffac627130_spanel-ingress"
+          ]
+        },
+        "stability": {
+          "checks": 2,
+          "restart_counts": {
+            "backend": 0,
+            "database": 0,
+            "frontend": 0
+          },
+          "window_seconds": 4
+        }
+      },
+      "pass": true,
+      "per_service_memory": {
+        "backend": 715827882,
+        "database": 715827882,
+        "frontend": 715827882
+      },
+      "plan": {
+        "applied_at": "2026-11-19T21:59:04.578997Z",
+        "cgroup_path": "/tenant.slice/tenant-e2e0109r4v12.slice",
+        "cpus": 1.0,
+        "cpuset": null,
+        "last_error": null,
+        "memory_bytes": 2147483648,
+        "pids": 512,
+        "slice": "tenant-e2e0109r4v12.slice",
+        "status": "applied",
+        "tenant_id": "658e5ca2-00a4-4672-b5c5-f093db3066fa",
+        "tenant_slug": "e2e0109r4v12",
+        "updated_at": "2026-11-19T21:59:04.583141Z"
+      },
+      "verify": {
+        "cgroup_path": "/user.slice/user-60070.slice/user@60070.service",
+        "evidence": {
+          "cgroup_path": "/user.slice/user-60070.slice/user@60070.service",
+          "cpu_delta_usec": 3125192,
+          "cpu_max": "100000 100000",
+          "eperm": false,
+          "expected": {
+            "cpu_max": "100000 100000",
+            "memory_max": "2147483648",
+            "pids_max": "512"
+          },
+          "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+          "memory_max": "2147483648",
+          "memory_throttled": false,
+          "ok": true,
+          "owner_uid": "60070",
+          "pids_max": "512",
+          "rootless": {
+            "container_cgroup": "/user.slice/user-60070.slice/user@60070.service/user.slice/docker-759a5b5605a35be4935f9cd55c7ed37c8a33d1bcfc6b8ea2999d6bf504cbfa48.scope",
+            "container_pid": 267695,
+            "user_manager_cgroup": "/user.slice/user-60070.slice/user@60070.service/init.scope"
+          },
+          "slice": "user-60070.slice",
+          "slug": "e2e0109r4v12"
+        },
+        "ok": true,
+        "owner_uid": "60070",
+        "plan": {
+          "cpus": 1.0,
+          "memory": 2147483648,
+          "pids": 512
+        },
+        "properties": {},
+        "slice": "user-60070.slice",
+        "slug": "e2e0109r4v12",
+        "tenant_id": "658e5ca2-00a4-4672-b5c5-f093db3066fa",
+        "tenant_slug": "e2e0109r4v12"
+      },
+      "verify_error": "POST /api/v1/plugins/apps/plan/verify returned HTTP 502: Plan verification failed"
+    },
+    "blackbox": {
+      "pass": true
+    },
+    "egress_without_manual_nat": {
+      "audit_deny_rules": 8,
+      "cell_postrouting": [
+        "-P POSTROUTING ACCEPT",
+        "-A POSTROUTING -s 172.17.0.0/16 -j MASQUERADE"
+      ],
+      "dmesg_denied_after": 4,
+      "dmesg_denied_before": 4,
+      "dockerd_pid": 265099,
+      "egress_exit": 0,
+      "egress_output": "NET_OK",
+      "host_postrouting": [
+        "-P POSTROUTING ACCEPT",
+        "-A POSTROUTING -s 192.168.32.0/20 ! -o br-ca8621f6c80d -j MASQUERADE",
+        "-A POSTROUTING -s 192.168.0.0/20 ! -o br-eaf066cc153c -j MASQUERADE",
+        "-A POSTROUTING -s 172.30.0.0/16 ! -o br-d14b056196b0 -j MASQUERADE",
+        "-A POSTROUTING -s 172.29.0.0/16 ! -o br-a9af12614a9c -j MASQUERADE",
+        "-A POSTROUTING -s 172.28.0.0/16 ! -o br-cfd8c6d5d965 -j MASQUERADE",
+        "-A POSTROUTING -s 172.27.0.0/16 ! -o br-05d1d421e960 -j MASQUERADE",
+        "-A POSTROUTING -j ts-postrouting",
+        "-A POSTROUTING -s 172.26.0.0/16 ! -o br-92b0c29c58d1 -j MASQUERADE",
+        "-A POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE",
+        "-A POSTROUTING -s 172.24.0.0/16 ! -o br-b90a1d4e52e9 -j MASQUERADE",
+        "-A POSTROUTING -s 172.18.0.0/16 ! -o br-9dfa1c15151d -j MASQUERADE",
+        "-A POSTROUTING -s 172.22.0.0/16 ! -o br-8839edbd347c -j MASQUERADE",
+        "-A POSTROUTING -s 172.21.0.0/16 ! -o br-4b2d3ea1b961 -j MASQUERADE",
+        "-A POSTROUTING -s 172.25.0.0/16 ! -o br-019861ab7f35 -j MASQUERADE",
+        "-A POSTROUTING -s 172.31.99.0/24 ! -o br-fe51c43c5dc1 -j MASQUERADE",
+        "-A POSTROUTING -s 172.19.0.0/16 ! -o br-e53cc14bb122 -j MASQUERADE",
+        "-A POSTROUTING -s 172.23.0.0/16 ! -o br-df417a5565e5 -j MASQUERADE",
+        "-A POSTROUTING -s 172.20.0.0/16 ! -o br-7556bc5fbb37 -j MASQUERADE",
+        "-A POSTROUTING -j LIBVIRT_PRT"
+      ],
+      "host_rule_absent": true,
+      "ip6tables_false": true,
+      "iptables_false": true,
+      "netns_cell": "net:[4026532709]",
+      "netns_host": "net:[4026531833]",
+      "pass": true,
+      "uid": 60070,
+      "unit": "/etc/systemd/user/spanel-cell-e2e0109r4v12.service",
+      "unit_has_exec_post": false
+    },
+    "published_route_no_bridge": {
+      "backend": "172.25.0.1:40070",
+      "body_bytes": 394,
+      "body_preview": "<!doctype html>\n<html lang=\"es\">\n  <head><meta charset=\"UTF-8\" /><meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" /><title>Panel Editor</title>  <script type=\"module\" crossorigin src=\"/assets/index-CeSkNvW9.js\"></script>\n  <link rel=\"stylesheet\" crossorigin href=\"/assets/index-B",
+      "body_sha256": "228253844123c8d6b57e468220393835828eae1438ad7eb18fd00289a7c94895",
+      "cell_listener": "LISTEN 0      4096                              127.71.1.1:20070      0.0.0.0:*    users:((\"rootlesskit\",pid=265053,fd=14))",
+      "domain": "editores-e2e0109r4v12.lab",
+      "endpoint": {
+        "index": 70,
+        "loopback_address": "127.71.1.1",
+        "publish_port": 20070,
+        "relay_port": 40070,
+        "slug": "e2e0109r4v12"
+      },
+      "http_status": "200",
+      "manual_tcp_bridge": false,
+      "outbox_dispatch": {
+        "batches": [
+          {
+            "failed": 0,
+            "processed": 13,
+            "total": 13
+          },
+          {
+            "failed": 0,
+            "processed": 0,
+            "total": 0
+          }
+        ],
+        "processed": 13
+      },
+      "pass": true,
+      "relay_listener": "LISTEN 0      16                                172.25.0.1:40070      0.0.0.0:*    users:((\"python\",pid=265216,fd=3))",
+      "route_documents": [
+        {
+          "content": "# managed-by: spanel\nhttp:\n  routers:\n    spanel-editores-e2e0109r4v12-lab-route-path-1:\n      rule: Host(`editores-e2e0109r4v12.lab`)\n      entryPoints:\n      - web\n      service: spanel-editores-e2e0109r4v12-lab-route-path-1\n      priority: 401\n  services:\n    spanel-editores-e2e0109r4v12-lab-route-path-1:\n      loadBalancer:\n        servers:\n        - url: http://172.25.0.1:40070\n",
+          "path": "/home/lucas/mailadmin/scripts/traefik-lab/dynamic/spanel-route-fa8f3517c8ce426b7299.yml",
+          "sha256": "9b3223e77183d4c6bad855f1dce3d40f240c0de94c95bab70bf3e8416975e353"
+        }
+      ]
+    },
+    "rollback_rehearsal": {
+      "first_deployment": "ec6166e4-fc8c-47b2-bbaf-51b9e9a2dde7",
+      "flag_false_active_release": "/var/tmp/spanel-e2e-0109r4/state/app-4b638a921c2948ffac627130/releases/66db4f7f-4c5f-494c-92b2-b60247ec0f35",
+      "flag_false_api_error": null,
+      "flag_false_cell_containers": [
+        "app-4b638a921c2948ffac627130-frontend-1\tUp About a minute (healthy)",
+        "app-4b638a921c2948ffac627130-backend-1\tUp 2 minutes (healthy)",
+        "app-4b638a921c2948ffac627130-database-1\tUp 2 minutes (healthy)"
+      ],
+      "flag_false_pass": true,
+      "flag_false_runtime_after": [
+        "a291b616-0292-4beb-a1f7-31469a6897b3:backend=rootless",
+        "a291b616-0292-4beb-a1f7-31469a6897b3:database=rootless",
+        "a291b616-0292-4beb-a1f7-31469a6897b3:frontend=rootless"
+      ],
+      "flag_false_runtime_before": [
+        "a291b616-0292-4beb-a1f7-31469a6897b3:backend=rootless",
+        "a291b616-0292-4beb-a1f7-31469a6897b3:database=rootless",
+        "a291b616-0292-4beb-a1f7-31469a6897b3:frontend=rootless"
+      ],
+      "pass": true,
+      "restored_commit": "ae33f9d10f6263d975bcb1bfdb8650a7021dff23",
+      "restored_deployment": "20873c0f-118e-4455-8d3d-0bbae9c347ab",
+      "restored_release": "/var/tmp/spanel-e2e-0109r4/state/app-4b638a921c2948ffac627130/releases/66db4f7f-4c5f-494c-92b2-b60247ec0f35",
+      "rollback_operation": {
+        "artifact_sha256": "4f4e2d44343162467577681b89a3d8ea1b278ce7cc6913a99c2e8138074f26a3",
+        "branch": "feature/workflow-diseno",
+        "commit": "ae33f9d10f6263d975bcb1bfdb8650a7021dff23",
+        "compose_sha256": "2d1c62149a0fb09a381b50fc614aaa49167b7c1076bd9a42417f1f5152fb432f",
+        "created_at": "2026-11-19T21:59:41.523340+00:00",
+        "deployment_id": "20873c0f-118e-4455-8d3d-0bbae9c347ab",
+        "expires_at": "2026-11-20T21:59:41.523340+00:00",
+        "gate_sha256": "20ba9ac2fee9e045679b96b99b1ea55c763d941014b34c3f8d8b59d4bd5b6a2f",
+        "hardened_tree_sha256": "b6f6de3d0ef9636a513d041efdfe6f3ba829defd13812b2711e3ca767edb38fd",
+        "key_id": "165a05fc",
+        "policy_sha256": "7db9dd3f165b6a04db7d17070569ae678afb336683597b5bc24999dd60c42994",
+        "release_id": "66db4f7f-4c5f-494c-92b2-b60247ec0f35",
+        "repo": "luc444s/software-de-gestion-para-editores",
+        "rollback": true,
+        "scope": {
+          "effective_services": [],
+          "fallback_reason": null,
+          "requested_scope": "global",
+          "requested_service": null,
+          "strategy": "noop"
+        },
+        "service_fingerprints": {
+          "backend": "bb42d0326f8f33373f6346552ae28c8f4f227c8f1958e46938d6ca2988b5b781",
+          "database": "405675bc4a500f64a50ecdb270de464793d3fdb2c09dbb06c26296345a1fde3c",
+          "frontend": "b731f96ac21aec6b535e5620084b7312acee9f14230d6f7c0be0fba366f5bf5c"
+        },
+        "shared_fingerprint": "5aafd24d71b3252d195d6cd3906c39ea4eaa422d033cbafa48a04bb0d33bc7c4",
+        "status": "running"
+      },
+      "rootful_fixture_after": {
+        "software-de-gestion-para-editores-main_backend_1": "a5be3f828345 Up 2 weeks (healthy)",
+        "software-de-gestion-para-editores-main_db_1": "bc7e1dece0cd Up 2 weeks (healthy)",
+        "software-de-gestion-para-editores-main_frontend_1": "32f019b85a1a Up 2 weeks"
+      },
+      "rootful_fixture_before": {
+        "software-de-gestion-para-editores-main_backend_1": "a5be3f828345 Up 2 weeks (healthy)",
+        "software-de-gestion-para-editores-main_db_1": "bc7e1dece0cd Up 2 weeks (healthy)",
+        "software-de-gestion-para-editores-main_frontend_1": "32f019b85a1a Up 2 weeks"
+      },
+      "route_documents_after": [
+        "/home/lucas/mailadmin/scripts/traefik-lab/dynamic/spanel-route-fa8f3517c8ce426b7299.yml"
+      ],
+      "runtime_after_rollback": [
+        "a291b616-0292-4beb-a1f7-31469a6897b3:backend=rootless",
+        "a291b616-0292-4beb-a1f7-31469a6897b3:database=rootless",
+        "a291b616-0292-4beb-a1f7-31469a6897b3:frontend=rootless"
+      ],
+      "runtime_before_rollback": [
+        "a291b616-0292-4beb-a1f7-31469a6897b3:backend=rootless",
+        "a291b616-0292-4beb-a1f7-31469a6897b3:database=rootless",
+        "a291b616-0292-4beb-a1f7-31469a6897b3:frontend=rootless"
+      ],
+      "second_deployment": "7ff5e5aa-cb01-4a34-926b-e059a98b823e",
+      "second_operation": {
+        "artifact_sha256": "6b075d80ff056f1f6df83b3041608666b2218d6838a23f6368c21014e07aff96",
+        "branch": "feature/workflow-diseno",
+        "commit": "ae33f9d10f6263d975bcb1bfdb8650a7021dff23",
+        "compose_sha256": "2d1c62149a0fb09a381b50fc614aaa49167b7c1076bd9a42417f1f5152fb432f",
+        "created_at": "2026-11-19T22:05:14.447735+00:00",
+        "deployment_id": "7ff5e5aa-cb01-4a34-926b-e059a98b823e",
+        "expires_at": "2026-11-20T22:05:14.447735+00:00",
+        "gate_sha256": "20ba9ac2fee9e045679b96b99b1ea55c763d941014b34c3f8d8b59d4bd5b6a2f",
+        "hardened_tree_sha256": "b6f6de3d0ef9636a513d041efdfe6f3ba829defd13812b2711e3ca767edb38fd",
+        "key_id": "165a05fc",
+        "policy_sha256": "7db9dd3f165b6a04db7d17070569ae678afb336683597b5bc24999dd60c42994",
+        "release_id": "0b7c0595-1509-4c2d-ae88-e44170c5a894",
+        "repo": "luc444s/software-de-gestion-para-editores",
+        "scope": {
+          "effective_services": [],
+          "fallback_reason": null,
+          "requested_scope": "global",
+          "requested_service": null,
+          "strategy": "noop"
+        },
+        "service_fingerprints": {
+          "backend": "bb42d0326f8f33373f6346552ae28c8f4f227c8f1958e46938d6ca2988b5b781",
+          "database": "405675bc4a500f64a50ecdb270de464793d3fdb2c09dbb06c26296345a1fde3c",
+          "frontend": "b731f96ac21aec6b535e5620084b7312acee9f14230d6f7c0be0fba366f5bf5c"
+        },
+        "shared_fingerprint": "5aafd24d71b3252d195d6cd3906c39ea4eaa422d033cbafa48a04bb0d33bc7c4",
+        "status": "running"
+      }
+    },
+    "setup": {
+      "pass": true
+    }
+  },
+  "cleanup_errors": [],
+  "cleanup_verified": true,
+  "code_hashes": {
+    "scripts/tenant_cell/cells.py": "94abae56e04b386e3ffe662f36558374617fbfaad0389855914627c0cb663076",
+    "scripts/tenant_cell/executor.py": "447a67cf5f27d8d1ae04a2b05107cafb35b80f55409fb1061d54c566346aa035",
+    "scripts/tenant_cell/host_agent.py": "54ac555e62b3371fd7137cd7caa2b7e13050f66a8a3fd75559ee7f5bebe16d0b",
+    "scripts/tenant_cell/network.py": "8263396d14db5cc240309032623e38a8ae6e485be42d4a984aea09b26c61e929",
+    "vendor/systutor-core/plugins/apps/backend/releases/execution.py": "10c1895a246e9f7f67f457886cbf63d5ac08b5b0d4155943d0da1426fdae8c2d",
+    "vendor/systutor-core/plugins/apps/backend/releases/scoped_execution.py": "6aa8375a6e5cae6337fe4d06deb70feea70d4d48ac5ea88e6abe5cdc3e7fc245",
+    "vendor/systutor-core/plugins/apps/backend/rootless_routes.py": "1fe92288690e8f3a149e40bf8dcc4ebb36b8109e73a94446dcc902169890a681",
+    "vendor/systutor-core/plugins/apps/backend/runtime/deployment.py": "2861bbf3a364ca05863bc57fdd710878f66db816b16e4a72abdfb8753f273853",
+    "vendor/systutor-core/plugins/apps/backend/runtime/probes.py": "f492f5f5b4b80c5be3f2cd16e54268d6fb575f507ce2df51f7ce840712e5924d",
+    "vendor/systutor-core/plugins/apps/backend/worker.py": "c15e31d89be786347b628ce0f625d81766cf8cd19910687948074da2b40983ce",
+    "vendor/systutor-core/plugins/domains/migrations/005_rootless_app_hosts.py": "821b1d4bdcde4d57972325abff674644439ea7825fffac47cb73fa041b5a033e",
+    "vendor/systutor-core/src/systutor/contracts/app_hosts.py": "e8e2ed83ff7721459c79d1fba95385230caa5cfcabc8e90020726becc3eeb13a"
+  },
+  "containers": {
+    "backend": {
+      "absent_from_rootful": true,
+      "container_id": "78f73454824fc33e6b212aec43beeca7e0872092e10f86ece87b7d66c17cc78d",
+      "daemon": "/var/lib/spanel/cells/e2e0109r4v12/docker.sock",
+      "health": "healthy",
+      "host_config": {
+        "memory": 715827882,
+        "nano_cpus": 333332992,
+        "pids_limit": 170,
+        "port_bindings": {}
+      },
+      "image_id": "sha256:6ec23921f57bde1ca6469293d9d809e14beccd9bf1b7d9209f12be5ed8fcf7d6",
+      "network": "app-4b638a921c2948ffac627130_default",
+      "state": "running"
+    },
+    "database": {
+      "absent_from_rootful": true,
+      "container_id": "2377e479e31148abceeb71b97274df91c83ee99071dd77036e7c7a3c399c63a9",
+      "daemon": "/var/lib/spanel/cells/e2e0109r4v12/docker.sock",
+      "health": "healthy",
+      "host_config": {
+        "memory": 715827882,
+        "nano_cpus": 333332992,
+        "pids_limit": 170,
+        "port_bindings": {}
+      },
+      "image_id": "sha256:4111d0cc3e283efc0d07650ce73df5a986b33e3badfcbee74e7e033dd69389cc",
+      "network": "app-4b638a921c2948ffac627130_default",
+      "state": "running"
+    },
+    "frontend": {
+      "absent_from_rootful": true,
+      "container_id": "c11d1ee32466a8098b3b1fd1538e531e6f38c1e5c23b55f0dd852905020456ad",
+      "daemon": "/var/lib/spanel/cells/e2e0109r4v12/docker.sock",
+      "health": "healthy",
+      "host_config": {
+        "memory": 715827882,
+        "nano_cpus": 333332992,
+        "pids_limit": 170,
+        "port_bindings": {
+          "8080/tcp": [
+            {
+              "HostIp": "127.71.1.1",
+              "HostPort": "20070"
+            }
+          ]
+        }
+      },
+      "image_id": "sha256:e2ef2d9791a37ef8e96216e2c940a4af0d620932067d27d634aade1a2080cd83",
+      "network": "app-4b638a921c2948ffac627130_default",
+      "state": "running"
+    }
+  },
+  "core_after": {
+    "spanel-lab-mariadb": "508d2431356e Up 2 weeks (healthy)",
+    "spanel-lab-phpmyadmin": "440df56bd71a Up 2 weeks (healthy)",
+    "spanel-mail": "788d1ea78738 Up 2 weeks",
+    "spanel-powerdns-lab-auth": "bf2c8f723a2d Up 7 days (healthy)",
+    "spanel-powerdns-lab-postgres": "9f0f6674c12f Up 7 days (healthy)",
+    "spanel-traefik-lab": "53e2009a35a6 Up 9 days"
+  },
+  "core_before": {
+    "spanel-lab-mariadb": "508d2431356e Up 2 weeks (healthy)",
+    "spanel-lab-phpmyadmin": "440df56bd71a Up 2 weeks (healthy)",
+    "spanel-mail": "788d1ea78738 Up 2 weeks",
+    "spanel-powerdns-lab-auth": "bf2c8f723a2d Up 7 days (healthy)",
+    "spanel-powerdns-lab-postgres": "9f0f6674c12f Up 7 days (healthy)",
+    "spanel-traefik-lab": "53e2009a35a6 Up 9 days"
+  },
+  "core_intact": true,
+  "date": "2026-11-19T22:06:41.402410+00:00",
   "delta_denied": 0,
-  "apparmor": {
-    "profile": "spanel-cell-e2e0109r4v2 (retirado en la limpieza)",
-    "denied_from_first_boot": 0,
-    "preparation_denied": 0,
-    "build_denied": 0,
-    "audit_deny_rules_preserved": 8,
-    "note": "0 DENIED desde el primer arranque de la celda; los fallos fueron de orquestacion/probe y de configuracion del harness, no de AppArmor. Un intento suelto de deploy rootless fallo con 'service backend effective AppArmor profile is invalid' porque el perfil efectivo del contenedor en rootless es None; se corrigio con SPANEL_APPS_PROBE_BASELINE=rootless (config del producto), no con un parche del perfil."
-  },
-  "isolation": {
-    "other_tenants": "spanel.lab y pos-e2e.lab respondieron HTTP 301 (redirect normal) durante y despues del run. El relay quedo operativo con 17 listeners y sin el slug desechable.",
-    "core_before_after": "Los 6 Core quedaron running con PID y sha256(Config) byte-identicos antes/despues/final: Traefik 3640546/24ff8185ccd698b4, MariaDB 214967/fe927596d8f2e2fe, PMA 215055/ac199c23434168e9, PowerDNS auth 2869309/adf74046f333c513, PowerDNS DB 2847729/2d57f3f4507f925e, mail 215326/b205f620f0a89962.",
-    "rootful_fixture": "Los contenedores rootful preexistentes no se eliminaron ni se reescribio su runtime."
-  },
-  "gaps": [
-    {
-      "id": "GAP-0109R4-3",
-      "severity": "high",
-      "title": "El re-despliegue rootless no converge: running/claim sostenido con probe en red rootful",
-      "evidence": "Con SPANEL_TENANTS_ROOTLESS=true los contenedores se crearon en el daemon de la celda, pero el worker ejecuto 'docker run --network app-60fa545254874f45b836fbb9_default ... curl http://frontend:8080/' y la operacion be6a638a-... permanecio running/claim durante 20 iteraciones (≈7 min) sin publicar el listener 20070 ni HTTP 200.",
-      "impact": "Bloquea check 3 (ruta publicada sin puente) y, por dependencia, check 4 (rollback real) y el downgrade 005.",
-      "recommendation": "Verificar que el runner del probe de readiness use el mismo runtime que el deploy del release, o que el launcher del probe resuelva la red de la celda cuando el tenant es rootless."
+  "deprovision": "{\"data_kept\": false, \"slug\": \"e2e0109r4v12\", \"state\": \"retired\"}",
+  "dmesg_denied_before": 4,
+  "downgrade_005": {
+    "app_hosts_after_to_regclass": null,
+    "app_hosts_before": "1",
+    "legacy_after": [],
+    "legacy_before": [],
+    "legacy_column_present": true,
+    "migration_version": "004_create_cloudflare_oauth",
+    "pass": true,
+    "response": {
+      "migration_version": "004_create_cloudflare_oauth"
     },
-    {
-      "id": "SUSPICION-0109R4-1",
-      "severity": "high",
-      "title": "SOSPECHA (a verificar, NO conclusion): runtimes mezclados en un mismo deploy",
-      "evidence": "Deploy rootless -> contenedores en la celda; probe -> red app-<id>_default del daemon rootful, donde 'frontend' puede no existir. No se ha demostrado causalmente; solo es la hipotesis que explica el running/claim.",
-      "impact": "De confirmarse, explicaria la no convergencia del check 3.",
-      "recommendation": "Comparar con el mismo runtime_project el runner usado por _assert_probe/readiness frente al usado por el deploy, y repetir el E2E sin cambiar codigo de la aplicacion."
-    },
-    {
-      "id": "NOTE-0109R4-PREP-2",
-      "severity": "info",
-      "title": "Incidentes de harness, no de producto",
-      "evidence": "JWT expirado a mitad del poll dejo un bucle consultando /operations/ con OPSID vacio (corregido con re-login y guard); outbox con cientos de eventos pending y sin worker de cola events en el stack vivo (se levanto uno desechable y se dreno con la funcion del producto); relay preexistente con ejecutable borrado (restaurado en su ruta original). Ninguno se uso para decidir PASS."
-    }
+    "returncode": 0,
+    "stderr": ""
+  },
+  "environment": {
+    "access": "SSH como root en el laboratorio; script \u00fanico por fases.",
+    "code_under_test": "Stage /var/tmp/spanel-e2e-0109r4 sin .git. hashes: {\"scripts/tenant_cell/cells.py\": \"94abae56e04b386e3ffe662f36558374617fbfaad0389855914627c0cb663076\", \"scripts/tenant_cell/executor.py\": \"447a67cf5f27d8d1ae04a2b05107cafb35b80f55409fb1061d54c566346aa035\", \"scripts/tenant_cell/host_agent.py\": \"54ac555e62b3371fd7137cd7caa2b7e13050f66a8a3fd75559ee7f5bebe16d0b\", \"scripts/tenant_cell/network.py\": \"8263396d14db5cc240309032623e38a8ae6e485be42d4a984aea09b26c61e929\", \"vendor/systutor-core/plugins/apps/backend/releases/execution.py\": \"10c1895a246e9f7f67f457886cbf63d5ac08b5b0d4155943d0da1426fdae8c2d\", \"vendor/systutor-core/plugins/apps/backend/releases/scoped_execution.py\": \"6aa8375a6e5cae6337fe4d06deb70feea70d4d48ac5ea88e6abe5cdc3e7fc245\", \"vendor/systutor-core/plugins/apps/backend/rootless_routes.py\": \"1fe92288690e8f3a149e40bf8dcc4ebb36b8109e73a94446dcc902169890a681\", \"vendor/systutor-core/plugins/apps/backend/runtime/deployment.py\": \"2861bbf3a364ca05863bc57fdd710878f66db816b16e4a72abdfb8753f273853\", \"vendor/systutor-core/plugins/apps/backend/runtime/probes.py\": \"f492f5f5b4b80c5be3f2cd16e54268d6fb575f507ce2df51f7ce840712e5924d\", \"vendor/systutor-core/plugins/apps/backend/worker.py\": \"c15e31d89be786347b628ce0f625d81766cf8cd19910687948074da2b40983ce\", \"vendor/systutor-core/plugins/domains/migrations/005_rootless_app_hosts.py\": \"821b1d4bdcde4d57972325abff674644439ea7825fffac47cb73fa041b5a033e\", \"vendor/systutor-core/src/systutor/contracts/app_hosts.py\": \"e8e2ed83ff7721459c79d1fba95385230caa5cfcabc8e90020726becc3eeb13a\"}",
+    "database": "Clon desechable sysadmin_e2e0109r4v12 de sysadmin; eliminado al final.",
+    "fixture": "luc444s/software-de-gestion-para-editores@feature/workflow-diseno/docker-compose.dokploy.yml",
+    "harness_config": "SPANEL_TENANTS_ROOTLESS=true y SPANEL_APPS_PROBE_BASELINE=rootless solo en el entorno desechable. El plan-agent y el relay se ejecutan desde el stage con sus propios sockets y token; el relay usa un registro filtrado a la celda desechable.",
+    "host": "lucas-ThinkPad-E570, Docker 29.1.3, kernel 7.0.0-28-generic, cgroups cgroup2fs, AppArmor unknown",
+    "method": "API p\u00fablica en 127.0.0.1:3010, worker dramatiq apps, plan-agent y edge-relay desechables y privilegiados, celda rootless real. Observaci\u00f3n externa con systemd, docker, cgroups, ss, iptables, dmesg y AppArmor. Sin MASQUERADE manual, sin puente TCP y sin Alembic CLI.",
+    "migration_runtime": "Runtime migrador de plugins; downgrade 005 v\u00eda POST /api/v1/core/plugin-runtime/domains/migrate/downgrade.",
+    "target": "spanel.lab (NO spanel.app)"
+  },
+  "finished_at": "2026-11-19T22:06:41.402410+00:00",
+  "gaps": [],
+  "host_facts": {
+    "apparmor": "unknown",
+    "cgroups": "cgroup2fs",
+    "docker": "29.1.3",
+    "hostname": "lucas-ThinkPad-E570",
+    "kernel": "7.0.0-28-generic"
+  },
+  "host_nat_before": [
+    "-P POSTROUTING ACCEPT",
+    "-A POSTROUTING -s 192.168.32.0/20 ! -o br-ca8621f6c80d -j MASQUERADE",
+    "-A POSTROUTING -s 192.168.0.0/20 ! -o br-eaf066cc153c -j MASQUERADE",
+    "-A POSTROUTING -s 172.30.0.0/16 ! -o br-d14b056196b0 -j MASQUERADE",
+    "-A POSTROUTING -s 172.29.0.0/16 ! -o br-a9af12614a9c -j MASQUERADE",
+    "-A POSTROUTING -s 172.28.0.0/16 ! -o br-cfd8c6d5d965 -j MASQUERADE",
+    "-A POSTROUTING -s 172.27.0.0/16 ! -o br-05d1d421e960 -j MASQUERADE",
+    "-A POSTROUTING -j ts-postrouting",
+    "-A POSTROUTING -s 172.26.0.0/16 ! -o br-92b0c29c58d1 -j MASQUERADE",
+    "-A POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE",
+    "-A POSTROUTING -s 172.24.0.0/16 ! -o br-b90a1d4e52e9 -j MASQUERADE",
+    "-A POSTROUTING -s 172.18.0.0/16 ! -o br-9dfa1c15151d -j MASQUERADE",
+    "-A POSTROUTING -s 172.22.0.0/16 ! -o br-8839edbd347c -j MASQUERADE",
+    "-A POSTROUTING -s 172.21.0.0/16 ! -o br-4b2d3ea1b961 -j MASQUERADE",
+    "-A POSTROUTING -s 172.25.0.0/16 ! -o br-019861ab7f35 -j MASQUERADE",
+    "-A POSTROUTING -s 172.31.99.0/24 ! -o br-fe51c43c5dc1 -j MASQUERADE",
+    "-A POSTROUTING -s 172.19.0.0/16 ! -o br-e53cc14bb122 -j MASQUERADE",
+    "-A POSTROUTING -s 172.23.0.0/16 ! -o br-df417a5565e5 -j MASQUERADE",
+    "-A POSTROUTING -s 172.20.0.0/16 ! -o br-7556bc5fbb37 -j MASQUERADE",
+    "-A POSTROUTING -j LIBVIRT_PRT"
   ],
-  "rollback": "El run se PAUSO por peticion del usuario; no hubo rollback funcional de producto que ejecutar porque check 3 no convergio. Rollback de laboratorio completado: se detuvieron app/worker/events desechables y el plan-agent; se retiro el YAML spanel-route-216c23962cadb4f85f0a.yml; deprovision --purge-data devolvio state=retired; se terminaron el user manager y el proceso uid 60070, se eliminaron usuario, /run/user/60070, home, celda, unidad, perfil y tabla nft; se elimino la BD clonada; se borraron el stage y todos los temporales 0109r4v2. El relay se restauro en /home/lucas/.local/lib/spanel-edge-relay (su ejecutable ya estaba borrado antes de este run) y quedo operativo con 17 listeners y el mismo bind 172.25.0.1, sin el slug desechable. El DOWNGRADE de la migracion 005 NO se ejecuto: el run se pauso antes de completar check 3, por lo que no se puede afirmar que legacy quedara intacto tras downgrade.",
-  "final_state": "Limpieza verificada de forma independiente: 0 usuarios/celdas/perfiles/unidades/tablas nft/contenedores/imagenes/BD/listeners 3010,20070,40070/temporales 0109r4v2. Hashes restaurados byte-a-byte: registry=a3503ea9dcb53aab..., plans=dc2a7b9b3c39489c..., audit=15ad1bc5d49912b..., subuid=subgid=a295d25cb1976270.... En el host solo queda la regla Docker baseline '172.17.0.0/16 ! -o docker0'; los otros 10 usuarios de celda y sus rutas siguen intactos. Los 6 Core conservaron PID y hash. RESULTADO: BLOQUEADO — checks 1 y 2 PASS confirmados; check 3 FAIL/no convergido; check 4 y downgrade 005 no ejecutados; delta_denied=0; 8 audit deny intactas; sin PASS inferido.",
-  "cleanup_verified": true
+  "isolation": {
+    "core_before_after": {
+      "after": {
+        "spanel-lab-mariadb": "508d2431356e Up 2 weeks (healthy)",
+        "spanel-lab-phpmyadmin": "440df56bd71a Up 2 weeks (healthy)",
+        "spanel-mail": "788d1ea78738 Up 2 weeks",
+        "spanel-powerdns-lab-auth": "bf2c8f723a2d Up 7 days (healthy)",
+        "spanel-powerdns-lab-postgres": "9f0f6674c12f Up 7 days (healthy)",
+        "spanel-traefik-lab": "53e2009a35a6 Up 9 days"
+      },
+      "before": {
+        "spanel-lab-mariadb": "508d2431356e Up 2 weeks (healthy)",
+        "spanel-lab-phpmyadmin": "440df56bd71a Up 2 weeks (healthy)",
+        "spanel-mail": "788d1ea78738 Up 2 weeks",
+        "spanel-powerdns-lab-auth": "bf2c8f723a2d Up 7 days (healthy)",
+        "spanel-powerdns-lab-postgres": "9f0f6674c12f Up 7 days (healthy)",
+        "spanel-traefik-lab": "53e2009a35a6 Up 9 days"
+      },
+      "intact": true
+    },
+    "other_tenants": {
+      "after": {
+        "spanel.lab": "301"
+      },
+      "before": {
+        "spanel.lab": "301"
+      }
+    },
+    "rootful_fixture": {
+      "after": {
+        "software-de-gestion-para-editores-main_backend_1": "a5be3f828345 Up 2 weeks (healthy)",
+        "software-de-gestion-para-editores-main_db_1": "bc7e1dece0cd Up 2 weeks (healthy)",
+        "software-de-gestion-para-editores-main_frontend_1": "32f019b85a1a Up 2 weeks"
+      },
+      "before": {
+        "software-de-gestion-para-editores-main_backend_1": "a5be3f828345 Up 2 weeks (healthy)",
+        "software-de-gestion-para-editores-main_db_1": "bc7e1dece0cd Up 2 weeks (healthy)",
+        "software-de-gestion-para-editores-main_frontend_1": "32f019b85a1a Up 2 weeks"
+      },
+      "intact": true
+    }
+  },
+  "network": "app-4b638a921c2948ffac627130_default",
+  "ok": true,
+  "other_tenants_after": {
+    "spanel.lab": "301"
+  },
+  "other_tenants_before": {
+    "spanel.lab": "301"
+  },
+  "phase": "all",
+  "plugins": {
+    "apps": {
+      "api_version": "1",
+      "backend_entrypoint": "backend.register:register",
+      "created_at": "2026-11-19T21:58:55.022704Z",
+      "description": "Tenant-aware asynchronous Compose application deployments",
+      "disabled_at": null,
+      "enabled_at": "2026-11-19T21:58:57.910289Z",
+      "events_json": [],
+      "frontend_entrypoint": "frontend/register.ts",
+      "id": "0e190c5c-3866-4fd2-91de-e0aa5ce945fd",
+      "installed_at": "2026-11-19T21:58:57.058331Z",
+      "is_enabled": true,
+      "last_error": null,
+      "migration_version": "007_add_tenant_plan_status",
+      "name": "Applications",
+      "permissions_json": [
+        "apps.github.connect",
+        "apps.applications.read",
+        "apps.applications.manage",
+        "apps.applications.create",
+        "apps.deployments.create",
+        "apps.applications.delete",
+        "apps.secrets.read",
+        "apps.plans.manage"
+      ],
+      "plugin_id": "apps",
+      "requires_json": [],
+      "state": "enabled",
+      "updated_at": "2026-11-19T21:58:57.936246Z",
+      "version": "0.1.0"
+    },
+    "domains": {
+      "api_version": "1",
+      "backend_entrypoint": "backend.register:register",
+      "created_at": "2026-11-19T21:58:55.022718Z",
+      "description": "Web domains: Hosting primaries in read-only mode, extra proxy domains and authoritative DNS",
+      "disabled_at": null,
+      "enabled_at": "2026-11-19T21:58:57.931333Z",
+      "events_json": [
+        "domains.domain.added",
+        "domains.domain.linked",
+        "domains.domain.removed",
+        "domains.dns.zone_created",
+        "domains.dns.zone_deleted",
+        "domains.dns.rrsets_changed",
+        "domains.dns.nameservers_changed",
+        "domains.dns.cloudflare_connected",
+        "domains.dns.cloudflare_disconnected"
+      ],
+      "frontend_entrypoint": "frontend/register.ts",
+      "id": "c8d2b718-f68a-439b-9f7c-9cdd2d815f44",
+      "installed_at": "2026-11-19T21:58:57.790347Z",
+      "is_enabled": true,
+      "last_error": null,
+      "migration_version": "005_rootless_app_hosts",
+      "name": "Domains and DNS",
+      "permissions_json": [
+        "domains.domains.read",
+        "domains.domains.manage",
+        "domains.dns.read",
+        "domains.dns.records",
+        "domains.dns.zones",
+        "domains.dns.nameservers",
+        "domains.dns.cloudflare",
+        "domains.cloudflare.register"
+      ],
+      "plugin_id": "domains",
+      "requires_json": [],
+      "state": "enabled",
+      "updated_at": "2026-11-19T21:58:57.936250Z",
+      "version": "0.1.0"
+    }
+  },
+  "relay_process_after_stop": "",
+  "removed_leftovers": [
+    "/home/spanel-e2e0109r4v12",
+    "/var/lib/spanel/cells/e2e0109r4v12"
+  ],
+  "removed_orphan_user": "spanel-e2e0109r4v12",
+  "result": "PASS",
+  "result_reason": "Los 4 checks y el downgrade 005 convergieron con evidencia real; sin parches manuales de NAT, puertos o rutas.",
+  "rootful_fixture_after": {
+    "software-de-gestion-para-editores-main_backend_1": "a5be3f828345 Up 2 weeks (healthy)",
+    "software-de-gestion-para-editores-main_db_1": "bc7e1dece0cd Up 2 weeks (healthy)",
+    "software-de-gestion-para-editores-main_frontend_1": "32f019b85a1a Up 2 weeks"
+  },
+  "rootful_fixture_before": {
+    "software-de-gestion-para-editores-main_backend_1": "a5be3f828345 Up 2 weeks (healthy)",
+    "software-de-gestion-para-editores-main_db_1": "bc7e1dece0cd Up 2 weeks (healthy)",
+    "software-de-gestion-para-editores-main_frontend_1": "32f019b85a1a Up 2 weeks"
+  },
+  "rootful_fixture_intact": true,
+  "route_documents_after_delete": [],
+  "route_removed_by_product": true,
+  "runtime": {
+    "cell_socket": "/var/lib/spanel/cells/e2e0109r4v12/docker.sock",
+    "database": "sysadmin_e2e0109r4v12",
+    "plan_agent_socket": "/run/spanel/plan-agent.sock",
+    "probe_baseline": "rootless",
+    "redis": "spanel-e2e-r4-redis",
+    "relay_bind": "172.25.0.1",
+    "relay_source": "172.25.0.3",
+    "rootless": true
+  },
+  "spec": "0109-r4-host-nat-and-domains-owned-hosts",
+  "stage": "/var/tmp/spanel-e2e-0109r4",
+  "started_at": "2026-11-19T21:58:23.467598+00:00",
+  "state_hashes_after": {
+    "/etc/subgid": "a295d25cb1976270021673a8612ed9d49f5131b9245097d29915f77da427d113",
+    "/etc/subuid": "a295d25cb1976270021673a8612ed9d49f5131b9245097d29915f77da427d113",
+    "/var/lib/spanel/audit.jsonl": "42660f20de2e3ac590575b0c0992a01d54b54c06fe4825968d427682dba98bfd",
+    "/var/lib/spanel/plans.json": "dc2a7b9b3c39489c74560313c649da499e5a991b368311e052232b687f8f831f",
+    "/var/lib/spanel/registry.json": "a3503ea9dcb53aab65945d2338c7493b90fb3bec539a932f57fe7f53f8dac6e6"
+  },
+  "state_hashes_before": {
+    "/etc/subgid": "a295d25cb1976270021673a8612ed9d49f5131b9245097d29915f77da427d113",
+    "/etc/subuid": "a295d25cb1976270021673a8612ed9d49f5131b9245097d29915f77da427d113",
+    "/var/lib/spanel/audit.jsonl": "42660f20de2e3ac590575b0c0992a01d54b54c06fe4825968d427682dba98bfd",
+    "/var/lib/spanel/plans.json": "dc2a7b9b3c39489c74560313c649da499e5a991b368311e052232b687f8f831f",
+    "/var/lib/spanel/registry.json": "a3503ea9dcb53aab65945d2338c7493b90fb3bec539a932f57fe7f53f8dac6e6"
+  },
+  "state_restored": true,
+  "stop_edge-relay": "killed",
+  "stop_plan-agent": "killed"
 }

@@ -174,6 +174,52 @@ def test_rootless_baseline_still_enforces_prohibited_conditions() -> None:
         )
 
 
+def test_rootless_baseline_allows_only_a_loopback_ingress_port() -> None:
+    loopback = container(HostConfig={
+        "PortBindings": {
+            "8080/tcp": [{"HostIp": "127.71.1.1", "HostPort": "20070"}]
+        }
+    })
+    evidence = check_isolation(
+        _rootless_runner(loopback), {"web": "cid1"}, baseline=ROOTLESS_BASELINE
+    )
+    assert evidence["web"]["baseline"] == "rootless"
+
+    public = container(HostConfig={
+        "PortBindings": {
+            "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "20070"}]
+        }
+    })
+    with pytest.raises(ProbeFailed, match="publishes host ports"):
+        check_isolation(
+            _rootless_runner(public), {"web": "cid1"}, baseline=ROOTLESS_BASELINE
+        )
+
+
+def test_hardened_baseline_rejects_even_a_loopback_ingress_port() -> None:
+    payload = container(HostConfig={
+        "PortBindings": {
+            "8080/tcp": [{"HostIp": "127.71.1.1", "HostPort": "20070"}]
+        }
+    })
+    with pytest.raises(ProbeFailed, match="publishes host ports"):
+        check_isolation(FakeRunner(payload), {"web": "cid1"})
+
+
+def test_signed_networks_reads_the_product_ingress_override(tmp_path) -> None:
+    from plugins.apps.backend.runtime.probes import _signed_networks
+
+    (tmp_path / "compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (tmp_path / "override.yaml").write_text(
+        "networks:\n"
+        "  spanel-ingress:\n"
+        "    internal: false\n",
+        encoding="utf-8",
+    )
+    networks = _signed_networks(tmp_path, "compose.yml")
+    assert networks["spanel-ingress"]["internal"] is False
+
+
 def test_resolve_baseline_defaults_to_hardened() -> None:
     assert resolve_baseline({}) is HARDENED_BASELINE
     assert resolve_baseline({"SPANEL_APPS_PROBE_BASELINE": "rootless"}) is ROOTLESS_BASELINE

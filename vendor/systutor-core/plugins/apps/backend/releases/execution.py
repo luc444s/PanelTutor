@@ -101,6 +101,17 @@ class ReleaseExecution:
             return self.runner_for_tenant(tenant_id)
         return self.runner_factory(self.transport())
 
+    def _resource_plan(self, db: Session, tenant_id: str | None) -> TenantPlan | None:
+        """Bind the tenant aggregate plan for overrides and probe budgets."""
+        if tenant_id is None:
+            return None
+        plan_row = db.scalar(
+            select(AppsTenantPlan).where(AppsTenantPlan.tenant_id == tenant_id)
+        )
+        if plan_row is None:
+            return None
+        return TenantPlan.from_row(plan_row, tenant_slug(db, tenant_id))
+
     def _publish_restored_state(
         self,
         *,
@@ -194,7 +205,8 @@ class ReleaseExecution:
         return release
 
     def deploy_known_release(self, operation_id: str, application_id: str,
-                             release_id: str, operation_report: dict) -> dict:
+                             release_id: str, operation_report: dict, *,
+                             ingress_publish: tuple[str, int] | None = None) -> dict:
         with self.session_factory() as db:
             app = db.get(Application, application_id)
             if app is None:
@@ -216,25 +228,17 @@ class ReleaseExecution:
             operation_id, application_id, release, source, tenant_names,
             repository=source[0], branch=source[1],
             scope=operation_report.get("scope"),
+            ingress_publish=ingress_publish,
         )
 
     def trusted_deploy(self, operation_id, application_id, release, source,
                        tenant_names, *, repository, branch,
-                       scope: object = None) -> dict:
+                       scope: object = None,
+                       ingress_publish: tuple[str, int] | None = None) -> dict:
         with self.session_factory() as db:
             current_app = db.get(Application, application_id)
             tenant_id = current_app.tenant_id if current_app is not None else None
-            resource_plan: TenantPlan | None = None
-            if tenant_id is not None:
-                plan_row = db.scalar(
-                    select(AppsTenantPlan).where(
-                        AppsTenantPlan.tenant_id == tenant_id
-                    )
-                )
-                if plan_row is not None:
-                    resource_plan = TenantPlan.from_row(
-                        plan_row, tenant_slug(db, tenant_id)
-                    )
+            resource_plan = self._resource_plan(db, tenant_id)
             previous = (
                 db.get(Deployment, current_app.active_deployment_id)
                 if current_app is not None and current_app.active_deployment_id else None
@@ -275,6 +279,7 @@ class ReleaseExecution:
                     publish_state=True,
                     require_expiry=True,
                     probe_target=_probe_target(source[4], source[5]),
+                    ingress_publish=ingress_publish,
                 )
             except ScopedDeployFailed as exc:
                 self._publish_restored_state(
@@ -339,7 +344,8 @@ class ReleaseExecution:
         result.update(release_result(release))
         return result
 
-    def rollback_operation(self, operation_id: str, application_id: str) -> dict:
+    def rollback_operation(self, operation_id: str, application_id: str, *,
+                           ingress_publish: tuple[str, int] | None = None) -> dict:
         with self.session_factory() as db:
             app = db.get(Application, application_id)
             operation = db.get(Operation, operation_id)
@@ -382,6 +388,8 @@ class ReleaseExecution:
         plan = plan_deployment(
             release, current_manifest, requested, services=services or None
         )
+        with self.session_factory() as db:
+            resource_plan = self._resource_plan(db, tenant_id)
         runner = self._runner(tenant_id)
         lock = application_lock(application_id)
         if not lock.acquire(blocking=False):
@@ -399,6 +407,7 @@ class ReleaseExecution:
                     runner,
                     release,
                     plan=plan,
+                    resource_plan=resource_plan,
                     scope=requested,
                     project=project,
                     previous_manifest=current_manifest,
@@ -409,6 +418,7 @@ class ReleaseExecution:
                     require_expiry=False,
                     staging_release=staging_release,
                     probe_target=_probe_target(ingress_service, ingress_port),
+                    ingress_publish=ingress_publish,
                 )
             except ScopedDeployFailed as exc:
                 self._publish_restored_state(

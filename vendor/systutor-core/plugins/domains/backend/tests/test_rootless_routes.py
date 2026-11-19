@@ -176,7 +176,7 @@ def test_explicit_http_publishes_plain_route_without_tls(tmp_path: Path) -> None
     assert router["rule"] == f"Host(`{DOMAIN}`)"
     assert router["entryPoints"] == [operations.settings.entrypoint_http]
     assert "tls" not in router
-    assert data["http"]["middlewares"] == {}
+    assert "middlewares" not in data["http"]
     service = next(iter(data["http"]["services"].values()))
     assert service["loadBalancer"]["servers"] == [
         {"url": "http://172.18.0.1:40003"}

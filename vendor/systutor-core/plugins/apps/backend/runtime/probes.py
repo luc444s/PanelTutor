@@ -8,6 +8,7 @@ inside the release network, and watch stability for a bounded window.
 from __future__ import annotations
 
 import hashlib
+import ipaddress
 import json
 import os
 import re
@@ -184,18 +185,47 @@ def _signed_compose(
     return {}
 
 
-def _signed_networks(
-    release_root: Path | None,
-    compose_rel: str | None,
-) -> dict[str, dict[str, Any]]:
-    """Read the signed Compose network declarations, if available."""
-    networks = _signed_compose(release_root, compose_rel).get("networks")
+def _override_networks(release_root: Path | None) -> dict[str, dict[str, Any]]:
+    """Read the product-generated override's network declarations.
+
+    ``_override`` may add the non-internal ``spanel-ingress`` network used by
+    the rootless port driver.  It is product policy, not a change to the
+    signed developer Compose, so the isolation probe authorizes it from the
+    staged override while the signed service topology stays authoritative.
+    """
+    if release_root is None:
+        return {}
+    path = release_root / "override.yaml"
+    try:
+        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, yaml.YAMLError):
+        return {}
+    networks = payload.get("networks") if isinstance(payload, dict) else None
     if not isinstance(networks, dict):
         return {}
     return {
         str(name): (options if isinstance(options, dict) else {})
         for name, options in networks.items()
     }
+
+
+def _signed_networks(
+    release_root: Path | None,
+    compose_rel: str | None,
+) -> dict[str, dict[str, Any]]:
+    """Read the signed Compose network declarations, if available."""
+    networks = _signed_compose(release_root, compose_rel).get("networks")
+    result = (
+        {
+            str(name): (options if isinstance(options, dict) else {})
+            for name, options in networks.items()
+        }
+        if isinstance(networks, dict)
+        else {}
+    )
+    for name, options in _override_networks(release_root).items():
+        result.setdefault(name, options)
+    return result
 
 
 def _signed_service_networks(
@@ -259,7 +289,39 @@ def memory_budget_bytes() -> int:
     return plan.memory_bytes
 
 
-def _assert_prohibited(service: str, values: Mapping[str, Any]) -> None:
+def _loopback_port_bindings(value: Any) -> bool:
+    """True only when every host port binds a dedicated loopback address.
+
+    Rootless cells publish their ingress on ``127.x.y.z:20000+`` so the edge
+    relay can reach them.  That is not a host-wide publication: 0.0.0.0,
+    public IPs and missing host ports remain forbidden.
+    """
+    if not isinstance(value, Mapping) or not value:
+        return False
+    for bindings in value.values():
+        if not isinstance(bindings, list) or not bindings:
+            return False
+        for binding in bindings:
+            if not isinstance(binding, Mapping):
+                return False
+            host = str(binding.get("HostIp", "")).strip()
+            port = str(binding.get("HostPort", "")).strip()
+            try:
+                address = ipaddress.ip_address(host)
+            except ValueError:
+                return False
+            if not address.is_loopback:
+                return False
+            if not port.isdigit() or not 1 <= int(port) <= 65535:
+                return False
+    return True
+
+
+def _assert_prohibited(
+    service: str,
+    values: Mapping[str, Any],
+    baseline: ProbeBaseline = HARDENED_BASELINE,
+) -> None:
     """Conditions that are forbidden in every runtime baseline."""
     host = values["host"]
     if host.get("Privileged") is True:
@@ -276,8 +338,14 @@ def _assert_prohibited(service: str, values: Mapping[str, Any]) -> None:
         "net.ipv4.ip_unprivileged_port_start": "0"
     }:
         raise ProbeFailed(f"service {service} contains an unsafe sysctl")
-    if host.get("PortBindings"):
-        raise ProbeFailed(f"service {service} publishes host ports")
+    bindings = host.get("PortBindings")
+    if bindings:
+        allowed = (
+            baseline.name == "rootless"
+            and _loopback_port_bindings(bindings)
+        )
+        if not allowed:
+            raise ProbeFailed(f"service {service} publishes host ports")
     if str(host.get("PidMode", "")) == "host":
         raise ProbeFailed(f"service {service} uses the host PID namespace")
     if str(host.get("NetworkMode", "")) in {"host", "container:host"}:
@@ -365,7 +433,7 @@ def check_isolation(
         user_namespace = True
     for service, container_id in containers.items():
         values = _inspect_container(runner, container_id)
-        _assert_prohibited(service, values)
+        _assert_prohibited(service, values, baseline)
         options, limits = _assert_mandatory(service, values)
         _assert_optional(service, values, options, baseline)
         users = _process_users(runner, container_id)

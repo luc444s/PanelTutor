@@ -76,6 +76,10 @@ class RootlessRoutes:
             return []
         return [(domain, self._https())]
 
+    def endpoint(self, slug: str) -> CellEndpoint:
+        """Resolve the cell relay endpoint; the plan-agent is the only source."""
+        return self.endpoint_client.endpoint(slug)
+
     def refresh(self, db: Any, tenant_id: str, application_id: str) -> dict[str, Any]:
         """Publish the app domain to the relay; no endpoint means no route."""
         hosts = self._domains(db, tenant_id, application_id)

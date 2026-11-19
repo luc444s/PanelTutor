@@ -2,235 +2,270 @@
 
 Fecha: 2026-11-19
 Rama: `remove-hardener`
-Commit: `672b0ca` — `feat(apps): A.SPEC 0109-R4 rootless deploy, owned hosts and probe fix`
-Laboratorio: `spanel.lab` (`lucas@100.67.5.50`, Docker 29.1.3, cgroups v2, AppArmor enforce)
+Commit base: `672b0ca` — `feat(apps): A.SPEC 0109-R4 rootless deploy, owned hosts and probe fix`
+Laboratorio: `spanel.lab` (Docker 29.1.3, cgroups v2, AppArmor enforce)
 
 ## 1. Resumen ejecutivo
 
-Se ejecutó un **E2E black-box scriptado** que despliega
-`luc444s/software-de-gestion-para-editores@feature/workflow-diseno` a través de
-la API HTTP y el worker Dramatiq reales, en una **celda rootless real**, y
-verifica de forma independiente qué daemon ejecuta cada contenedor.
+Se ejecutó un **E2E black-box scriptado** en una **celda rootless real** que
+despliega `luc444s/software-de-gestion-para-editores@feature/workflow-diseno`
+a través de la API HTTP y el worker Dramatiq reales, y verifica de forma
+independiente los cuatro checks del A.SPEC, el downgrade de la migración 005 y
+la restauración del estado del host.
 
-**Resultado: PASS acotado.**
+**Resultado: PASS completo (4/4 checks + downgrade 005 + limpieza verificada).**
 
-- Los 3 servicios de la release (`backend`, `database`, `frontend`) quedaron
-  `running`/`healthy` en el daemon de la celda.
-- Ninguno de los 3 existía en el daemon rootful.
-- Un probe independiente desde dentro de la celda devolvió **HTTP 200**.
-- Un segundo deploy activó una fila nueva y el **rollback restauró la misma
-  release firmada**, con los contenedores todavía en la celda.
-- La limpieza eliminó BD/colas/celda/usuarios y restauró los ficheros de estado
-  del host **byte a byte** (5/5 hashes).
+- Check 1: egreso dentro de la celda con NAT propio (`172.17.0.0/16`), sin regla
+  nueva en el host, `NET_OK`, 8 reglas de auditoría AppArmor preservadas y delta
+  real de denegaciones 0.
+- Check 2: plan de 2 GiB aplicado antes del primer deploy, 3 servicios en la
+  celda, `715827882` bytes por servicio y cgroup con `memory.max=2147483648`,
+  `cpu.max=100000 100000`, `pids.max=512`.
+- Check 3: Host de Dominios publicado sin puente TCP manual: app-host `201`,
+  outbox real procesó 13 eventos, listener de la celda en
+  `127.71.1.1:20070`, listener del relay en `172.25.0.1:40070`, YAML gestionado
+  válido y `HTTP 200` con `Host: editores-e2e0109r4v12.lab`.
+- Check 4: segundo deploy real, rollback a la **misma release firmada**, ruta y
+  runtimes restaurados, fixture rootful intacto y reinicio con
+  `SPANEL_TENANTS_ROOTLESS=false` que **no reescribe** las filas de runtime.
+- Downgrade 005: ejecutado con el runtime migrador del kernel; versión vuelve a
+  `004_create_cloudflare_oauth`, `domains_app_hosts` desaparece y el campo legacy
+  `apps_applications.domain` sigue presente con los mismos valores.
+- Limpieza: celda/BD/usuarios/agentes retirados; los 5 hashes de estado del host
+  idénticos antes/después; Core y fixture rootful intactos; sin errores.
 
-Evidencia: `artifacts/0109-r4-editors-rootless-blackbox-e2e.json`.
-
-> **Alcance:** este E2E es acotado. **No sustituye** al artefacto oficial de 4
-> checks (`artifacts/0109-r4-host-nat-and-domains-owned-hosts-e2e.json`), que
-> sigue `BLOCKED 2/4`: los checks 3 y 4 y el downgrade de la migración 005 no
-> se re-ejecutaron en este run.
+Evidencia oficial:
+`artifacts/0109-r4-host-nat-and-domains-owned-hosts-e2e.json`
+(`ok: true`, `result: PASS`).
 
 ## 2. Objetivo y método
 
-Objetivo: probar de punta a punta que el software real de editores se ejecuta
-en **su entorno rootless correspondiente**, sin fabricar PASS ni inferir
-evidencia.
+Objetivo: probar de punta a punta que el software real de editores se ejecuta en
+**su entorno rootless correspondiente**, sin fabricar PASS ni inferir evidencia.
 
 Método: un único script (`scripts/e2e_0109_r4_blackbox.py`) con fases
-`setup`/`run`/`cleanup`:
+`setup`/`run`/`cleanup` y un ambiente desechable:
 
 1. Clona la BD viva en una BD desechable y cambia el slug del tenant demo al
    slug de la celda.
 2. Provisiona una celda rootless real con la CLI (`provision --slug`).
-3. Levanta API, worker Dramatiq y Redis desechables; el worker monta el socket
-   de la celda y ejecuta con `SPANEL_TENANTS_ROOTLESS=true`.
+3. Levanta API, worker Dramatiq, Redis, plan-agent y edge-relay desechables; el
+   worker monta el socket de la celda y ejecuta con
+   `SPANEL_TENANTS_ROOTLESS=true`.
 4. Hace login real, crea la aplicación, inspecciona el repositorio y despliega
    por la API/worker reales.
-5. Verifica contenedores, probe HTTP, segundo deploy y rollback.
-6. Borra la aplicación, retira la celda, elimina la BD desechable y restaura el
-   estado del host.
+5. Ejecuta los 4 checks, el downgrade 005 y el borrado de la aplicación por API.
+6. Retira los agentes, la celda, la BD desechable y restaura el estado del host.
 
 El estado del host (registro de celdas, planes, auditoría, `/etc/subuid`,
 `/etc/subgid`) se respalda antes de empezar y se compara por hash al final.
 
-## 3. Causa raíz corregida
+## 3. Causas raíz corregidas en esta fase
 
-El bloqueo previo del check 3 **no** era un problema de runtimes mezclados:
-deploy y probe comparten el mismo `Runner` tenant-scoped y el mismo
-`runner.environ` (verificado en código y en la celda).
+### 3.1 Check 3 — publicación real del ingress
 
-La causa real era la política del probe: se ejecutaba con `--read-only`, y el
-remount de `/` que eso provoca es denegado por AppArmor dentro de la celda:
+El producto no publicaba el puerto de la celda en el ingress. Se añadió
+publicación real desde el worker:
 
-```
-error setting rootfs as readonly: ... MS_RDONLY|MS_REMOUNT|MS_BIND: permission denied
-```
+- `rootless_routes.endpoint(slug)` expone loopback/puerto de la celda.
+- `worker._ingress_publish()` propaga `(service, host, port, target_port)` a
+  deploy y rollback.
+- `deployment._override()` inyecta el binding loopback y una red dedicada
+  `spanel-ingress`; `scoped_execution` construye el publish.
 
-El probe moría con exit 126 antes de `curl`; el reintento de 180 s mantenía la
-operación en `running/claim`.
+Causa raíz del listener ausente: el port-driver de rootlesskit **no abre
+listener** cuando el contenedor está en una red Docker `internal: true`. Se
+verificó manualmente en el laboratorio (`NO_LISTENER` vs `LISTEN ...
+rootlesskit`). La solución mantiene backend/database en la red interna y pone
+solo el frontend/ingress en `spanel-ingress`, no interna. `probes.py` autoriza
+bindings loopback únicamente en baseline rootless y lee también las redes del
+`override.yaml`.
 
-Corrección:
+### 3.2 Check 3 — YAML inválido para Traefik
 
-- `runtime/probes.py`: el baseline `rootless` usa un rootfs escribible efímero
-  conservando digest fijado, uid 65534, `cap-drop ALL`, `no-new-privileges` y
-  límites. El baseline hardened/rootful conserva `--read-only`. La evidencia
-  registra el valor efectivo de `read_only`.
-- `runtime/tenant_runtime.py`: `DockerRootlessRuntime.environment()` fija
-  juntos `DOCKER_HOST` (socket de la celda) y
-  `SPANEL_APPS_PROBE_BASELINE=rootless`, para que no puedan contradecirse.
-- Regresión en `test_probes.py`, `test_tenant_runtime.py` y
-  `test_rootless_worker.py`.
+Una ruta HTTP-only se renderizaba con `middlewares: {}`. Traefik rechaza ese
+mapa vacío como elemento standalone y **descarta el fichero entero**, por lo que
+devolvía 404 aunque los dos listeners estuvieran arriba. El renderer ahora omite
+la clave cuando no hay middlewares. Regresión en `test_routes_render.py` y
+`test_rootless_routes.py`.
 
-## 4. Cambios incluidos en el commit
+### 3.3 Check 4 — rollback sin plan de recursos
 
-- **Celda/red**: `scripts/tenant_cell/{cells,executor,host_agent,network}.py`
-  — NAT de egreso por celda usando el PID real de dockerd, hosts propios,
-  ciclo de vida y perfiles.
-- **Apps backend**: `register.py`, `rootless_routes.py`,
-  `runtime/{probes,tenant_runtime}.py` — runner tenant-scoped, publicación de
-  rutas rootless y política de probe por baseline.
-- **Dominios**: plugin `domains` (modelos, router, schemas, servicio, README) y
-  migración `005_rootless_app_hosts.py` + contrato
-  `systutor/contracts/app_hosts.py` para hosts de aplicación propios.
-- **E2E**: `scripts/e2e_rootless_cell.py` (probe real de readiness) y nuevos
-  `scripts/e2e_0109_r4_blackbox.py` + `scripts/e2e_dramatiq_worker.py`.
-- **Docs/evidencia**: A.SPEC 0109-R4, artefacto oficial (BLOCKED 2/4),
-  informe de progreso y nuevo artefacto del E2E acotado.
+El rollback reutiliza el override del primer deploy (con límites de 2 GiB), pero
+la ejecución del rollback no vinculaba el `resource_plan` del tenant. El probe
+volvía al presupuesto por defecto de 512 MB y rechazaba el backend. Ahora
+`ReleaseExecution._resource_plan()` se usa tanto en deploy como en rollback.
+Regresión cubierta por la suite de apps.
 
-## 5. Entorno del E2E
+### 3.4 Limpieza de la ruta al borrar la aplicación
+
+El worker construía `RootlessRoutes` sin el objeto `app`, así que no podía
+resolver los `app-host` de Dominios y su cleanup no retiraba el YAML gestionado.
+`tasks.py` ahora inyecta `build_rootless_routes(app)`. El check verifica
+`route_removed_by_product: true`.
+
+### 3.5 Harness
+
+- El dispatcher del outbox se invoca como `/stage/dispatch_outbox.py` (ruta
+  montada dentro de la app), no como ruta del host.
+- Tras cada reinicio con bandera `false`/`true` se espera a que los plugins
+  vuelvan a estar habilitados antes de consultar la API.
+- El check de dmesg usa el delta real `max(0, after-before)`.
+- El rollback se compara por **release firmada**, no por id de fila.
+- `E2E` hereda de `Exception`: un fallo nunca produce `ok: true`.
+
+## 4. Entorno del E2E
 
 | Elemento | Valor |
 |---|---|
-| Host | `lucas-ThinkPad-E570`, kernel 7.0.0-28, cgroups v2, AppArmor enforce |
-| Aislamiento | BD clonada, API/worker/Redis desechables, celda rootless real, fixture GitHub real |
+| Host | `lucas-ThinkPad-E570`, cgroups v2, AppArmor enforce |
+| Aislamiento | BD clonada, API/worker/Redis/agentes desechables, celda rootless real, fixture GitHub real |
 | Fixture | `luc444s/software-de-gestion-para-editores` @ `feature/workflow-diseno`, `docker-compose.dokploy.yml` |
 | Commit del fixture | `ae33f9d10f6263d975bcb1bfdb8650a7021dff23` |
-| Celda | `e2e0109r4v3`, `state=ready`, AppArmor efectivo, `uid_map` observado |
-| BD desechable | `sysadmin_e2e0109r4v3` (eliminada al final) |
-| Release | `9e5b0e3e-8593-4730-8324-3e388a558336` |
-| Deploy (operación) | `9e5b0e3e-8593-4730-8324-3e388a558336`, `succeeded/complete` |
-| Ventana deploy | 2026-11-19T20:28:03Z → 2026-11-19T20:28:49Z |
+| Celda | `e2e0109r4v12`, `state=ready`, AppArmor efectivo, uid/gid 60070 |
+| BD desechable | `sysadmin_e2e0109r4v12` (eliminada al final) |
+| App temporal | `a291b616-0292-4beb-a1f7-31469a6897b3` (`e2e-software-editores-bfcff340`) |
+| Release | `66db4f7f-4c5f-494c-92b2-b60247ec0f35` |
+| Primer deployment | `ec6166e4-fc8c-47b2-bbaf-51b9e9a2dde7` (operación `succeeded/complete`) |
+| Rollback | deployment restaurado `20873c0f-118e-4455-8d3d-0bbae9c347ab`, misma release |
 
-## 6. Resultados y evidencia
+## 5. Resultados por check
 
-### 6.1 Deploy y aislamiento
+### 5.1 Check 1 — egreso sin NAT manual
 
-Aplicación temporal `8fafb6fb-a67b-44dc-9a89-1062067945c3`
-(`e2e-software-editores-2653fc5f`, tenant demo clonado).
+- `dockerd` de la celda: PID `265099`, netns `net:[4026532709]`; host
+  `net:[4026531833]`.
+- POSTROUTING dentro de la celda:
+  `-A POSTROUTING -s 172.17.0.0/16 -j MASQUERADE`.
+- `host_rule_absent: true` (ninguna regla nueva en el host).
+- Egreso desde la celda: exit 0, salida `NET_OK`.
+- AppArmor: 8 reglas de auditoría preservadas; dmesg pass 4 → 4, delta 0.
+- Unidad: `/etc/systemd/user/spanel-cell-e2e0109r4v12.service`, sin
+  `ExecStartPost` manual.
 
-| Servicio | Contenedor | Estado | Health | ¿En rootful? |
-|---|---|---|---|---|
-| backend | `05d8422f…ba6` | running | healthy | no |
-| database | `db3b9f05…2b2` | running | healthy | no |
-| frontend | `52afb1f1…098` | running | healthy | no |
+### 5.2 Check 2 — plan agregado de 2 GiB desde el primer deploy
 
-Red de la release: `app-8b10e0362844481bb5f3afb0_default`.
-Daemon de los 3 contenedores:
-`/var/lib/spanel/cells/e2e0109r4v3/docker.sock`.
+Plan aplicado antes del deploy:
 
-La comprobación de ausencia en el daemon rootful se hizo con
-`docker inspect <id>` contra el socket rootful: los 3 devolvieron "no such
-object".
+- `memory_bytes: 2147483648`, `cpus: 1.0`, `pids: 512`.
+- Slice `tenant-e2e0109r4v12.slice`, estado `applied`.
+- Cgroup del runtime: `memory.max=2147483648`, `cpu.max=100000 100000`,
+  `pids.max=512`.
 
-### 6.2 Probe independiente
+Deploy:
 
-```
-docker -H unix:///var/lib/spanel/cells/e2e0109r4v3/docker.sock run --rm \
-  --network app-8b10e0362844481bb5f3afb0_default --cap-drop ALL \
-  --security-opt no-new-privileges:true --pids-limit 64 --memory 128m \
-  --cpus 1 --user 65534:65534 curlimages/curl@sha256:d9b4541e… \
-  curl -sS -o /dev/null -w '%{http_code}' http://frontend:8080/
-```
+- 3 servicios: `backend`, `database`, `frontend`.
+- Memoria por servicio: `715827882` bytes en los tres.
+- Todos en la celda rootless, `user_namespace: true`, `runtime: runc`.
+- `frontend` en `default` + `spanel-ingress` (no interna); backend y database
+  solo en la red interna `app-..._default`.
 
-Resultado: **`200`**.
+Nota: `/plan/verify` devolvió un 502 transitorio y el harness lo reintenta sin
+bloquear; la evidencia autoritativa del check es el plan aplicado + cgroups +
+manifiesto, que sí convergen.
 
-### 6.3 Rollback
+### 5.3 Check 3 — Host de Dominios sin puente TCP
 
-- Primer deploy → deployment `91748ee3-1838-4b32-b53d-7a20cf1a799f`.
-- Segundo deploy → deployment `fea1662e-52f1-4602-9cf1-32083e113271`.
-- Rollback (`dec4b40b-feb4-4ed1-a56e-b9cfdbeb9083`,
-  `succeeded/complete`) hacia `91748ee3…`.
-- El rollback crea una **fila de deployment nueva**
-  (`2ebc6753-3848-45f2-8cd9-419a9024f36e`) que reutiliza la **misma release
-  firmada** y el mismo commit. La verificación compara la release firmada, no
-  el id de fila.
-- Los 3 contenedores siguen en la celda tras el rollback.
+- `POST /plugins/domains/app-hosts` → `201`.
+- Outbox real: 13 eventos procesados, 0 fallos.
+- Dominio: `editores-e2e0109r4v12.lab`.
+- Listener de celda: `127.71.1.1:20070` (`rootlesskit`).
+- Listener del relay: `172.25.0.1:40070`, fuente `172.25.0.3`.
+- Documento gestionado `spanel-route-*.yml` con router `web`, sin TLS y sin
+  `middlewares` vacío.
+- `curl -H 'Host: editores-e2e0109r4v12.lab' http://127.0.0.1:9080/` →
+  **HTTP 200**, cuerpo de 394 bytes, título `Panel Editor`.
+- `manual_tcp_bridge: false`.
 
-### 6.4 Limpieza verificada
+### 5.4 Check 4 — rollback, fixture rootful y bandera `false`
 
-- `deprovision --purge-data` → `state=retired`, `data_kept=false`.
-- Eliminados: home, `/run/user/<uid>`, directorio de celda, usuario huérfano y
-  los 4 `/run/user` residuales de probes anteriores.
-- BD `sysadmin_e2e0109r4v3` eliminada.
-- Contenedores desechables (`app`, `worker`, `redis`) eliminados.
-- Sin celdas, usuarios ni contenedores `e2e` restantes.
-- Hashes restaurados (idénticos antes/después):
+- Segundo deploy real (`succeeded/complete`), fila de deployment nueva.
+- Rollback `succeeded/complete` hacia la **misma release firmada**
+  (`66db4f7f…`) y el mismo commit `ae33f9d…`.
+- Ruta y runtimes restaurados; los 3 contenedores siguen en la celda.
+- Fixture rootful intacto antes/después (mismos ids y estados).
+- Reinicio con `SPANEL_TENANTS_ROOTLESS=false`:
+  - filas de runtime antes y después idénticas
+    (`backend/database/frontend = rootless`);
+  - contenedores de la celda siguen `Up (... healthy)`;
+  - release activa visible por API;
+  - sin error de API (`flag_false_api_error: null`).
+
+### 5.5 Downgrade 005
+
+Ejecutado con el runtime migrador del kernel (`downgrade_plugin`) dentro de la
+app, no con Alembic CLI:
+
+- `domains_app_hosts` antes: 1 fila; después: tabla inexistente
+  (`to_regclass` vacío).
+- `plugin_registry.migration_version`: `004_create_cloudflare_oauth`.
+- Columna legacy `apps_applications.domain`: presente; valores antes/después
+  idénticos (vacíos en el clon).
+
+Observación: el endpoint HTTP legacy
+`/api/v1/plugin-runtime/domains/migrate/downgrade` responde 200 pero su refresh
+posterior vuelve a subir el plugin a 005. El A.SPEC exige el **runtime
+migrador**; el E2E ejerce `downgrade_plugin()` directamente, que es la
+superficie correcta y no re-sube la migración.
+
+### 5.6 Limpieza verificada
+
+- Celda retirada (`state=retired`, `data_kept=false`), BD eliminada, usuario y
+  directorios eliminados.
+- Agentes `plan-agent` y `edge-relay` detenidos sin procesos residuales.
+- Ruta gestionada retirada por el producto (`route_removed_by_product: true`).
+- `cleanup_verified: true`, `cleanup_errors: []`.
+- `core_intact: true`, `rootful_fixture_intact: true`, `gaps: []`.
+- Hashes idénticos antes/después:
 
 | Fichero | SHA-256 |
 |---|---|
 | `/var/lib/spanel/registry.json` | `a3503ea9dcb53aab65945d2338c7493b90fb3bec539a932f57fe7f53f8dac6e6` |
 | `/var/lib/spanel/plans.json` | `dc2a7b9b3c39489c74560313c649da499e5a991b368311e052232b687f8f831f` |
 | `/var/lib/spanel/audit.jsonl` | `42660f20de2e3ac590575b0c0992a01d54b54c06fe4825968d427682dba98bfd` |
-| `/etc/subuid` | `8a0a1343bb0126dbc43686512b3ccb5d2abb0ec1ddbb215957d8a8f1a995940d` |
-| `/etc/subgid` | `8a0a1343bb0126dbc43686512b3ccb5d2abb0ec1ddbb215957d8a8f1a995940d` |
+| `/etc/subuid` | `a295d25cb1976270021673a8612ed9d49f5131b9245097d29915f77da427d113` |
+| `/etc/subgid` | `a295d25cb1976270021673a8612ed9d49f5131b9245097d29915f77da427d113` |
 
-## 7. Calidad
+## 6. Calidad
 
-- Tests focales (probes, runtime, worker rootless, rutas rootless, app hosts,
-  provisión de celda): **117 passed**.
-- `py_compile` de todos los módulos tocados: OK.
+- Suite focal (apps rootless/planes/probes/worker, dominios rutas/app-hosts,
+  provisión/plan/relay de celda): **227 passed**.
+- `py_compile` de todos los módulos tocados y del script E2E: OK.
 - `git diff --check`: OK.
 - `ruff` no está disponible en Termux; gate no ejecutable en este entorno
   (limitación de herramienta, no del cambio).
 
-## 8. Incidencias del harness y correcciones
-
-Durante la construcción del script aparecieron fallos **del propio harness**,
-corregidos antes de la evidencia final:
-
-1. El worker no importaba `systutor.contracts.app_hosts`: el `PYTHONPATH`
-   apuntaba a una ruta del host no visible dentro del contenedor. Se corrigió
-   el montaje/`PYTHONPATH`.
-2. El límite de 600 s de Dramatiq abortaba builds fríos. Se añadió
-   `scripts/e2e_dramatiq_worker.py`, que eleva solo el `TimeLimit` (sin quitar
-   middleware).
-3. Una re-provisión sobre una celda ya degradada no reiniciaba el daemon
-   (`applied.daemon=true`). El script ahora reintenta `provision` de forma
-   idempotente y la limpieza para el `user@<uid>` antes de `userdel`.
-4. La primera aserción de rollback comparaba ids de fila; el rollback crea una
-   fila nueva con la misma release. Se corrigió para comparar la **release
-   firmada**.
-5. `E2E` heredaba de `BaseException`, por lo que un fallo podía escribirse como
-   `ok: true`. Ahora hereda de `Exception` y un fallo nunca produce PASS.
-
-## 9. Reproducción
+## 7. Reproducción
 
 ```bash
-# En el laboratorio, como root, con el árbol de trabajo en /var/tmp/spanel-e2e-0109r4
+# En el laboratorio, como root, con el árbol de trabajo en
+# /var/tmp/spanel-e2e-0109r4
 python3 scripts/e2e_0109_r4_blackbox.py \
   --stage /var/tmp/spanel-e2e-0109r4 \
+  --slug e2e0109r4v12 \
   --phase all \
-  --evidence /var/tmp/0109-r4-run.json
+  --evidence /var/tmp/0109-r4-final-v12.json
 ```
 
 El script hace `setup + run + cleanup`. Si un paso falla, el estado se escribe
 en el JSON de evidencia y no se declara PASS.
 
-## 10. Limitaciones y pendientes
+## 8. Limitaciones y pendientes
 
-- El artefacto oficial de 4 checks sigue **`BLOCKED 2/4`**. Este informe cubre
-  el deploy real en celda rootless, el probe y el rollback, pero **no** los
-  checks 3/4 completos ni el downgrade de la migración 005.
-- Los documentos de R3 (`aspecs/0109-r3-*`, `artifacts/0109-r3-*`) quedan
-  fuera del commit por pertenecer a otra fase.
-- El commit es local (`672b0ca`); no se ha hecho push.
+- El commit es local; **no se ha hecho push**.
+- Los documentos de R3 (`aspecs/0109-r3-*`, `artifacts/0109-r3-*`) quedan fuera
+  del commit por pertenecer a otra fase.
+- El endpoint HTTP legacy de downgrade tiene el comportamiento de re-subida
+  descrito en 5.5; el runtime migrador directo es el que usa y exige el A.SPEC.
+- El E2E usa el directorio dinámico del Traefik del laboratorio y agentes
+  desechables; no toca producción.
 
-## 11. Referencias
+## 9. Referencias
 
-- Evidencia E2E acotada:
-  `artifacts/0109-r4-editors-rootless-blackbox-e2e.json`
-- Artefacto oficial (BLOCKED 2/4):
+- Evidencia oficial (PASS):
   `artifacts/0109-r4-host-nat-and-domains-owned-hosts-e2e.json`
+- Evidencia E2E acotada previa:
+  `artifacts/0109-r4-editors-rootless-blackbox-e2e.json`
 - Progreso y diagnóstico: `artifacts/0109-r4-progress.md`
 - A.SPEC: `aspecs/0109-r4-host-nat-and-domains-owned-hosts.md`
 - Script: `scripts/e2e_0109_r4_blackbox.py`

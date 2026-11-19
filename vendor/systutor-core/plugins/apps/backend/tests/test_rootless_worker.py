@@ -47,6 +47,21 @@ def test_runner_selection_follows_injected_gate(tmp_path, monkeypatch) -> None:
     assert "/var/run/docker.sock" not in runner.environ["DOCKER_HOST"]
 
 
+def test_ingress_publish_comes_from_the_cell_endpoint(monkeypatch) -> None:
+    monkeypatch.setattr(
+        "plugins.apps.backend.worker.tenant_slug", lambda _db, _tid: "cell-a"
+    )
+    worker = AppsWorker(
+        lambda: nullcontext(None), None, rootless_routes=Routes()
+    )
+    assert worker._ingress_publish("t1") == ("127.9.1.1", 20020)
+
+
+def test_ingress_publish_is_inert_without_a_route_client() -> None:
+    worker = AppsWorker(lambda: nullcontext(None), None, rootless_routes=object())
+    assert worker._ingress_publish("t1") is None
+
+
 class FakeSession:
     def __init__(self, rows):
         self.rows = rows
@@ -71,6 +86,15 @@ class Routes:
         self.refreshed = []
         self.cleaned = []
 
+    def endpoint(self, slug):
+        return CellEndpoint(
+            slug=slug,
+            loopback_address="127.9.1.1",
+            publish_port=20020,
+            relay_port=40020,
+            bind="172.25.0.1",
+        )
+
     def refresh(self, _db, tenant_id, application_id):
         self.refreshed.append((tenant_id, application_id))
         return {"published": [] if self.fail else ["app.example.test"]}
@@ -88,6 +112,7 @@ def _cutover_worker(*, fail_route=False, recorder=None):
     rows = {
         ("Application", "a1"): app,
         ("Deployment", "new"): deployment,
+        ("Tenant", "t1"): SimpleNamespace(slug="cell-a"),
     }
     sessions = []
 
@@ -112,7 +137,7 @@ def _cutover_worker(*, fail_route=False, recorder=None):
         "deployment_id": "new", "status": "running"
     }
     # Simulate the release executor's successful activation.
-    def deploy(*_args):
+    def deploy(*_args, **_kwargs):
         app.active_deployment_id = "new"
         return {"deployment_id": "new", "status": "running"}
 

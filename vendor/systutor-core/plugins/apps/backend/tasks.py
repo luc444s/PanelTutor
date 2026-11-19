@@ -29,12 +29,16 @@ cipher = TokenCipher.from_text(
 )
 route_cleanup = None
 route_refresh = None
+rootless_routes = None
 try:
     from app.main import app
+
+    from .rootless_routes import build_rootless_routes
 
     publisher = get_site_domain_publisher(app)
     route_cleanup = getattr(app.state, "domain_routes_cleanup", None)
     route_refresh = getattr(app.state, "domain_routes_refresh", None)
+    rootless_routes = build_rootless_routes(app)
 except Exception:
     publisher = None
 runtime_options = {}
@@ -45,7 +49,8 @@ if settings.tenants_rootless:
     }
 worker = AppsWorker(
     session_factory, cipher, publisher=publisher, github=UrllibGithubClient(),
-    route_cleanup=route_cleanup, route_refresh=route_refresh, **runtime_options,
+    route_cleanup=route_cleanup, route_refresh=route_refresh,
+    rootless_routes=rootless_routes, **runtime_options,
 )
 
 

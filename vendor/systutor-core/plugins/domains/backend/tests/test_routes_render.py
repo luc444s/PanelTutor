@@ -73,6 +73,9 @@ def test_route_without_https_uses_http_entrypoint_only() -> None:
     router = doc["http"]["routers"]["spanel-api-example-com-route-r1"]
     assert "tls" not in router
     assert router["entryPoints"] == ["web"]
+    # Traefik rejects an empty standalone middlewares map and discards the
+    # whole managed document; the HTTP-only route must omit the key entirely.
+    assert "middlewares" not in doc["http"]
 
 
 def test_strip_path_without_internal_rewrite_preserves_prefix() -> None:

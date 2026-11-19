@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import ipaddress
 import json
 import os
 import re
@@ -11,7 +12,7 @@ import stat
 import subprocess
 import tarfile
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -124,6 +125,13 @@ def _git_commit(root: Path) -> str:
     )
 
 
+def _is_loopback_host(value: str) -> bool:
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
 def _override(
     data: dict[str, Any],
     project: str,
@@ -131,6 +139,8 @@ def _override(
     external_env: Path | None = None,
     image_tag: str = "latest",
     plan: TenantPlan | None = None,
+    *,
+    ingress_publish: tuple[str, str, int, int] | None = None,
 ) -> str:
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", image_tag):
         raise AppDeployError("release image tag is invalid")
@@ -184,6 +194,36 @@ def _override(
             if not source.get("cpus"):
                 config["cpus"] = 1.0
         services[service] = config
+    if ingress_publish is not None:
+        service, host, host_port, target_port = ingress_publish
+        if service not in services:
+            raise AppDeployError("rootless ingress service is not in the release")
+        if not _is_loopback_host(host) or not 1 <= host_port <= 65535:
+            raise AppDeployError("rootless ingress publish address is invalid")
+        if not 1 <= target_port <= 65535:
+            raise AppDeployError("rootless ingress target port is invalid")
+        source_config = data["services"].get(service)
+        if isinstance(source_config, Mapping) and source_config.get("network_mode"):
+            raise AppDeployError(
+                "rootless ingress service uses network_mode; cannot publish"
+            )
+        ingress_network = "spanel-ingress"
+        current = services[service].get("networks")
+        if isinstance(current, Mapping):
+            names = [str(name) for name in current]
+        elif isinstance(current, list):
+            names = [str(name) for name in current]
+        else:
+            names = ["default"]
+        if ingress_network not in names:
+            names.append(ingress_network)
+        services[service]["networks"] = names
+        # The cell's rootlesskit builtin port driver binds the requested parent
+        # IP, so the service is reachable only on the cell's dedicated loopback.
+        # It cannot publish from an internal Docker network; the public ingress
+        # service gets a dedicated non-internal network while every other
+        # service stays on the internal release network.
+        services[service]["ports"] = [f"{host}:{host_port}:{target_port}"]
     effective_plan = plan if plan is not None else current_tenant_plan()
     if effective_plan is not None:
         # A plan replaces the fixed defaults: containers are placed under the
@@ -220,6 +260,11 @@ def _override(
     if not network_entries:
         network_entries["default"] = {
             "internal": True,
+            "labels": {OWNER_LABEL: project},
+        }
+    if ingress_publish is not None:
+        network_entries["spanel-ingress"] = {
+            "internal": False,
             "labels": {OWNER_LABEL: project},
         }
     output["networks"] = network_entries

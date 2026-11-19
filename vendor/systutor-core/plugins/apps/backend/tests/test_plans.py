@@ -216,6 +216,32 @@ def test_bound_plan_reaches_override_without_an_explicit_argument() -> None:
     assert "cgroup_parent" not in later["services"]["web"]
 
 
+def test_override_publishes_rootless_ingress_on_the_cell_loopback() -> None:
+    rendered = yaml.safe_load(_override(
+        {"services": {"frontend": {"image": "alpine", "expose": ["8080"]}}},
+        "demo", True,
+        ingress_publish=("frontend", "127.71.1.1", 20070, 8080),
+    ))
+    assert rendered["services"]["frontend"]["ports"] == [
+        "127.71.1.1:20070:8080"
+    ]
+    assert rendered["services"]["frontend"]["networks"] == [
+        "default", "spanel-ingress"
+    ]
+    assert rendered["networks"]["default"]["internal"] is True
+    assert rendered["networks"]["spanel-ingress"]["internal"] is False
+
+
+def test_override_rejects_a_non_loopback_rootless_ingress() -> None:
+    from plugins.apps.backend.runtime import AppDeployError
+
+    with pytest.raises(AppDeployError, match="publish address"):
+        _override(
+            {"services": {"frontend": {"image": "alpine"}}}, "demo", True,
+            ingress_publish=("frontend", "0.0.0.0", 20070, 8080),
+        )
+
+
 # --- service lifecycle ------------------------------------------------------
 
 

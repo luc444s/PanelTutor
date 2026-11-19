@@ -131,7 +131,18 @@ class AppsWorker:
             elif kind == "rollback":
                 if application_id is None:
                     raise RuntimeError("Application not found")
-                result = self.execution.rollback_operation(operation_id, application_id)
+                with self.session_factory() as db:
+                    app = db.get(Application, application_id)
+                    rollback_tenant = app.tenant_id if app is not None else None
+                result = self.execution.rollback_operation(
+                    operation_id,
+                    application_id,
+                    ingress_publish=(
+                        self._ingress_publish(rollback_tenant)
+                        if rollback_tenant is not None
+                        else None
+                    ),
+                )
             else:
                 if application_id is None:
                     raise RuntimeError("Application not found")
@@ -178,6 +189,35 @@ class AppsWorker:
         value = os.environ.get("SPANEL_DOCKER_TRANSPORT", "local").strip()
         return value if value in {"local", "ssh"} else "local"
 
+    def _ingress_publish(self, tenant_id: str) -> tuple[str, int] | None:
+        """Resolve the cell loopback where the ingress service must be published.
+
+        The plan-agent owns the cell endpoint; the deploy only mirrors its
+        ``loopback_address``/``publish_port`` into a loopback-only Compose
+        ``ports`` entry.  Without an agent the helper stays inert and the
+        deployment remains exactly as before.
+        """
+        if self.rootless_routes is None:
+            return None
+        resolver = getattr(self.rootless_routes, "endpoint", None)
+        if not callable(resolver):
+            return None
+        with self.session_factory() as db:
+            slug = tenant_slug(db, tenant_id)
+        try:
+            endpoint = resolver(slug)
+        except Exception:  # noqa: BLE001 - the cutover fails closed on route
+            logger.warning(
+                "apps_rootless_ingress_endpoint_failed", extra={"slug": slug},
+                exc_info=True,
+            )
+            return None
+        host = str(getattr(endpoint, "loopback_address", "")).strip()
+        port = int(getattr(endpoint, "publish_port", 0) or 0)
+        if not host or not 1 <= port <= 65535:
+            return None
+        return host, port
+
     def _runner(self, tenant_id: str) -> Runner:
         """Select the authenticated tenant's rootless socket when configured.
 
@@ -199,7 +239,10 @@ class AppsWorker:
             tenant_id = app.tenant_id
             previous_deployment_id = app.active_deployment_id
             previous_status = app.status
-        result = self._source_operation(operation_id, application_id, "deploy")
+        ingress_publish = self._ingress_publish(tenant_id)
+        result = self._source_operation(
+            operation_id, application_id, "deploy", ingress_publish=ingress_publish
+        )
         try:
             resource_ids = self._publish_and_verify_rootless_route(
                 tenant_id, application_id, result
@@ -264,7 +307,14 @@ class AppsWorker:
             if self.route_refresh is not None and previous_deployment_id is not None:
                 self.route_refresh(db, tenant_id, application_id)
 
-    def _source_operation(self, operation_id: str, application_id: str, kind: str) -> dict:
+    def _source_operation(
+        self,
+        operation_id: str,
+        application_id: str,
+        kind: str,
+        *,
+        ingress_publish: tuple[str, int] | None = None,
+    ) -> dict:
         from systutor.core.errors import AppError
 
         with self.session_factory() as db:
@@ -274,7 +324,8 @@ class AppsWorker:
             release_id = operation_report.get("hardened_operation_id")
             if isinstance(release_id, str) and release_id:
                 return self.execution.deploy_known_release(
-                    operation_id, application_id, release_id, operation_report
+                    operation_id, application_id, release_id, operation_report,
+                    ingress_publish=ingress_publish,
                 )
         with self.session_factory() as db:
             app = db.get(Application, application_id)
@@ -443,6 +494,7 @@ class AppsWorker:
                 operation_id, application_id, release, source, tenant_names,
                 repository=source[0], branch=source[1],
                 scope=operation_report.get("scope"),
+                ingress_publish=ingress_publish,
             )
 
     def reconcile_routes(self) -> int:
