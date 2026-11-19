@@ -1,10 +1,8 @@
 """Tenant resource plan vocabulary: validation, rendering and host adapter.
 
-The DB in the Apps plugin is the source of truth.  ``plans.json`` here is only
-a cache of the last applied state and is never read as a plan implicitly.
-Applying a plan materialises ``tenant-<slug>.slice`` (under the default
-``tenant.slice`` hierarchy) and points the cell's user manager at that slice
-with a drop-in; removing it restores ``user-<uid>.slice``.
+The DB in the Apps plugin is the source of truth. ``plans.json`` is only a
+cache of the last applied state. Limits are applied to the existing user
+manager; this module never reparents it or creates a tenant slice.
 
 Everything that touches the host goes through the injectable ``Executor``. This
 module owns validation, rendering, persistence and orchestration; the only real
@@ -16,20 +14,20 @@ from __future__ import annotations
 
 import json
 import os
+import pwd
 import re
 import subprocess
-import time
 from pathlib import Path
 from typing import Any
 
 from .alloc import validate_slug
 
-_SYSTEMD_DIR = Path("/etc/systemd/system")
-
 PLANS_NAME = "plans.json"
 PLAN_VERSION = 1
 MUTATION_GATE = "SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS"
 DROPIN_NAME = "tenant-plan.conf"
+PLAN_KEYS = {"memory", "cpus", "pids", "cpuset"}
+_SYSTEMD_DIR = Path("/etc/systemd/system")
 
 _MEMORY_RE = re.compile(r"^(\d+(?:\.\d+)?)\s*([KMGT]?)B?$", re.IGNORECASE)
 _CPUSET_RE = re.compile(r"^[0-9]+(?:-[0-9]+)?(?:,[0-9]+(?:-[0-9]+)?)*$")
@@ -179,6 +177,52 @@ def expected_probe_limits(plan: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def set_property_args(uid: int, plan: dict[str, Any]) -> list[str]:
+    """Build the bounded systemd mutation for an existing user manager."""
+    checked = validate_plan(plan["memory"], plan["cpus"], plan["pids"])
+    return [
+        "systemctl",
+        "set-property",
+        f"user@{int(uid)}.service",
+        f"MemoryMax={checked['memory']}",
+        f"CPUQuota={cpu_quota(checked['cpus'])}",
+        f"TasksMax={checked['pids']}",
+    ]
+
+
+def reset_property_args(uid: int) -> list[str]:
+    """Build rollback for all properties owned by the plan materializer."""
+    return ["systemctl", "revert", f"user@{int(uid)}.service"]
+
+
+def user_manager_cgroup_path(uid: int, control_group: str | None = None) -> str:
+    """Map the existing manager to its cgroups-v2 directory."""
+    group = (control_group or f"/user.slice/user-{int(uid)}.slice/user@{int(uid)}.service")
+    return str(Path("/sys/fs/cgroup") / group.lstrip("/"))
+
+
+def read_cgroup_limits(path: str | Path) -> dict[str, str]:
+    """Read effective cgroups-v2 values without mutating the host."""
+    root = Path(path)
+    names = {"memory_max": "memory.max", "cpu_max": "cpu.max", "pids_max": "pids.max"}
+    result: dict[str, str] = {}
+    for key, filename in names.items():
+        try:
+            result[key] = (root / filename).read_text(encoding="utf-8").strip()
+        except OSError:
+            result[key] = ""
+    return result
+
+
+def parse_systemd_show(output: str) -> dict[str, str]:
+    return {
+        key: value
+        for line in output.splitlines()
+        if "=" in line
+        for key, value in [line.split("=", 1)]
+    }
+
+
 # --- atomic persistence ----------------------------------------------------
 
 
@@ -238,70 +282,75 @@ class PlanExecutorMixin:
     already-gated helpers and reads cgroup files read-only.
     """
 
-    def install_tenant_slice(self, slug: str, plan: dict[str, Any]) -> None:
-        self._write_file_once(  # type: ignore[attr-defined]
-            _SYSTEMD_DIR / slice_name(slug), render_slice(slug, plan)
-        )
-        self._run(["systemctl", "daemon-reload"])  # type: ignore[attr-defined]
+    def apply_plan_in_place(self, uid: int, plan: dict[str, Any]) -> None:
+        self._run(set_property_args(uid, plan))  # type: ignore[attr-defined]
 
-    def remove_tenant_slice(self, slug: str) -> None:
+    def reset_plan_properties(self, uid: int) -> None:
+        self._run(reset_property_args(uid))  # type: ignore[attr-defined]
+
+    def cleanup_legacy_plan(self, slug: str, uid: int) -> bool:
+        """Remove obsolete reparenting files without restarting the manager."""
         self._ensure_gate()  # type: ignore[attr-defined]
-        (_SYSTEMD_DIR / slice_name(slug)).unlink(missing_ok=True)
-        self._run(["systemctl", "daemon-reload"])  # type: ignore[attr-defined]
-
-    def install_user_manager_dropin(self, slug: str, uid: int) -> None:
-        self._write_file_once(  # type: ignore[attr-defined]
-            _SYSTEMD_DIR / f"user@{uid}.service.d" / DROPIN_NAME,
-            render_dropin(slug),
+        paths = (
+            _SYSTEMD_DIR / slice_name(slug),
+            _SYSTEMD_DIR / f"user@{int(uid)}.service.d" / DROPIN_NAME,
         )
-        self._run(["systemctl", "daemon-reload"])  # type: ignore[attr-defined]
+        changed = any(path.exists() for path in paths)
+        for path in paths:
+            path.unlink(missing_ok=True)
+        if changed:
+            self._run(["systemctl", "daemon-reload"])  # type: ignore[attr-defined]
+        return changed
 
-    def remove_user_manager_dropin(self, slug: str, uid: int) -> None:
-        self._ensure_gate()  # type: ignore[attr-defined]
-        path = _SYSTEMD_DIR / f"user@{uid}.service.d" / DROPIN_NAME
-        path.unlink(missing_ok=True)
-        self._run(["systemctl", "daemon-reload"])  # type: ignore[attr-defined]
-
-    def restart_user_manager(self, uid: int) -> None:
-        # The only plan mutation that briefly interrupts the cell's containers:
-        # restarting user@<uid>.service re-parents the manager to the slice.
-        unit = f"user@{uid}.service"
-        self._run(["systemctl", "restart", unit])  # type: ignore[attr-defined]
-        for _ in range(20):
-            active = subprocess.run(
-                ["systemctl", "is-active", "--quiet", unit], check=False
-            )
-            if active.returncode == 0:
-                return
-            time.sleep(0.5)
+    def read_plan_state(self, uid: int) -> dict[str, Any]:
+        unit = f"user@{int(uid)}.service"
+        result = subprocess.run(
+            ["systemctl", "show", unit, "-p", "MemoryMax", "-p",
+             "CPUQuotaPerSecUSec", "-p", "TasksMax", "-p", "Slice", "-p",
+             "ControlGroup"],
+            capture_output=True, text=True, check=False, timeout=10,
+        )
+        properties = parse_systemd_show(result.stdout) if result.returncode == 0 else {}
+        control_group = properties.get("ControlGroup", "")
+        effective = read_cgroup_limits(user_manager_cgroup_path(uid, control_group))
+        env = dict(os.environ)
+        env["XDG_RUNTIME_DIR"] = f"/run/user/{int(uid)}"
+        env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{int(uid)}/bus"
+        owner = subprocess.run(
+            ["runuser", "-u", pwd.getpwuid(int(uid)).pw_name, "--", "busctl",
+             "--user", "--no-pager", "status"],
+            env=env, capture_output=True, text=True, check=False, timeout=10,
+        )
+        owner_uid = ""
+        for line in (owner.stdout or "").splitlines():
+            if "OwnerUID=" in line:
+                owner_uid = line.split("OwnerUID=", 1)[1].strip()
+                break
+        return {
+            "unit": unit,
+            "slice": properties.get("Slice", ""),
+            "properties": properties,
+            "control_group": control_group,
+            "cgroup_path": user_manager_cgroup_path(uid, control_group),
+            "effective": effective,
+            "owner_uid": owner_uid,
+        }
 
     def run_plan_probe(
-        self, slug: str, uid: int, plan: dict[str, Any]
+        self, slug: str, uid: int, plan: dict[str, Any],
+        memory_mb: int = 64, seconds: int = 3,
     ) -> dict[str, Any]:
-        """Prove the kernel enforces the slice on rootful and rootless sides."""
+        """Prove effective limits with load in a disposable rootless container."""
         self._ensure_gate()  # type: ignore[attr-defined]
-        name = slice_name(slug)
-        cgroup = slice_cgroup_path(slug)
-        path = Path("/sys/fs/cgroup") / cgroup.lstrip("/")
+        state = self.read_plan_state(uid)
+        cgroup = state["control_group"]
+        path = Path(state["cgroup_path"])
         container = f"spanel-plan-probe-{slug}"
-        # A.SPEC 0103: the rootful probe container (--cgroup-parent) must talk
-        # to the host's *root* daemon.  The cell's rootless socket can only
-        # create scopes under user@<uid>.service, runc then hits
-        # /run/systemd/private as rootless and gets EPERM.  Drop any inherited
-        # DOCKER_HOST so docker uses the default root daemon socket; the
-        # rootless scope below still goes through the cell user via _run_user.
-        env = dict(os.environ)
-        env.pop("DOCKER_HOST", None)
 
-        def docker(argv: list[str], stdin: str | None = None) -> Any:
-            return subprocess.run(
-                ["docker", *argv],
-                env=env,
-                input=stdin,
-                text=True,
-                capture_output=True,
-                check=False,
-                timeout=90,
+        def docker(argv: list[str]) -> Any:
+            return self._run_user(  # type: ignore[attr-defined]
+                uid, ["docker", "--host", f"unix:///var/lib/spanel/cells/{slug}/docker.sock", *argv],
+                capture_output=True, timeout=90,
             )
 
         def read(filename: str) -> str:
@@ -350,20 +399,16 @@ class PlanExecutorMixin:
 
         evidence: dict[str, Any] = {
             "slug": slug,
-            "slice": name,
+            "slice": state["slice"],
+            "owner_uid": state["owner_uid"],
             "cgroup_path": cgroup,
             "expected": expected_probe_limits(plan),
-            "rootful": {},
             "rootless": {},
             "ok": False,
         }
         docker(["rm", "-f", container])
         try:
-            started = docker([
-                "run", "-d", "--name", container, f"--cgroup-parent={name}",
-                "--memory", "128m", "--cpus", "0.5", "--pids-limit", "64",
-                "alpine", "sleep", "300",
-            ])
+            started = docker(["run", "-d", "--name", container, "alpine", "sleep", "300"])
             if started.returncode:
                 evidence["error"] = (started.stderr or started.stdout)[:400]
                 return evidence
@@ -375,27 +420,23 @@ class PlanExecutorMixin:
             except ValueError:
                 evidence["error"] = f"bad probe pid: {pid_s!r}"
                 return evidence
-            rootful_cgroup = proc_cgroup(pid)
             rootless_cgroup = proc_cgroup(manager_pid())
-            evidence["rootful"] = {
+            evidence["rootless"] = {
                 "container_pid": pid,
-                "container_cgroup": rootful_cgroup,
+                "container_cgroup": proc_cgroup(pid),
+                "user_manager_cgroup": rootless_cgroup,
             }
-            evidence["rootless"] = {"user_manager_cgroup": rootless_cgroup}
 
             before = usage_usec()
             docker([
-                "exec", container, "timeout", "3", "sh", "-c",
-                "while :; do :; done",
+                "exec", container, "sh", "-c",
+                (
+                    f"dd if=/dev/zero of=/tmp/probe bs=1M count={int(memory_mb)} "
+                    f"2>/dev/null; timeout {int(seconds)} sh -c 'while :; do :; done'"
+                ),
             ])
-            # A rootless scope under the same manager also loads the slice.
-            self._run_user(  # type: ignore[attr-defined]
-                uid,
-                [
-                    "systemd-run", "--user", "--scope", "--no-block", "--collect",
-                    "sh", "-c", "timeout 3 sh -c 'while :; do :; done'",
-                ],
-            )
+            logs = docker(["logs", container])
+            evidence["eperm"] = "EPERM" in ((logs.stdout or "") + (logs.stderr or ""))
             evidence["cpu_delta_usec"] = usage_usec() - before
             evidence["memory_max"] = read("memory.max")
             evidence["cpu_max"] = read("cpu.max")
@@ -409,12 +450,13 @@ class PlanExecutorMixin:
 
             expected = evidence["expected"]
             evidence["ok"] = (
-                rootful_cgroup.startswith(cgroup)
-                and rootless_cgroup.startswith(cgroup)
+                state["slice"] == user_slice(uid)
+                and state["owner_uid"] == str(uid)
                 and evidence["memory_max"] == expected["memory_max"]
                 and evidence["cpu_max"] == expected["cpu_max"]
                 and evidence["pids_max"] == expected["pids_max"]
                 and evidence["cpu_delta_usec"] > 0
+                and not evidence["eperm"]
             )
             return evidence
         finally:

@@ -30,14 +30,20 @@ from typing import Any
 
 from . import alloc, materializer, plans, relay
 
-ALLOWED_OPS = ("apply", "remove", "verify", "reconcile")
+ALLOWED_OPS = (
+    "apply", "apply_in_place", "remove", "verify", "probe", "reconcile",
+    "migrate_all",
+)
 # A.SPEC 0104: ``endpoint`` is a read-only host fact, deliberately kept out of
 # the mutation allowlist (ALLOWED_OPS) so existing callers keep the same gate.
 READ_OPS = ("endpoint",)
 ALL_OPS = ALLOWED_OPS + READ_OPS
 RECONCILE_SUBJECT = "*"
-REQUEST_KEYS = {"op", "tenant", "slug", "token", "plan", "desired"}
-PLAN_KEYS = {"memory", "cpus", "pids", "cpuset"}
+REQUEST_KEYS = {
+    "op", "tenant", "slug", "token", "plan", "desired", "dry_run",
+    "only", "exclude", "stop_on_failure", "memory_mb", "seconds",
+}
+PLAN_KEYS = plans.PLAN_KEYS
 DESIRED_KEYS = {"tenant", "slug", "plan", "status", "desired_hash"}
 MAX_FRAME = 1 << 20
 MAX_DESIRED = 1000
@@ -177,6 +183,7 @@ class PlanAgent:
         clock: Callable[[], float] | None = None,
         peer_resolver: Callable[[Any], Peer] | None = None,
         endpoint_resolver: Callable[[str, str | Path], dict[str, Any]] | None = None,
+        migration_handler: Callable[..., dict[str, Any]] | None = None,
     ) -> None:
         if not secret:
             raise ValueError("the host agent requires a shared secret")
@@ -190,6 +197,7 @@ class PlanAgent:
         self.clock = clock or time.time
         self.peer_resolver = peer_resolver or peer_credential
         self.endpoint_resolver = endpoint_resolver or resolve_endpoint
+        self.migration_handler = migration_handler
 
     def authorize_peer(self, peer: Peer) -> None:
         if peer.uid not in self.allowed_uids:
@@ -229,16 +237,19 @@ class PlanAgent:
             self.secret, request.get("token"), op=op,
             tenant=str(tenant), slug=str(slug), now=self.clock(),
         )
-        if op == "reconcile":
+        if op in ("reconcile", "migrate_all"):
             if tenant != RECONCILE_SUBJECT or slug != RECONCILE_SUBJECT:
-                raise AuthorizationError(ERR_FORBIDDEN, "reconcile has no tenant subject")
-            self._validate_desired(request.get("desired"))
+                raise AuthorizationError(ERR_FORBIDDEN, f"{op} has no tenant subject")
+            if op == "reconcile":
+                self._validate_desired(request.get("desired"))
+            elif request.get("only") not in (None, "static", "wordpress", "app"):
+                raise AuthorizationError(ERR_REQUEST, "invalid migration kind")
             return op
         checked = plans.validate_slug(str(slug))
         if tenant != checked:
             raise AuthorizationError(ERR_FORBIDDEN, "tenant and slug do not match")
         self._authorize_tenant(checked)
-        if op in ("apply", "verify"):
+        if op in ("apply", "apply_in_place", "verify", "probe"):
             self._validate_plan(request.get("plan"))
         return op
 
@@ -247,15 +258,33 @@ class PlanAgent:
             op = self.authorize(request, peer)
             if op == "reconcile":
                 result = self.materializer.reconcile(request["desired"])
+            elif op == "migrate_all":
+                if self.migration_handler is None:
+                    raise RuntimeError("migration handler is not configured")
+                if not request.get("dry_run") and not plans.mutation_allowed():
+                    raise plans.MutationDisabled("local mutations are disabled")
+                result = self.migration_handler(
+                    dry_run=bool(request.get("dry_run")),
+                    only=request.get("only"),
+                    exclude=set(request.get("exclude") or []),
+                    stop_on_failure=bool(request.get("stop_on_failure", True)),
+                )
             elif op == "endpoint":
                 slug = plans.validate_slug(str(request["slug"]))
                 result = self.endpoint_resolver(slug, self.data_root)
             else:
                 slug = plans.validate_slug(str(request["slug"]))
-                if op == "apply":
+                if op in ("apply", "apply_in_place"):
                     result = self.materializer.apply(slug, request["plan"])
                 elif op == "remove":
                     result = self.materializer.remove(slug)
+                elif op == "probe":
+                    result = self.materializer.probe(
+                        slug,
+                        request["plan"],
+                        memory_mb=int(request.get("memory_mb", 64)),
+                        seconds=int(request.get("seconds", 3)),
+                    )
                 else:
                     result = self.materializer.verify(slug, request["plan"])
             return {"ok": True, "result": result}

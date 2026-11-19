@@ -179,5 +179,11 @@ Ver `aspecs/0107-tenant-resource-runtime-and-inventory.md` (documento de contrat
   en laboratorio **PASS 7/7** (`artifacts/0107-tenant-resource-runtime-e2e.json`),
   incluyendo dry-run sin mutación, aislamiento por tenant, independencia de la bandera,
   downgrade ejecutado e infraestructura Core intacta (PID/hashes sin cambios).
-- Pendiente: commit de 0107 sobre `remove-hardener`. Siguiente spec: 0108 (compuerta RAM
-  con `set-property`, sin reparentar, y `migrate --all` secuencial).
+- 0107 commiteada y pusheada: `8ad6861` + `6398c0f` (trazabilidad).
+- 0108 ejecutada con GENERATOR (`gpt-5.6-sol#medium`, reparación incluida) y verificada:
+  17 tests + ruff PASS y E2E black-box en laboratorio **PASS 8/8**
+  (`artifacts/0108-rootless-userspace-ram-dry-run-e2e.json`). OwnerUID y slice preservados,
+  RAM efectiva en cgroups v2 bajo carga, contenedor sin EPERM, dry-run sin mutación,
+  `migrate --all` secuencial con DMS excluido y rollback con `systemctl revert`.
+  **Compuerta abierta: 0109 y 0110 ya pueden ejecutarse.**
+- Pendiente: commit de 0108 sobre `remove-hardener`.

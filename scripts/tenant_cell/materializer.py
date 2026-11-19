@@ -1,10 +1,10 @@
-"""Host materializer for tenant resource plans (A.SPEC 0101).
+"""Host materializer for in-place tenant resource plans.
 
 The Apps plugin owns the plan in its DB and calls ``apply``/``remove``/``verify``
 through an injected materializer.  This module owns the root/systemd side
-effects: it renders and installs ``tenant-<slug>.slice``, reparents the cell's
-user manager with a drop-in, and keeps ``plans.json`` as a cache of the last
-applied state (never as a source of truth).
+effects: it applies properties to the existing user manager and keeps
+``plans.json`` as a cache of the last applied state (never as a source of
+truth).
 """
 
 from __future__ import annotations
@@ -26,7 +26,7 @@ class PlanMaterializer:
     ) -> None:
         self.executor = executor
         self.data_root = Path(data_root)
-        self.probe = probe
+        self._host_probe = probe
 
     def _require_gate(self) -> None:
         if not plans.mutation_allowed():
@@ -53,7 +53,7 @@ class PlanMaterializer:
         cpus: object = None,
         pids: object = None,
     ) -> dict[str, Any]:
-        """Validate, install the slice + drop-in, restart the manager, cache.
+        """Validate and apply limits to the existing user manager, then cache.
 
         ``plan`` is normally the dict sent by the backend materializer call;
         the three positional values are kept for the thin host CLI.
@@ -67,19 +67,17 @@ class PlanMaterializer:
             payload["memory"], payload["cpus"], payload["pids"]
         )
         if payload.get("cpuset"):
-            # render_slice validates the exact CPU list format too.
-            plans.render_slice(slug, {**checked, "cpuset": payload["cpuset"]})
+            raise plans.InvalidPlan("cpuset cannot be applied in place")
         self._require_gate()
         cell = self._cell(slug)
         if alloc.cgroup_driver(cell) != alloc.DEFAULT_CGROUP_DRIVER:
             raise plans.PlanDriverError("tenant plans require the systemd cgroup driver")
         uid = int(cell["uid"])
 
-        self.executor.install_tenant_slice(
-            slug, {**checked, "cpuset": payload.get("cpuset")}
-        )
-        self.executor.install_user_manager_dropin(slug, uid)
-        self.executor.restart_user_manager(uid)
+        before = self.executor.read_plan_state(uid)
+        expected = plans.expected_probe_limits(checked)
+        if before.get("effective") != expected:
+            self.executor.apply_plan_in_place(uid, checked)
 
         data = plans.load_plans(self.data_root)
         data["plans"][slug] = {"slug": slug, "uid": uid, "plan": checked}
@@ -89,36 +87,36 @@ class PlanMaterializer:
             tenant_slug=slug,
             verb="plan_set",
             exit_code=0,
-            slice=plans.slice_name(slug),
-            restored_slice=plans.user_slice(uid),
+            slice=plans.user_slice(uid),
         )
         return self.show(slug)
 
     def show(self, slug: str) -> dict[str, Any]:
-        """Return the cached plan and the slice it currently materialises."""
+        """Return cached intent and host-observed effective state."""
         slug = plans.validate_slug(slug)
         entry = self._entry(slug)
         uid = int(entry.get("uid", 0)) or int(self._cell(slug)["uid"])
+        state = self.executor.read_plan_state(uid)
         return {
             "slug": slug,
             "uid": uid,
             "plan": entry["plan"],
-            "slice": plans.slice_name(slug),
-            "cgroup_path": plans.slice_cgroup_path(slug),
-            "dropin": plans.dropin_path(uid),
+            "slice": state.get("slice") or plans.user_slice(uid),
+            "properties": state.get("properties", {}),
+            "effective": state.get("effective", {}),
+            "owner_uid": state.get("owner_uid", ""),
+            "cgroup_path": state.get("cgroup_path", ""),
         }
 
     def remove(self, slug: str) -> dict[str, Any]:
-        """Drop the artifacts, restore user-<uid>.slice and clear the cache."""
+        """Reset plan properties without deleting cell data or units."""
         slug = plans.validate_slug(slug)
         self._require_gate()
         entry = self._entry(slug)
         cell = alloc.load_registry(self.data_root)["allocations"].get(slug)
         uid = int(entry.get("uid", 0)) or int(cell["uid"] if cell else 0)
 
-        self.executor.remove_user_manager_dropin(slug, uid)
-        self.executor.remove_tenant_slice(slug)
-        self.executor.restart_user_manager(uid)
+        self.executor.reset_plan_properties(uid)
 
         data = plans.load_plans(self.data_root)
         data["plans"].pop(slug, None)
@@ -135,7 +133,19 @@ class PlanMaterializer:
 
     def verify(self, slug: str, plan: dict[str, Any] | None = None) -> dict[str, Any]:
         """Return kernel evidence from both sides; ``plan`` may come from DB."""
+        return self.probe(slug, plan=plan)
+
+    def probe(
+        self,
+        slug: str,
+        plan: dict[str, Any] | None = None,
+        memory_mb: int = 64,
+        seconds: int = 3,
+    ) -> dict[str, Any]:
+        """Run a bounded disposable-container probe against cgroups v2."""
         slug = plans.validate_slug(slug)
+        if memory_mb <= 0 or seconds <= 0:
+            raise plans.InvalidPlan("probe memory and seconds must be positive")
         self._require_gate()
         entry = self._entry(slug)
         source = plan if plan is not None else entry["plan"]
@@ -143,7 +153,9 @@ class PlanMaterializer:
             source["memory"], source["cpus"], source["pids"]
         )
         uid = int(entry.get("uid", 0)) or int(self._cell(slug)["uid"])
-        evidence = self.executor.run_plan_probe(slug, uid, effective)
+        evidence = self.executor.run_plan_probe(
+            slug, uid, effective, memory_mb=memory_mb, seconds=seconds
+        )
         ok = bool(evidence.get("ok"))
         audit.write_audit(
             self.data_root,
@@ -154,8 +166,10 @@ class PlanMaterializer:
         return {
             "slug": slug,
             "ok": ok,
-            "slice": plans.slice_name(slug),
-            "cgroup_path": plans.slice_cgroup_path(slug),
+            "slice": evidence.get("slice", plans.user_slice(uid)),
+            "properties": evidence.get("properties", {}),
+            "owner_uid": evidence.get("owner_uid", ""),
+            "cgroup_path": evidence.get("cgroup_path", ""),
             "plan": effective,
             "evidence": evidence,
         }
@@ -178,6 +192,10 @@ class PlanMaterializer:
             desired_slugs.add(slug)
             plan = entry["plan"]
             try:
+                cell = self._cell(slug)
+                cleanup = getattr(self.executor, "cleanup_legacy_plan", None)
+                if cleanup is not None:
+                    cleanup(slug, int(cell["uid"]))
                 evidence = self.verify(slug, plan)
                 ok = bool(evidence.get("ok"))
                 action = "verified"

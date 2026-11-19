@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import importlib.metadata
 import json
+import os
 import socket
 from collections.abc import Callable
 from pathlib import Path
@@ -102,6 +103,117 @@ def _execute(
         raise typer.Exit(code=1)
 
 
+CORE_NAMES = {
+    "traefik", "mariadb", "phpmyadmin", "powerdns", "docker-mailserver",
+    "mailserver", "spanel-mail", "spanel-core",
+}
+MIGRATION_KINDS = ("static", "wordpress", "app")
+
+
+class MigrationBackend:
+    """Injectable bridge to the 0107 inventory/runtime and future migrators."""
+
+    def resources(self) -> list[dict[str, Any]]:
+        return []
+
+    def runtime(self, resource: dict[str, Any]) -> str:
+        return str(resource.get("runtime", "rootful"))
+
+    def migrate(self, resource: dict[str, Any]) -> Any:
+        raise RuntimeError("no resource migrator is registered")
+
+    def verify(self, resource: dict[str, Any]) -> bool:
+        return False
+
+    def set_runtime(self, resource: dict[str, Any], runtime: str) -> None:
+        raise RuntimeError("no runtime registry is registered")
+
+    def rollback(self, resource: dict[str, Any], token: Any) -> None:
+        return None
+
+
+def _is_core_resource(resource: dict[str, Any]) -> bool:
+    labels = resource.get("labels", {})
+    label_values = labels.values() if isinstance(labels, dict) else labels or []
+    if any(str(value).lower() == "core" for value in label_values):
+        return True
+    names = " ".join(
+        str(resource.get(key, "")).lower()
+        for key in ("resource_id", "name", "container_name")
+    )
+    return any(name in names for name in CORE_NAMES)
+
+
+class MigrationService:
+    """Sequential, fail-closed orchestration over the registered runtime."""
+
+    def __init__(self, backend: MigrationBackend) -> None:
+        self.backend = backend
+
+    def run(
+        self,
+        *,
+        dry_run: bool,
+        only: str | None,
+        exclude: set[str],
+        stop_on_failure: bool,
+    ) -> dict[str, Any]:
+        if only is not None and only not in MIGRATION_KINDS:
+            raise ValueError("--only must be static, wordpress, or app")
+        if not dry_run and os.environ.get("SPANEL_TENANTS_ROOTLESS", "false").lower() != "true":
+            raise plans.MutationDisabled(
+                "SPANEL_TENANTS_ROOTLESS=true is required to apply migrations"
+            )
+        selected = [
+            row for row in self.backend.resources()
+            if row.get("kind") in MIGRATION_KINDS
+            and (only is None or row.get("kind") == only)
+            and str(row.get("resource_id")) not in exclude
+            and not _is_core_resource(row)
+        ]
+        selected.sort(key=lambda row: (
+            MIGRATION_KINDS.index(str(row["kind"])),
+            str(row.get("resource_id", "")),
+        ))
+        results: list[dict[str, Any]] = []
+        for resource in selected:
+            resource_id = str(resource["resource_id"])
+            old_runtime = self.backend.runtime(resource)
+            item = {"kind": resource["kind"], "resource_id": resource_id}
+            if old_runtime == "rootless":
+                results.append({**item, "status": "already_rootless"})
+                continue
+            if dry_run:
+                results.append({**item, "status": "would_migrate", "mutation": False})
+                continue
+            token: Any = None
+            try:
+                token = self.backend.migrate(resource)
+                if not self.backend.verify(resource):
+                    raise RuntimeError("post-migration verification failed")
+                self.backend.set_runtime(resource, "rootless")
+                results.append({**item, "status": "migrated"})
+            except Exception as exc:  # noqa: BLE001 - rollback is the boundary
+                self.backend.rollback(resource, token)
+                self.backend.set_runtime(resource, old_runtime)
+                results.append({**item, "status": "failed", "error": str(exc)[:300]})
+                if stop_on_failure:
+                    break
+        return {
+            "ok": not any(row["status"] == "failed" for row in results),
+            "dry_run": dry_run,
+            "order": results,
+            "core_excluded": True,
+        }
+
+
+def _migration_service(data_root: str) -> MigrationService:
+    # Production injects the 0107-backed adapter; the safe default inventories
+    # nothing and therefore cannot mutate an unregistered resource.
+    del data_root
+    return MigrationService(MigrationBackend())
+
+
 @app.command()
 def doctor(
     json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
@@ -119,12 +231,50 @@ def provision(
     slug: str = typer.Option(..., "--slug", help="Validated tenant slug."),
     json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
     data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without mutation."),
 ) -> None:
     """Create a cell, but only after a green doctor gate; idempotent."""
+    if dry_run:
+        result = _execute(
+            lambda: _provision_blueprint(slug, data_root), json_output, "provision"
+        )
+        _emit(result, json_output)
+        return
     result = _execute(
         lambda: _service(data_root).provision(slug), json_output, "provision"
     )
     _emit(result, json_output)
+
+
+def _provision_blueprint(slug: str, data_root: str) -> dict[str, Any]:
+    """Compute allocation facts without calling ``allocate`` or writing files."""
+    slug = alloc.validate_slug(slug)
+    registry = alloc.load_registry(data_root)
+    cell = registry["allocations"].get(slug)
+    if cell is None:
+        index = int(registry["next_index"])
+        retired = {int(row["index"]) for row in registry["tombstones"]}
+        while index in retired:
+            index += 1
+        block = int(registry["block_size"])
+        uid = int(registry["base_uid"]) + index
+        subuid = int(registry["base_uid"]) + block + index * block
+        cell = {"uid": uid, "subuid_base": subuid, "subgid_base": subuid}
+    uid = int(cell["uid"])
+    block = int(registry["block_size"])
+    active = plans.active_plan(data_root, slug)
+    return {
+        "slug": slug,
+        "uid": uid,
+        "subuid_range": [int(cell["subuid_base"]), block],
+        "subgid_range": [int(cell["subgid_base"]), block],
+        "slice": plans.user_slice(uid),
+        "apparmor_profile": f"spanel-cell-{slug}",
+        "docker_socket": f"/var/lib/spanel/cells/{slug}/docker.sock",
+        "limits": active["plan"] if active else None,
+        "mutation": False,
+        "would_create": ["user", "subuid", "subgid", "cell_dirs", "apparmor", "docker_socket"],
+    }
 
 
 @app.command()
@@ -165,16 +315,44 @@ def repair(
 
 @app.command()
 def migrate(
-    slug: str = typer.Option(..., "--slug", help="Validated tenant slug."),
-    driver: str = typer.Option(
-        alloc.DEFAULT_CGROUP_DRIVER, "--driver", help="Target cgroup driver."
+    slug: str | None = typer.Option(None, "--slug", help="Validated tenant slug."),
+    driver: str | None = typer.Option(None, "--driver", help="Target cgroup driver."),
+    all_resources: bool = typer.Option(False, "--all", help="Migrate all resources."),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without mutation."),
+    only: str | None = typer.Option(None, "--only", help="static, wordpress, or app."),
+    exclude: str | None = typer.Option(None, "--exclude", help="Resource id to skip."),
+    stop_on_failure: bool = typer.Option(
+        True, "--stop-on-failure/--continue-on-failure"
     ),
     json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
     data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
 ) -> None:
-    """Migrate one cell's cgroup driver with backup, verification and rollback."""
+    """Migrate a driver, or preview/run sequential per-resource migration."""
+    if all_resources:
+        if slug is not None or driver is not None:
+            _emit({"error": "--all is mutually exclusive with --slug/--driver"}, json_output)
+            raise typer.Exit(code=2)
+        result = _execute(
+            lambda: _migration_service(data_root).run(
+                dry_run=dry_run,
+                only=only,
+                exclude={exclude} if exclude else set(),
+                stop_on_failure=stop_on_failure,
+            ),
+            json_output,
+            "migrate_all",
+        )
+        _emit(result, json_output)
+        if not result.get("ok"):
+            raise typer.Exit(code=1)
+        return
+    if slug is None:
+        _emit({"error": "--slug is required unless --all is used"}, json_output)
+        raise typer.Exit(code=2)
     result = _execute(
-        lambda: _service(data_root).migrate(slug, driver), json_output, "migrate"
+        lambda: _service(data_root).migrate(
+            slug, driver or alloc.DEFAULT_CGROUP_DRIVER
+        ), json_output, "migrate"
     )
     _emit(result, json_output)
 
@@ -269,24 +447,44 @@ def _plan_service(data_root: str) -> materializer.PlanMaterializer:
     )
 
 
-@plan_app.command("set")
-def plan_set(
+def _plan_preview(slug: str, memory: str, cpus: float, pids: int, data_root: str) -> dict[str, Any]:
+    checked = plans.validate_plan(memory, cpus, pids)
+    cell = alloc.load_registry(data_root)["allocations"].get(alloc.validate_slug(slug))
+    if cell is None:
+        raise plans.PlanCellMissing(slug)
+    uid = int(cell["uid"])
+    return {
+        "slug": slug,
+        "uid": uid,
+        "slice": plans.user_slice(uid),
+        "properties": plans.set_property_args(uid, checked)[3:],
+        "mutation": False,
+    }
+
+
+def _plan_apply_command(
     slug: str = typer.Option(..., "--slug", help="Validated tenant slug."),
     memory: str = typer.Option(..., "--memory", help="MemoryMax (e.g. 512M)."),
     cpus: float = typer.Option(..., "--cpus", help="CPU quota in cores (e.g. 0.5)."),
     pids: int = typer.Option(..., "--pids", help="TasksMax (positive integer)."),
     json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
     data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview without systemd."),
 ) -> None:
-    """Install tenant-<slug>.slice, attach the user manager and save the plan."""
+    """Apply limits to the existing user manager without reparenting it."""
     result = _execute(
-        lambda: _plan_service(data_root).apply(
-            slug, {"memory": memory, "cpus": cpus, "pids": pids}
-        ),
+        (lambda: _plan_preview(slug, memory, cpus, pids, data_root))
+        if dry_run
+        else lambda: _plan_service(data_root).apply(
+            slug, {"memory": memory, "cpus": cpus, "pids": pids}),
         json_output,
-        "plan_set",
+        "plan_apply",
     )
     _emit(result, json_output)
+
+
+plan_app.command("apply")(_plan_apply_command)
+plan_app.command("set")(_plan_apply_command)
 
 
 @plan_app.command("show")
@@ -324,6 +522,26 @@ def plan_verify(
     """Prove the kernel enforces the plan on the rootful and rootless sides."""
     result = _execute(
         lambda: _plan_service(data_root).verify(slug), json_output, "plan_verify"
+    )
+    _emit(result, json_output)
+    if not result.get("ok"):
+        raise typer.Exit(code=1)
+
+
+@plan_app.command("probe")
+def plan_probe(
+    slug: str = typer.Option(..., "--slug", help="Validated tenant slug."),
+    memory_mb: int = typer.Option(64, "--memory-mb"),
+    seconds: int = typer.Option(3, "--seconds"),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+    data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
+) -> None:
+    result = _execute(
+        lambda: _plan_service(data_root).probe(
+            slug, memory_mb=memory_mb, seconds=seconds
+        ),
+        json_output,
+        "plan_probe",
     )
     _emit(result, json_output)
     if not result.get("ok"):
