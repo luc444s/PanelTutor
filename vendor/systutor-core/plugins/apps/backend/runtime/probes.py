@@ -22,6 +22,7 @@ import yaml
 from .deployment import _compose_command
 from .docker_audit import _is_definitely_non_root_user
 from .probe_defaults import DEFAULT_PROBE_IMAGE
+from .tenant_plan import current_tenant_plan
 from .transport import Runner
 from .types import AppDeployError
 
@@ -243,6 +244,21 @@ def _rootless_userns(runner: Runner) -> bool:
     return result.returncode == 0 and "rootless" in result.stdout.lower()
 
 
+def memory_budget_bytes() -> int:
+    """Per-service memory ceiling accepted by the isolation probe.
+
+    Without a tenant plan the historical 512 MiB cap still applies.  With a
+    plan bound for the deploy, the tenant *aggregate* is the ceiling: the
+    policy in ``tenant_plan.service_limits`` splits that aggregate across the
+    services, so a 2 GiB / 3-service plan must be deployable from the first
+    attempt instead of being rejected as a 715 MiB "per-service" limit.
+    """
+    plan = current_tenant_plan()
+    if plan is None or plan.memory_bytes <= MAX_APP_MEMORY:
+        return MAX_APP_MEMORY
+    return plan.memory_bytes
+
+
 def _assert_prohibited(service: str, values: Mapping[str, Any]) -> None:
     """Conditions that are forbidden in every runtime baseline."""
     host = values["host"]
@@ -287,10 +303,11 @@ def _assert_mandatory(
     if isinstance(pids, bool) or not isinstance(pids, int) or not 0 < pids <= MAX_APP_PIDS:
         raise ProbeFailed(f"service {service} PID limit is invalid")
     memory = host.get("Memory")
+    budget = memory_budget_bytes()
     if (
         isinstance(memory, bool)
         or not isinstance(memory, int)
-        or not 0 < memory <= MAX_APP_MEMORY
+        or not 0 < memory <= budget
     ):
         raise ProbeFailed(f"service {service} memory limit is invalid")
     nano_cpus = host.get("NanoCpus")
@@ -399,6 +416,7 @@ def check_isolation(
             "apparmor": str(values.get("apparmor") or ""),
             "seccomp": "builtin",
             "limits": limits,
+            "memory_budget_bytes": memory_budget_bytes(),
             "baseline": baseline.name,
             "user_namespace": user_namespace,
         }
@@ -444,15 +462,20 @@ def _probe_argv(
     command: Sequence[str],
     network: str,
     limits: tuple[int, int, int],
+    *,
+    read_only: bool = True,
 ) -> list[str]:
     pids, memory_mb, cpus = limits
-    return [
+    argv = [
         "docker",
         "run",
         "--rm",
         "--network",
         network,
-        "--read-only",
+    ]
+    if read_only:
+        argv.append("--read-only")
+    argv.extend([
         "--cap-drop",
         "ALL",
         "--security-opt",
@@ -467,7 +490,8 @@ def _probe_argv(
         PROBE_USER,
         image,
         *command,
-    ]
+    ])
+    return argv
 
 
 def run_functional_probe(
@@ -478,12 +502,15 @@ def run_functional_probe(
     command: Sequence[str],
     timeout: int,
     limits: tuple[int, int, int] = (64, 128, 1),
+    read_only: bool = True,
 ) -> dict[str, Any]:
     if str(runner.transport) == "ssh":
         raise ProbeFailed("functional probes require a local Docker runner")
     try:
         result = runner.run(
-            _probe_argv(image, command, network, limits),
+            _probe_argv(
+                image, command, network, limits, read_only=read_only
+            ),
             timeout=timeout,
             check=False,
         )
@@ -494,6 +521,7 @@ def run_functional_probe(
         "returncode": result.returncode,
         "sha256": hashlib.sha256(output).hexdigest(),
         "bytes": min(len(output), MAX_OUTPUT_BYTES),
+        "read_only": read_only,
     }
     if result.returncode:
         raise ProbeFailed(
@@ -623,6 +651,11 @@ def run_probes(
     functional: list[dict[str, Any]] = []
     restart_counts: dict[str, int] = {}
     interval = window / checks if checks else 0
+    # runc implements --read-only with a rootfs remount. The cell AppArmor
+    # profile intentionally does not grant remounting `/`; the tenant user
+    # namespace is the rootless boundary, while this disposable probe still
+    # runs as uid 65534 with no capabilities and no-new-privileges.
+    probe_read_only = "user_namespace" not in baseline.mandatory
     for index in range(checks):
         if index == 0:
             startup_deadline = time.monotonic() + startup
@@ -635,6 +668,7 @@ def run_probes(
                             image=image,
                             command=command,
                             timeout=timeout,
+                            read_only=probe_read_only,
                         )
                     )
                     break
@@ -651,6 +685,7 @@ def run_probes(
                     image=image,
                     command=command,
                     timeout=timeout,
+                    read_only=probe_read_only,
                 )
             )
         restart_counts = _inspect_stability(runner, active)

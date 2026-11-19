@@ -13,7 +13,12 @@ from fastapi import FastAPI
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from plugins.domains.backend.models import DomainRoute, DomainSyncState, ObservedDomain
+from plugins.domains.backend.models import (
+    DomainAppHost,
+    DomainRoute,
+    DomainSyncState,
+    ObservedDomain,
+)
 from plugins.domains.backend.proxy import (
     EXIT_VALIDATION,
     PathRoute,
@@ -25,6 +30,8 @@ from plugins.domains.backend.proxy import (
     normalize_path_prefix,
 )
 from plugins.domains.backend.schemas import (
+    AppHostCreate,
+    AppHostItem,
     AvailableDomainsResponse,
     CertificateResponse,
     DomainCheckResponse,
@@ -36,12 +43,14 @@ from plugins.domains.backend.schemas import (
     SiteOption,
 )
 from plugins.domains.backend.settings import get_domains_settings
+from systutor.contracts.app_hosts import AppHost
 from systutor.contracts.domain_namespace import (
     DomainConflictError,
     DomainUsage,
     claim_domain,
     domain_owner,
     list_tenant_domains,
+    normalize_domain_name,
     release_domain,
 )
 from systutor.contracts.domain_ownership import (
@@ -57,6 +66,25 @@ from systutor.kernel.tenants.models import Tenant
 from systutor.kernel.tenants.service import list_tenants
 
 logger = logging.getLogger(__name__)
+
+
+def provide_app_hosts(
+    db: Session, tenant_id: str, application_id: str | None = None
+) -> list[AppHost]:
+    stmt = select(DomainAppHost).where(DomainAppHost.tenant_id == tenant_id)
+    if application_id is not None:
+        stmt = stmt.where(DomainAppHost.application_id == application_id)
+    rows = db.scalars(stmt.order_by(DomainAppHost.application_id, DomainAppHost.service))
+    return [
+        AppHost(
+            site_id=f"{row.application_id}:{row.service}",
+            application_id=row.application_id,
+            service=row.service,
+            domain=row.domain,
+            https=row.https,
+        )
+        for row in rows
+    ]
 
 
 def published_domain_usage(db: Session, domain: str) -> DomainUsage | None:
@@ -150,6 +178,151 @@ class DomainsService:
             raise AppError(
                 "Invalid proxy profile", status_code=503, code="domains.proxy_unavailable"
             ) from exc
+
+    # ---- app hosts -------------------------------------------------------
+
+    @staticmethod
+    def _app_host_item(row: DomainAppHost, *, expose_tenant: bool = False) -> AppHostItem:
+        return AppHostItem(
+            site_id=f"{row.application_id}:{row.service}",
+            application_id=row.application_id,
+            service=row.service,
+            domain=row.domain,
+            https=row.https,
+            tenant_id=row.tenant_id if expose_tenant else None,
+        )
+
+    def list_app_hosts(
+        self,
+        tenant_context: TenantContext,
+        *,
+        application_id: str | None = None,
+        all_tenants: bool = False,
+    ) -> list[AppHostItem]:
+        if all_tenants and not tenant_context.is_platform:
+            raise AppError(
+                "Only the platform administrator can view all tenants",
+                status_code=403,
+                code="domains.platform_scope_forbidden",
+            )
+        stmt = select(DomainAppHost)
+        if not all_tenants:
+            stmt = stmt.where(
+                DomainAppHost.tenant_id == tenant_context.current_tenant_id
+            )
+        if application_id is not None:
+            stmt = stmt.where(DomainAppHost.application_id == application_id)
+        rows = self._db.scalars(
+            stmt.order_by(DomainAppHost.tenant_id, DomainAppHost.application_id)
+        )
+        return [self._app_host_item(row, expose_tenant=all_tenants) for row in rows]
+
+    def add_app_host(
+        self, tenant_context: TenantContext, body: AppHostCreate
+    ) -> AppHostItem:
+        tenant_id = tenant_context.current_tenant_id
+        site_id = f"{body.application_id}:{body.service}"
+        if resolve_site(self._app, self._db, tenant_id, site_id) is None:
+            raise NotFoundError("Unknown application service")
+        try:
+            domain = normalize_domain_name(body.domain)
+        except ValueError as exc:
+            raise AppError(
+                str(exc), status_code=422, code="domains.invalid_domain"
+            ) from exc
+        existing_domain = self._db.scalar(
+            select(DomainAppHost).where(DomainAppHost.domain == domain)
+        )
+        if existing_domain is not None and (
+            existing_domain.tenant_id != tenant_id
+            or existing_domain.application_id != body.application_id
+            or existing_domain.service != body.service
+        ):
+            raise AppError(
+                f"{domain} is already assigned",
+                status_code=409,
+                code="domains.already_owned",
+            )
+        owner = domain_owner(self._app, self._db, domain)
+        if owner is not None and owner != tenant_id:
+            raise AppError(
+                f"{domain} is managed by another tenant",
+                status_code=409,
+                code="domains.already_owned",
+            )
+        if owner is None:
+            try:
+                claimed = claim_domain(self._app, self._db, tenant_id, domain)
+            except DomainConflictError as exc:
+                raise AppError(
+                    f"{domain} is managed by another tenant",
+                    status_code=409,
+                    code="domains.already_owned",
+                ) from exc
+            if not claimed:
+                raise AppError(
+                    "Domain ownership provider is unavailable",
+                    status_code=503,
+                    code="domains.namespace_unavailable",
+                )
+        row = self._db.scalar(
+            select(DomainAppHost).where(
+                DomainAppHost.tenant_id == tenant_id,
+                DomainAppHost.application_id == body.application_id,
+                DomainAppHost.service == body.service,
+            )
+        )
+        previous_domain = row.domain if row is not None else None
+        if row is None:
+            row = DomainAppHost(
+                tenant_id=tenant_id,
+                application_id=body.application_id,
+                service=body.service,
+                domain=domain,
+                https=body.https,
+            )
+            self._db.add(row)
+        else:
+            row.domain = domain
+            row.https = body.https
+        self._db.flush()
+        if previous_domain is not None and previous_domain != domain:
+            release_domain(self._app, self._db, tenant_id, previous_domain)
+        self._audit(
+            tenant_context,
+            action="domains.domain.added",
+            domain=domain,
+            details={"site_id": site_id, "mode": "app_host", "https": body.https},
+        )
+        return self._app_host_item(row)
+
+    def remove_app_host(
+        self, tenant_context: TenantContext, application_id: str, service: str
+    ) -> AppHostItem:
+        row = self._db.scalar(
+            select(DomainAppHost).where(
+                DomainAppHost.tenant_id == tenant_context.current_tenant_id,
+                DomainAppHost.application_id == application_id,
+                DomainAppHost.service == service,
+            )
+        )
+        if row is None:
+            raise NotFoundError("Unknown app host")
+        item = self._app_host_item(row)
+        domain = row.domain
+        self._db.delete(row)
+        self._db.flush()
+        release_domain(
+            self._app, self._db, tenant_context.current_tenant_id, domain
+        )
+        self._audit(
+            tenant_context,
+            action="domains.domain.removed",
+            domain=domain,
+            details={"site_id": item.site_id, "mode": "app_host"},
+        )
+        return item
+
     def _operations(self) -> ProxyOperations:
         settings = self._settings()
         return ProxyOperations(settings, build_runner(settings), StringIO(), StringIO())

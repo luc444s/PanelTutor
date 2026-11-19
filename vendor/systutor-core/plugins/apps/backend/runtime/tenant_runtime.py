@@ -126,6 +126,10 @@ class DockerRootlessRuntime:
     def environment(self) -> dict[str, str]:
         env = dict(os.environ)
         env["DOCKER_HOST"] = f"unix://{self.socket_path}"
+        # Runtime selection and probe policy are one decision.  A global
+        # hardened baseline would reject the cell's user-namespace isolation
+        # and attempt AppArmor-forbidden read-only rootfs remounts.
+        env["SPANEL_APPS_PROBE_BASELINE"] = "rootless"
         return env
 
     def runner(self) -> Runner:
@@ -213,7 +217,10 @@ class FakeTenantRuntime:
 
     def environment(self) -> dict[str, str]:
         self._record("environment")
-        return {"DOCKER_HOST": f"unix://{self.socket_path}"}
+        return {
+            "DOCKER_HOST": f"unix://{self.socket_path}",
+            "SPANEL_APPS_PROBE_BASELINE": "rootless",
+        }
 
     def status(self, slug: str | None = None) -> dict[str, Any]:
         self._record("status", slug=slug)

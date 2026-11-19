@@ -1,11 +1,24 @@
 from __future__ import annotations
 
+import json
 from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
 
+from plugins.apps.backend.plans_client import CellEndpoint
+from plugins.apps.backend.rootless_routes import RootlessRoutes
 from plugins.apps.backend.runtime import AppDeployError
+from plugins.apps.backend.runtime.probes import (
+    MAX_APP_MEMORY,
+    ProbeFailed,
+    check_isolation,
+)
+from plugins.apps.backend.runtime.tenant_plan import (
+    TenantPlan,
+    bind_tenant_plan,
+    service_limits,
+)
 from plugins.apps.backend.runtime.tenant_runtime import TenantRuntimeRegistry
 from plugins.apps.backend.settings import AppsSettings
 from plugins.apps.backend.worker import AppsWorker
@@ -30,6 +43,7 @@ def test_runner_selection_follows_injected_gate(tmp_path, monkeypatch) -> None:
     worker = AppsWorker(lambda: nullcontext(None), None, runtime_registry=registry)
     runner = worker._runner("t1")
     assert runner.environ["DOCKER_HOST"] == f"unix://{tmp_path}/cells/cell-a/docker.sock"
+    assert runner.environ["SPANEL_APPS_PROBE_BASELINE"] == "rootless"
     assert "/var/run/docker.sock" not in runner.environ["DOCKER_HOST"]
 
 
@@ -144,3 +158,136 @@ def test_disabled_flag_does_not_rewrite_registered_runtime(monkeypatch) -> None:
     recorder = build_runtime_recorder(AppsSettings.from_env())
     assert recorder is None
     assert registered == {"a1:web": "rootless"}
+
+
+def test_rollback_restores_route_and_never_records_runtime() -> None:
+    """A real cutover failure must restore route + runtime before recording."""
+    recorded = []
+    worker, app, routes, restored = _cutover_worker(
+        recorder=lambda db, tenant, resources, runtime: recorded.append(
+            (tenant, list(resources), runtime)
+        )
+    )
+
+    def fail_refresh(*_args):
+        raise AppDeployError("route publication failed")
+
+    worker.rootless_routes.refresh = fail_refresh
+
+    with pytest.raises(AppDeployError, match="route publication"):
+        worker._rootless_deploy("op1", "a1")
+
+    assert app.active_deployment_id == "old"  # previous deployment restored
+    assert app.status == "running"
+    assert recorded == []  # runtime was never switched to rootless
+    assert routes.cleaned == [("t1", "a1")]
+    assert restored == [("t1", "a1")]  # rootful route refreshed again
+
+
+# --- A.SPEC 0109-R3: aggregate 2 GiB plan and public Host publication --------
+
+
+class _IsolationRunner:
+    """Minimal runner that reports one running container to the probe."""
+
+    transport = "local"
+
+    def __init__(self, memory_bytes: int) -> None:
+        self.memory_bytes = memory_bytes
+
+    def run(self, argv, **_kwargs):
+        if argv[:3] == ["docker", "container", "inspect"]:
+            payload = [{
+                "State": {"Status": "running", "RestartCount": 0},
+                "HostConfig": {
+                    "Privileged": False,
+                    "Devices": [],
+                    "PortBindings": {},
+                    "PidMode": "",
+                    "NetworkMode": "proj_default",
+                    "CapDrop": ["ALL"],
+                    "SecurityOpt": [
+                        "no-new-privileges:true", "apparmor=docker-default",
+                        "seccomp=builtin",
+                    ],
+                    "Runtime": "runc",
+                    "PidsLimit": 256,
+                    "Memory": self.memory_bytes,
+                    "NanoCpus": 1_000_000_000,
+                    "ReadonlyRootfs": False,
+                },
+                "AppArmorProfile": "docker-default",
+                "Config": {"User": "10001:10002"},
+                "Mounts": [],
+                "NetworkSettings": {"Networks": {"proj_default": {}}},
+            }]
+            return SimpleNamespace(returncode=0, stdout=json.dumps(payload))
+        if argv[:2] == ["docker", "top"]:
+            return SimpleNamespace(returncode=0, stdout="PID UID\n1 10001\n")
+        if argv[:3] == ["docker", "network", "inspect"]:
+            return SimpleNamespace(returncode=0, stdout="true")
+        return SimpleNamespace(returncode=0, stdout="")
+
+
+def test_aggregate_2gb_plan_allows_a_three_service_deploy_from_the_start() -> None:
+    plan = TenantPlan(
+        memory_bytes=2147483648, cpus=1.0, pids=512, tenant_slug="acme"
+    )
+    services = {name: {} for name in ("backend", "database", "frontend")}
+    derived = service_limits(plan, services)
+    per_service = derived["backend"]["mem_limit"]
+
+    # The split itself is unchanged: three equal shares within the aggregate.
+    assert per_service > MAX_APP_MEMORY
+    assert sum(item["mem_limit"] for item in derived.values()) <= plan.memory_bytes
+    assert derived["backend"] == derived["database"] == derived["frontend"]
+
+    runner = _IsolationRunner(per_service)
+    # Without a plan the historical per-service cap still applies.
+    with pytest.raises(ProbeFailed, match="memory"):
+        check_isolation(runner, {"backend": "cid"})
+    # With the tenant plan bound for the deploy, the 2 GiB aggregate is the
+    # ceiling, so the very first deploy is accepted (no lab re-deploy at 1.4 GB).
+    with bind_tenant_plan(plan):
+        evidence = check_isolation(runner, {"backend": "cid"})
+    assert evidence["backend"]["limits"]["memory"] == per_service
+    assert evidence["backend"]["memory_budget_bytes"] == 2147483648
+
+
+def test_public_surface_domain_is_published_as_the_host() -> None:
+    published = []
+
+    class Publisher:
+        def publish(self, domain, bind, relay_port, https=True):
+            published.append((domain, bind, relay_port, https))
+
+        def unpublish(self, domain):
+            return True
+
+    class Client:
+        def endpoint(self, slug):
+            return CellEndpoint(
+                slug=slug,
+                loopback_address="127.9.1.1",
+                publish_port=20020,
+                relay_port=40020,
+                bind="172.25.0.1",
+            )
+
+    class Db:
+        def get(self, _model, _application_id):
+            return SimpleNamespace(domain="editor.lab")
+
+    routes = RootlessRoutes(
+        Client(), Publisher(), slug_resolver=lambda _db, _t: "acme", https=False
+    )
+    result = routes.refresh(Db(), "t1", "a1")
+
+    assert published == [("editor.lab", "172.25.0.1", 40020, False)]
+    assert result["host"] == "editor.lab"
+    assert result["published"] == ["editor.lab"]
+
+    # No domain assigned by the public surface -> no Host is published.
+    published.clear()
+    routes.refresh(SimpleNamespace(get=lambda *_a: SimpleNamespace(domain=None)), "t1", "a1")
+    assert published == []

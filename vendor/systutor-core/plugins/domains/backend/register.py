@@ -12,11 +12,13 @@ from plugins.domains.backend.proxy import ProxyOperations, build_runner
 from plugins.domains.backend.publisher import register_domains_publisher
 from plugins.domains.backend.router import router
 from plugins.domains.backend.service import (
+    provide_app_hosts,
     published_domain_usage,
     refresh_application_routes,
     release_application_routes,
 )
 from plugins.domains.backend.settings import get_domains_settings, register_domains_settings
+from systutor.contracts.app_hosts import register_app_host_provider
 from systutor.contracts.domain_namespace import register_domain_usage
 from systutor.contracts.domain_ownership import register_extra_claims
 from systutor.sdk.context import PluginContext
@@ -61,4 +63,5 @@ def register(context: PluginContext) -> None:
         )
         register_extra_claims(app, "domains", check_extra_claim)
         register_domain_usage(app, "domains", published_domain_usage)
+        register_app_host_provider(app, "domains", provide_app_hosts)
         register_domains_publisher(context)

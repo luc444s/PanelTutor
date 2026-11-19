@@ -30,3 +30,18 @@ Propiedad explícita por tenant: lista, dueño, reclamo y liberación.
 
 Los duplicados con otra implementación fallan en el registro. El registro vive
 en `app.state`, así que las pruebas no comparten estado entre procesos.
+
+## `app_hosts`
+
+Contrato de Hosts de aplicaciones propiedad de `domains`, sin importar sus
+modelos desde Apps:
+
+- `register_app_host_provider(app, name, provider)` registra el inventario.
+- `list_app_hosts(app, db, tenant_id, application_id=None)` lista Hosts con
+  scope de tenant.
+- `resolve_app_host(app, db, tenant_id, application_id, service)` resuelve un
+  `AppHost(site_id, application_id, service, domain, https)`.
+
+Apps consulta este contrato primero. Mientras exista el campo histórico
+`apps_applications.domain`, puede usarlo como fallback cuando no haya fila; su
+retirada solo ocurrirá por una decisión explícita futura, nunca por fecha.

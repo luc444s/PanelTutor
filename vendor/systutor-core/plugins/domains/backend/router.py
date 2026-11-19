@@ -12,6 +12,9 @@ from fastapi import APIRouter, Depends, Request, Response
 from sqlalchemy.orm import Session
 
 from plugins.domains.backend.schemas import (
+    AppHostCreate,
+    AppHostItem,
+    AppHostsResponse,
     AvailableDomainsResponse,
     CertificateResponse,
     CreateDomainRequest,
@@ -50,20 +53,92 @@ def _get_service(request: Request, db: Session = Depends(get_db_session)) -> Dom
     return DomainsService(db, request.app)
 
 
-def _publish(request: Request, event_name: str, *, tenant_id: str, domain: str) -> None:
+def _publish(
+    request: Request,
+    event_name: str,
+    *,
+    tenant_id: str,
+    domain: str,
+    payload: dict[str, object] | None = None,
+) -> None:
     context = getattr(request.app.state, "domains_context", None)
     if context is None:
         return
     try:
         context.publish_event(
             event_name=event_name,
-            payload={"domain": domain},
+            payload={"domain": domain, **(payload or {})},
             tenant_id=tenant_id,
             entity_type="domain",
             entity_id=domain,
         )
     except Exception:  # noqa: BLE001 - la auditoría ya quedó registrada
         logger.warning("domains_event_publish_failed", extra={"event": event_name})
+
+
+@router.get("/app-hosts", response_model=AppHostsResponse)
+def list_app_hosts(
+    scope: str = "tenant",
+    application_id: str | None = None,
+    tenant_context: TenantContext = Depends(get_current_tenant_context),
+    _current_user: User = Depends(require_permission("domains.domains.read")),
+    service: DomainsService = Depends(_get_service),
+) -> AppHostsResponse:
+    if scope not in ("tenant", "all"):
+        raise AppError(
+            "scope must be 'tenant' or 'all'", status_code=422,
+            code="domains.invalid_scope",
+        )
+    return AppHostsResponse(
+        items=service.list_app_hosts(
+            tenant_context,
+            application_id=application_id,
+            all_tenants=scope == "all",
+        )
+    )
+
+
+@router.post("/app-hosts", response_model=AppHostItem, status_code=201)
+def create_app_host(
+    body: AppHostCreate,
+    request: Request,
+    tenant_context: TenantContext = Depends(get_current_tenant_context),
+    _current_user: User = Depends(require_permission("domains.domains.manage")),
+    service: DomainsService = Depends(_get_service),
+) -> AppHostItem:
+    item = service.add_app_host(tenant_context, body)
+    _publish(
+        request,
+        "domains.domain.added",
+        tenant_id=tenant_context.current_tenant_id,
+        domain=item.domain,
+        payload={
+            "site_id": item.site_id,
+            "application_id": item.application_id,
+            "service": item.service,
+        },
+    )
+    return item
+
+
+@router.delete("/app-hosts", status_code=204)
+def delete_app_host(
+    application_id: str,
+    service: str,
+    request: Request,
+    tenant_context: TenantContext = Depends(get_current_tenant_context),
+    _current_user: User = Depends(require_permission("domains.domains.manage")),
+    domains_service: DomainsService = Depends(_get_service),
+) -> Response:
+    item = domains_service.remove_app_host(tenant_context, application_id, service)
+    _publish(
+        request,
+        "domains.domain.removed",
+        tenant_id=tenant_context.current_tenant_id,
+        domain=item.domain,
+        payload={"site_id": item.site_id},
+    )
+    return Response(status_code=204)
 
 
 @router.get("", response_model=DomainsResponse)

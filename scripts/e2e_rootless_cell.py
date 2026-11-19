@@ -32,13 +32,20 @@ ROOTFUL_SOCKET = "/var/run/docker.sock"
 # cell profile's allowed paths inside the container payload.
 DOCKERFILE = 'FROM alpine:3.20\nCMD ["sh"]\n'
 
+PROBE_IMAGE = (
+    "curlimages/curl@sha256:"
+    "d9b4541e214bcd85196d6e92e2753ac6d0ea699f0af5741f8c6cccbfcf00ef4b"
+)
+
 # The payload runs entirely under /tmp (explicitly writable in the cell
 # profile), listens on a port for the network check and emits heartbeat lines
 # for the logs check.  BusyBox httpd is not in Alpine's base busybox, so nc
 # provides the listener instead.
 APP_COMMAND = (
     "echo cell-e2e boot $(date -u +%FT%TZ) > /tmp/boot.txt; "
-    "nc -l -p 8080 >/dev/null 2>&1 & "
+    "while true; do "
+    "printf 'HTTP/1.1 200 OK\\r\\nContent-Length: 2\\r\\nConnection: close\\r\\n\\r\\nOK' "
+    "| nc -l -p 8080; done >/dev/null 2>&1 & "
     "i=0; while true; do i=$((i + 1)); echo heartbeat $i; sleep 2; done"
 )
 HEALTH_COMMAND = "test -s /tmp/boot.txt"
@@ -128,15 +135,21 @@ def main() -> int:
                                   "version", "--format", "{{.Server.Version}}"])
             assert rootful.returncode, "rootful socket must be unreachable from the cell"
             assert "rootless" in info.lower(), "dockerd is not rootless"
+            daemon_id = client.ok(["docker", "info", "--format", "{{.ID}}"])
             return {
                 "docker_host": client.env["DOCKER_HOST"],
+                "daemon_id": daemon_id,
                 "security_options": info,
                 "rootful_access": "denied",
             }
 
         def do_pull() -> dict[str, Any]:
             out = client.ok(["docker", "pull", "alpine:3.20"])
-            return {"last_line": out.splitlines()[-1] if out else ""}
+            probe = client.ok(["docker", "pull", PROBE_IMAGE])
+            return {
+                "last_line": out.splitlines()[-1] if out else "",
+                "probe_last_line": probe.splitlines()[-1] if probe else "",
+            }
 
         def do_build() -> dict[str, Any]:
             (build_dir / "Dockerfile").write_text(DOCKERFILE, encoding="utf-8")
@@ -209,6 +222,32 @@ def main() -> int:
             created["helper"] = False  # --rm removes it
             return {"peer_connect": "ok", "via": f"{app}:8080"}
 
+        def do_readiness_probe() -> dict[str, Any]:
+            result = client.run([
+                "docker", "run", "--rm", "--network", network,
+                "--cap-drop", "ALL",
+                "--security-opt", "no-new-privileges:true",
+                "--pids-limit", "64", "--memory", "128m", "--cpus", "1",
+                "--user", "65534:65534", PROBE_IMAGE,
+                "curl", "-sS", "-o", "/dev/null", "--write-out", "%{http_code}",
+                "--connect-timeout", "5", "--max-time", "10",
+                f"http://{app}:8080/",
+            ], timeout=30)
+            if result.returncode:
+                raise RuntimeError(
+                    f"readiness probe failed ({result.returncode}): "
+                    f"{(result.stderr or result.stdout).strip()[:400]}"
+                )
+            assert result.stdout == "200", f"unexpected HTTP status {result.stdout!r}"
+            daemon_id = client.ok(["docker", "info", "--format", "{{.ID}}"])
+            return {
+                "http_status": result.stdout,
+                "target": f"http://{app}:8080/",
+                "network": network,
+                "daemon_id": daemon_id,
+                "docker_host": client.env["DOCKER_HOST"],
+            }
+
         for name, fn in (
             ("preflight", do_preflight),
             ("pull", do_pull),
@@ -220,6 +259,7 @@ def main() -> int:
             ("logs", do_logs),
             ("volume_data", do_volume_data),
             ("networked", do_networked),
+            ("readiness_probe", do_readiness_probe),
         ):
             step(evidence, name, fn)
         evidence["ok"] = True

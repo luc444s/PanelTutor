@@ -28,15 +28,15 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-from . import alloc, materializer, plans, relay
+from . import alloc, materializer, network, plans, relay
 
 ALLOWED_OPS = (
     "apply", "apply_in_place", "remove", "verify", "probe", "reconcile",
-    "migrate_all",
+    "migrate_all", "nat_apply", "nat_remove",
 )
 # A.SPEC 0104: ``endpoint`` is a read-only host fact, deliberately kept out of
 # the mutation allowlist (ALLOWED_OPS) so existing callers keep the same gate.
-READ_OPS = ("endpoint",)
+READ_OPS = ("endpoint", "nat_status")
 ALL_OPS = ALLOWED_OPS + READ_OPS
 RECONCILE_SUBJECT = "*"
 REQUEST_KEYS = {
@@ -184,6 +184,7 @@ class PlanAgent:
         peer_resolver: Callable[[Any], Peer] | None = None,
         endpoint_resolver: Callable[[str, str | Path], dict[str, Any]] | None = None,
         migration_handler: Callable[..., dict[str, Any]] | None = None,
+        nat_handler: Callable[[str, str], dict[str, Any]] | None = None,
     ) -> None:
         if not secret:
             raise ValueError("the host agent requires a shared secret")
@@ -198,6 +199,7 @@ class PlanAgent:
         self.peer_resolver = peer_resolver or peer_credential
         self.endpoint_resolver = endpoint_resolver or resolve_endpoint
         self.migration_handler = migration_handler
+        self.nat_handler = nat_handler
 
     def authorize_peer(self, peer: Peer) -> None:
         if peer.uid not in self.allowed_uids:
@@ -272,6 +274,11 @@ class PlanAgent:
             elif op == "endpoint":
                 slug = plans.validate_slug(str(request["slug"]))
                 result = self.endpoint_resolver(slug, self.data_root)
+            elif op in ("nat_status", "nat_apply", "nat_remove"):
+                if self.nat_handler is None:
+                    raise RuntimeError("cell NAT handler is not configured")
+                slug = plans.validate_slug(str(request["slug"]))
+                result = self.nat_handler(op, slug)
             else:
                 slug = plans.validate_slug(str(request["slug"]))
                 if op in ("apply", "apply_in_place"):
@@ -338,15 +345,15 @@ def build_agent_from_env(data_root: str | Path) -> PlanAgent:
         os.environ.get("SPANEL_PLAN_AGENT_TOKEN_FILE", "/etc/spanel/plan_agent_token")
     )
     secret = read_secret(secret_file)
+    executor = _local_executor()
     return PlanAgent(
-        materializer.PlanMaterializer(
-            _local_executor(), data_root
-        ),
+        materializer.PlanMaterializer(executor, data_root),
         secret=secret,
         allowed_uids=allowed_uids_from_env(
             os.environ.get("SPANEL_PLAN_AGENT_ALLOWED_UIDS", "")
         ),
         data_root=data_root,
+        nat_handler=lambda op, slug: _cell_nat(executor, data_root, op, slug),
     )
 
 
@@ -361,6 +368,34 @@ def _local_executor() -> Any:
     from .executor import LocalExecutor
 
     return LocalExecutor()
+
+
+def _cell_nat(
+    executor: Any, data_root: str | Path, op: str, slug: str
+) -> dict[str, Any]:
+    """Observe or force cell NAT without ever entering the host network namespace."""
+    if not plans.mutation_allowed():
+        raise plans.MutationDisabled("local mutations are disabled")
+    allocation = alloc.load_registry(data_root)["allocations"].get(slug)
+    if allocation is None:
+        raise AuthorizationError(ERR_TENANT, f"tenant {slug} has no cell allocation")
+    uid = int(allocation["uid"])
+    subnet = network.egress_subnet()
+    if op == "nat_apply":
+        executor.ensure_cell_egress(uid, subnet)
+    elif op == "nat_remove":
+        executor.remove_cell_egress(uid, subnet)
+    pid = executor.cell_dockerd_pid(uid)
+    if pid <= 0:
+        raise RuntimeError(f"cell {slug} has no running dockerd")
+    enabled = executor.cell_egress_enabled(uid, subnet)
+    return {
+        "slug": slug,
+        "dockerd_pid": pid,
+        "subnet": subnet,
+        "enabled": enabled,
+        "namespace": "cell",
+    }
 
 
 def socket_path_from_env() -> Path:

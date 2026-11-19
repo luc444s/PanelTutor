@@ -212,6 +212,13 @@ class CellService:
                 self.executor.start_daemon(slug, int(cell["uid"]), driver) or 0
             )
             applied["daemon"] = True
+        main_pid = self._main_pid(slug, cell) or pid
+        live_pid = self.probe.daemon_pid(main_pid)
+        if live_pid <= 0:
+            pid = 0
+        elif not applied.get("egress"):
+            self.executor.ensure_cell_egress(int(cell["uid"]), network.egress_subnet())
+            applied["egress"] = True
 
         alloc.update_allocation(
             self.data_root,
@@ -253,6 +260,10 @@ class CellService:
 
         applied = cell.get("applied", {})
         driver = cgroup_driver(cell)
+        if applied.get("egress"):
+            self.executor.remove_cell_egress(
+                int(cell["uid"]), network.egress_subnet()
+            )
         if applied.get("daemon"):
             self.executor.stop_daemon(slug, int(cell["uid"]), driver)
         if applied.get("systemd"):
@@ -317,10 +328,16 @@ class CellService:
         self.executor.apply_network(
             network.build_network_spec(slug, cell, cell.get("network_mode", "skuid"))
         )
+        main_pid = self._main_pid(slug, cell) or int(cell.get("daemon_pid", 0))
+        live_pid = self.probe.daemon_pid(main_pid)
+        if live_pid <= 0:
+            raise RuntimeError("cannot repair cell egress NAT without a running daemon")
+        self.executor.ensure_cell_egress(int(cell["uid"]), network.egress_subnet())
         applied["apparmor"] = True
         applied["daemon_config"] = True
         applied["systemd"] = True
         applied["network"] = True
+        applied["egress"] = True
         alloc.update_allocation(
             self.data_root,
             slug,

@@ -42,6 +42,7 @@ def test_socket_and_environment_are_derived_only_from_slug(tmp_path) -> None:
     runtime = _runtime(tmp_path)
     assert runtime.socket_path == f"{tmp_path}/cells/cell-g/docker.sock"
     assert runtime.environment()["DOCKER_HOST"] == f"unix://{runtime.socket_path}"
+    assert runtime.environment()["SPANEL_APPS_PROBE_BASELINE"] == "rootless"
     assert "/var/run/docker.sock" not in runtime.socket_path
 
 

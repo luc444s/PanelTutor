@@ -18,7 +18,11 @@ from pathlib import Path
 from typing import Any
 
 from .alloc import DEFAULT_CGROUP_DRIVER, LEGACY_CGROUP_DRIVER
-from .network import cell_dns_resolver
+from .network import (
+    cell_dns_resolver,
+    netns_masquerade_argv,
+    rootlesskit_port_driver_env,
+)
 from .plans import PlanExecutorMixin
 
 _SYSTEMD_DIR = Path("/etc/systemd/system")
@@ -37,6 +41,35 @@ PROBE_CONTAINER = "spanel-cgroup-probe"
 PROBE_MEMORY = 128 * 1024 * 1024
 PROBE_NANO_CPUS = 500_000_000
 PROBE_PIDS_LIMIT = 64
+
+
+def rootlesskit_env_lines() -> str:
+    """RootlessKit port-driver settings that open 127.x.y.z:20000+ (0109-R3)."""
+    return "".join(
+        f"Environment={key}={value}\n"
+        for key, value in sorted(rootlesskit_port_driver_env(0).items())
+    )
+
+
+def dockerd_pid_for_uid(cell_uid: int, proc_root: Path = Path("/proc")) -> int:
+    """Return the real dockerd owned by a cell uid, excluding wrapper parents."""
+    uid = int(cell_uid)
+    for entry in proc_root.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            status = (entry / "status").read_text(encoding="utf-8")
+            real_uid = next(
+                int(line.split()[1])
+                for line in status.splitlines()
+                if line.startswith("Uid:")
+            )
+            argv0 = (entry / "cmdline").read_bytes().split(b"\0", 1)[0]
+        except (OSError, StopIteration, ValueError):
+            continue
+        if real_uid == uid and Path(os.fsdecode(argv0)).name == "dockerd":
+            return int(entry.name)
+    return 0
 
 
 class Executor:
@@ -146,6 +179,18 @@ class Executor:
     ) -> None:
         raise NotImplementedError
 
+    def cell_dockerd_pid(self, cell_uid: int) -> int:
+        raise NotImplementedError
+
+    def ensure_cell_egress(self, cell_uid: int, subnet: str) -> None:
+        raise NotImplementedError
+
+    def remove_cell_egress(self, cell_uid: int, subnet: str) -> None:
+        raise NotImplementedError
+
+    def cell_egress_enabled(self, cell_uid: int, subnet: str) -> bool:
+        raise NotImplementedError
+
 
 def systemd_unit(
     slug: str,
@@ -166,6 +211,7 @@ def systemd_unit(
     cell_dir = f"{_CELL_ROOT}/{slug}"
     socket = f"{cell_dir}/docker.sock"
     resolver = cell_dns_resolver()
+    rk_env = rootlesskit_env_lines()
     if driver == DEFAULT_CGROUP_DRIVER:
         # AppArmor is attached with aa-exec: a user manager cannot use the
         # system unit's AppArmorProfile= directive. The user bus lets runc read
@@ -184,8 +230,9 @@ def systemd_unit(
             "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_DETACH_NETNS=false\n"
             "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_SLIRP4NETNS_SANDBOX=false\n"
             "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=true\n"
-            f"Environment=SPANEL_TENANT_CELL_DNS={resolver}\n"
-            f"ExecStart=/usr/bin/aa-exec -p spanel-cell-{slug} -- "
+            + rk_env
+            + f"Environment=SPANEL_TENANT_CELL_DNS={resolver}\n"
+            + f"ExecStart=/usr/bin/aa-exec -p spanel-cell-{slug} -- "
             "/usr/bin/dockerd-rootless.sh "
             f"--data-root {cell_dir} "
             f"--host unix://{socket} --config-file={cell_dir}/daemon.json "
@@ -215,13 +262,14 @@ def systemd_unit(
         # the cell profile supplies confinement instead (verified in lab).
         "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_SLIRP4NETNS_SANDBOX=false\n"
         "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=true\n"
-        f"Environment=SPANEL_TENANT_CELL_DNS={resolver}\n"
+        + rk_env
+        + f"Environment=SPANEL_TENANT_CELL_DNS={resolver}\n"
         # Bind the cell profile at exec, not by executable path: all execs in
         # the chain inherit it via the profile's ix rules.
-        f"AppArmorProfile=spanel-cell-{slug}\n"
+        + f"AppArmorProfile=spanel-cell-{slug}\n"
         "Delegate=yes\n"
-        # nf_tables iptables inside the userns is denied on this host; the
-        # rootlesskit port driver publishes loopback ports without iptables.
+        # The daemon never manages iptables. The privileged host lifecycle
+        # installs egress NAT inside this cell's netns after startup.
         f"ExecStart=/usr/bin/dockerd-rootless.sh --data-root {cell_dir} "
         f"--host unix://{socket} --config-file={cell_dir}/daemon.json "
         "--iptables=false --ip6tables=false "
@@ -251,6 +299,86 @@ class LocalExecutor(PlanExecutorMixin, Executor):
     def _run(self, argv: list[str]) -> None:
         self._ensure_gate()
         subprocess.run(argv, check=True)
+
+    def cell_dockerd_pid(self, cell_uid: int) -> int:
+        """Find the cell's dockerd, never rootlesskit's host-netns parent."""
+        return dockerd_pid_for_uid(cell_uid)
+
+    @staticmethod
+    def _assert_cell_netns(dockerd_pid: int) -> None:
+        """Fail closed before iptables if the target is the host netns."""
+        try:
+            target = os.readlink(f"/proc/{dockerd_pid}/ns/net")
+            host = os.readlink("/proc/self/ns/net")
+        except OSError as exc:
+            raise RuntimeError(
+                f"cannot verify network namespace for dockerd pid {dockerd_pid}"
+            ) from exc
+        if target == host:
+            raise RuntimeError(
+                f"refusing cell egress NAT: dockerd pid {dockerd_pid} uses host netns"
+            )
+
+    def _cell_egress_enabled_pid(self, dockerd_pid: int, subnet: str) -> bool:
+        self._assert_cell_netns(dockerd_pid)
+        result = subprocess.run(
+            netns_masquerade_argv(dockerd_pid, subnet, "-C"),
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        return result.returncode == 0
+
+    def cell_egress_enabled(self, cell_uid: int, subnet: str) -> bool:
+        dockerd_pid = self.cell_dockerd_pid(cell_uid)
+        return dockerd_pid > 0 and self._cell_egress_enabled_pid(dockerd_pid, subnet)
+
+    def ensure_cell_egress(self, cell_uid: int, subnet: str) -> None:
+        """Install and verify MASQUERADE in the cell netns, retrying startup races."""
+        self._ensure_gate()
+        last_error = "cell network namespace is not ready"
+        for _ in range(20):
+            dockerd_pid = self.cell_dockerd_pid(cell_uid)
+            if dockerd_pid <= 0:
+                time.sleep(0.25)
+                continue
+            if self._cell_egress_enabled_pid(dockerd_pid, subnet):
+                return
+            self._assert_cell_netns(dockerd_pid)
+            result = subprocess.run(
+                netns_masquerade_argv(dockerd_pid, subnet, "-A"),
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            last_error = (result.stderr or result.stdout or last_error).strip()
+            if result.returncode == 0 and self._cell_egress_enabled_pid(
+                dockerd_pid, subnet
+            ):
+                return
+            time.sleep(0.25)
+        raise RuntimeError(f"could not install cell egress NAT: {last_error[:300]}")
+
+    def remove_cell_egress(self, cell_uid: int, subnet: str) -> None:
+        """Delete only the cell-netns MASQUERADE rule, if it still exists."""
+        self._ensure_gate()
+        dockerd_pid = self.cell_dockerd_pid(cell_uid)
+        if dockerd_pid <= 0:
+            return
+        if not self._cell_egress_enabled_pid(dockerd_pid, subnet):
+            return
+        self._assert_cell_netns(dockerd_pid)
+        result = subprocess.run(
+            netns_masquerade_argv(dockerd_pid, subnet, "-D"),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if result.returncode != 0 or self._cell_egress_enabled_pid(
+            dockerd_pid, subnet
+        ):
+            detail = (result.stderr or result.stdout or "rule remains installed").strip()
+            raise RuntimeError(f"could not remove cell egress NAT: {detail[:300]}")
 
     def _write_once(self, path: Path, line: str) -> None:
         if path.exists() and line in path.read_text(encoding="utf-8").splitlines():

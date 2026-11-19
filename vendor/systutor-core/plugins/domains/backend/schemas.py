@@ -60,6 +60,36 @@ class CreateDomainsResponse(BaseModel):
     items: list[DomainItem]
 
 
+class AppHostCreate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    application_id: str = Field(min_length=1, max_length=36)
+    service: str = Field(min_length=1, max_length=255)
+    domain: str = Field(min_length=4, max_length=253)
+    https: bool = True
+
+    @field_validator("application_id", "service")
+    @classmethod
+    def valid_identity(cls, value: str) -> str:
+        result = value.strip()
+        if not result or any(character in result for character in "`\r\n\t :/"):
+            raise ValueError("invalid application service identity")
+        return result
+
+
+class AppHostItem(BaseModel):
+    site_id: str
+    application_id: str
+    service: str
+    domain: str
+    https: bool
+    tenant_id: str | None = None
+
+
+class AppHostsResponse(BaseModel):
+    items: list[AppHostItem]
+
+
 class CertificateResponse(BaseModel):
     domain: str
     state: str

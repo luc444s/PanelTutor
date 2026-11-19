@@ -280,11 +280,33 @@ def test_functional_probe_is_bounded_and_never_returns_output() -> None:
     assert CANARY not in json.dumps(evidence)
     assert evidence["returncode"] == 0
     assert evidence["bytes"] == len(CANARY)
+    assert evidence["read_only"] is True
     argv = runner.calls[-1]
     assert argv[:2] == ["docker", "run"]
     assert "no-new-privileges:true" in argv
+    assert "--read-only" in argv
     assert "--pids-limit" in argv and "--memory" in argv and "--cpus" in argv
     assert "--network" in argv and argv[argv.index("--network") + 1] == "proj_default"
+
+
+def test_rootless_functional_probe_uses_ephemeral_writable_rootfs(tmp_path) -> None:
+    """Rootless AppArmor cannot perform runc's read-only rootfs remount."""
+    runner = _rootless_runner()
+    evidence = run_probes(
+        runner,
+        release=tmp_path,
+        compose_rel="compose.yml",
+        project="proj",
+        services=["web"],
+        containers={"web": "cid1"},
+        environ=env(SPANEL_APPS_PROBE_BASELINE="rootless"),
+        sleep=lambda _seconds: None,
+    )
+    argv = next(call for call in runner.calls if call[:2] == ["docker", "run"])
+    assert "--read-only" not in argv
+    assert argv[argv.index("--user") + 1] == "65534:65534"
+    assert "ALL" in argv and "no-new-privileges:true" in argv
+    assert evidence["functional"]["checks"][0]["read_only"] is False
 
 
 def test_run_probes_accepts_image_healthcheck_by_default(tmp_path) -> None:

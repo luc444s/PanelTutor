@@ -9,10 +9,12 @@ from __future__ import annotations
 from typing import Any
 
 import pytest
+from fastapi import FastAPI
 
 from plugins.apps.backend.plans_client import CellEndpoint, PlanAgentUnavailable
 from plugins.apps.backend.rootless_routes import RootlessRoutes
 from plugins.apps.backend.settings import AppsSettings
+from systutor.contracts.app_hosts import AppHost, register_app_host_provider
 
 DOMAIN = "rootless-tls.lab"
 FLAG = "SPANEL_ROOTLESS_ROUTES_HTTPS"
@@ -153,3 +155,21 @@ def test_no_endpoint_never_publishes_even_with_https() -> None:
 
     assert result["published"] == []
     assert publisher.published == []
+
+
+def test_domains_contract_wins_over_legacy_application_domain() -> None:
+    app = FastAPI()
+    register_app_host_provider(
+        app,
+        "fake",
+        lambda _db, _tenant, _application: [
+            AppHost("app1:web", "app1", "web", "owned.example", False)
+        ],
+    )
+    publisher = FakePublisher()
+    routes = _routes(FakeClient(_endpoint()), publisher, app=app)
+
+    result = routes.refresh(_Db(), "t1", "app1")
+
+    assert result["published"] == ["owned.example"]
+    assert publisher.published == [("owned.example", "172.25.0.1", 40020, False)]

@@ -41,6 +41,7 @@ class RootlessRoutes:
         *,
         slug_resolver: Callable[[Any, str], str] | None = None,
         https: bool | None = None,
+        app: Any | None = None,
     ) -> None:
         self.endpoint_client = endpoint_client
         self.publisher = publisher
@@ -48,6 +49,7 @@ class RootlessRoutes:
         # ``None`` means "resolve from host settings at refresh time"; an
         # explicit value lets the worker capture the boot-time configuration.
         self.https = https
+        self.app = app
 
     def _https(self) -> bool:
         """Return the configured TLS flag (default True, preserves HEAD)."""
@@ -57,18 +59,27 @@ class RootlessRoutes:
 
         return AppsSettings.from_env().rootless_routes_https
 
-    def _domains(self, db: Any, application_id: str) -> list[str]:
+    def _domains(
+        self, db: Any, tenant_id: str, application_id: str
+    ) -> list[tuple[str, bool]]:
+        """Prefer Domains-owned Hosts, with the explicit legacy Apps fallback."""
+        from systutor.contracts.app_hosts import list_app_hosts
+
+        hosts = list_app_hosts(self.app, db, tenant_id, application_id)
+        if hosts:
+            return [(host.domain, host.https) for host in hosts]
         from .models import Application
 
         app = db.get(Application, application_id)
-        if app is None or not app.domain:
+        domain = getattr(app, "domain", None)
+        if not isinstance(domain, str) or not domain.strip():
             return []
-        return [app.domain]
+        return [(domain, self._https())]
 
     def refresh(self, db: Any, tenant_id: str, application_id: str) -> dict[str, Any]:
         """Publish the app domain to the relay; no endpoint means no route."""
-        domains = self._domains(db, application_id)
-        if not domains:
+        hosts = self._domains(db, tenant_id, application_id)
+        if not hosts:
             return {"published": []}
         slug = self.slug_resolver(db, tenant_id)
         try:
@@ -80,19 +91,31 @@ class RootlessRoutes:
             )
             return {"published": [], "slug": slug, "error": str(exc)}
         published: list[str] = []
-        https = self._https()
-        for domain in domains:
+        for domain, https in hosts:
             self.publisher.publish(domain, endpoint.bind, endpoint.relay_port, https=https)
             published.append(domain)
+            # A.SPEC 0109-R3: make the published Host observable in the
+            # cutover evidence; the relay endpoint is the only backend.
+            logger.info(
+                "rootless_route_host_published",
+                extra={
+                    "domain": domain,
+                    "slug": slug,
+                    "bind": endpoint.bind,
+                    "relay_port": endpoint.relay_port,
+                    "https": https,
+                },
+            )
         return {
             "published": published,
+            "host": published[0] if published else None,
             "slug": slug,
             "endpoint": endpoint.as_dict(),
         }
 
     def cleanup(self, db: Any, tenant_id: str, application_id: str) -> dict[str, Any]:
         """Remove only the rootless documents this hook owns."""
-        domains = self._domains(db, application_id)
+        domains = [domain for domain, _https in self._domains(db, tenant_id, application_id)]
         removed: list[str] = []
         for domain in domains:
             if self.publisher.unpublish(domain):
@@ -100,7 +123,7 @@ class RootlessRoutes:
         return {"removed": removed, "tenant_id": tenant_id}
 
 
-def build_rootless_routes() -> RootlessRoutes | None:
+def build_rootless_routes(app: Any | None = None) -> RootlessRoutes | None:
     """Build the collaborator from host configuration, or stay inert.
 
     Both the web process (via ``register``) and the worker (via ``AppsWorker``)
@@ -126,7 +149,9 @@ def build_rootless_routes() -> RootlessRoutes | None:
         publisher = RootlessRoutePublisher(
             ProxyOperations(proxy, build_runner(proxy))
         )
-        return RootlessRoutes(client, publisher, https=settings.rootless_routes_https)
+        return RootlessRoutes(
+            client, publisher, https=settings.rootless_routes_https, app=app
+        )
     except Exception:  # noqa: BLE001 - fail closed, never block the worker boot
         logger.warning("rootless_routes_unavailable", exc_info=True)
         return None

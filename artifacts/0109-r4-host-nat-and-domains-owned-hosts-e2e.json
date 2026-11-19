@@ -1,0 +1,84 @@
+{
+  "spec": "0109-r4-host-nat-and-domains-owned-hosts",
+  "date": "2026-11-19T19:45:00Z",
+  "result": "BLOCKED",
+  "result_reason": "Reintento pausado por el usuario antes de completar los 4 checks. Checks 1 y 2 CONFIRMADOS en PASS con evidencia black-box; check 3 NO convergió (running/claim sostenido, probe de readiness contra la red rootful mientras el deploy rootless creó los contenedores en la celda) y check 4 NO EJECUTADO; downgrade 005 NO EJECUTADO. No se ha escrito ningún PASS inferido. Este artefacto sobrescribe el FAIL 0/4 anterior con el estado real parcial de este reintento.",
+  "environment": {
+    "target": "spanel.lab (NO spanel.app)",
+    "host": "lucas@100.67.5.50 (lucas-ThinkPad-E570), Docker 29.1.3, kernel 7.0.0-28-generic, cgroups v2, AppArmor enforce, nft skuid",
+    "access": "SSH con sshpass -e (password en SSHPASS, nunca en argv); sudo -S con la misma credencial.",
+    "code_under_test": "Working tree sin commitear de remove-hardener copiado sin .git a /var/tmp/spanel-e2e-0109r4v2/stage. Hashes verificados: executor=447a67cf5f27d8d1..., cells=94abae56e04b386e..., host_agent=54ac555e62b3371f..., network=8263396d14db5cc2..., 005=821b1d4bdcde4d5..., app_hosts=e8e2ed83ff7721459.... No se modificó código de la aplicación, perfil ni migración.",
+    "database": "Clon desechable sysadmin_e2e0109r4v2 de sysadmin (pg_dump/pg_restore). Solo en el clon se cambió el slug del Demo Tenant a e2e0109r4v2 y se ejecutó el seed del propio entrypoint para sincronizar permisos (apps.plans.manage). La BD viva no se modificó; el clon se eliminó al final.",
+    "method": "API publica en 127.0.0.1:3010 con Host: spanel.lab (image spanel-app:latest con el stage montado sobre /app/vendor/systutor-core y /app/plugins), worker dramatiq apps + events, plan-agent y edge-relay privilegiados. Observacion externa con systemd --user, docker, cgroups, ss, nsenter+iptables dentro/fuera del netns, AppArmor, dmesg y PID/hash de los 6 Core. Sin MASQUERADE manual, sin puente TCP y sin Alembic CLI.",
+    "harness_config": "SPANEL_TENANTS_ROOTLESS=true y SPANEL_APPS_PROBE_BASELINE=rootless se fijaron SOLO en el entorno desechable para ejercer la via rootless. Se monto /var/lib/spanel/cells en el worker para alcanzar el socket de la celda. El relay preexistente tenia su ejecutable borrado antes de este run (ya documentado en el artefacto R4 anterior) y se restauro en su ruta original /home/lucas/.local/lib/spanel-edge-relay desde el stage, con el mismo --bind 172.25.0.1. Ninguno de estos puntos es un parche de codigo.",
+    "fixture": "luc444s/software-de-gestion-para-editores, branch feature/workflow-diseno, docker-compose.dokploy.yml, tres servicios (backend, database, frontend)",
+    "migration_runtime": "El runtime migrador de plugins aplico 005 al habilitar domains: plugin_registry.migration_version=005_rootless_app_hosts, state=enabled, tabla domains_app_hosts creada con https BOOLEAN DEFAULT false. POST/GET /api/v1/plugins/domains/app-hosts quedaron montados (presentes en OpenAPI). El DOWNGRADE de 005 NO se ejecuto porque el run se pauso antes de completar check 3."
+  },
+  "checks": [
+    {
+      "name": "egress_without_manual_nat",
+      "command": "provision --slug e2e0109r4v2 --json con SPANEL_TENANT_CELL_DNS=192.168.18.1; compare /proc/<pid>/ns/net del MainPID y del dockerd real con /proc/1/ns/net; iptables -t nat -S dentro del netns de la celda y en el host; docker run --rm alpine wget https://registry.npmjs.org/vite por el socket de la celda; dmesg audit deny",
+      "output": "PASS. provision -> state=ready, uid=60070, apparmor.effective=true; unidad systemd --user ActiveState=active/SubState=running, MainPID=3566749. El MainPID/rootlesskit esta en net:[4026531833] (netns del host), pero el dockerd real de la celda es PID 3566797 (padre 3566766) en net:[4026535904], inode distinto. Dentro de ese netns: '-A POSTROUTING -s 172.17.0.0/16 -j MASQUERADE'. En el host NO aparecio regla simple nueva: solo la preexistente '-A POSTROUTING -s 172.17.0.0/16 ! -o docker0 -j MASQUERADE'. El unit conserva --iptables=false --ip6tables=false sin ExecStartPost/ExecStopPost. wget -> NET_OK sin MASQUERADE manual. 0 DENIED desde el primer arranque; 8 audit deny intactas. El bug de R4 (regla en el host por usar el PID rootlesskit) NO se reproduce.",
+      "pass": true
+    },
+    {
+      "name": "aggregate_2gb_from_first_deploy",
+      "command": "POST /api/v1/plugins/apps/plan {memory_bytes:2147483648,cpus:1,pids:512} ANTES del deploy; POST /applications; POST /applications/{id}/deployments; GET /operations/{id}; cat /sys/fs/cgroup/user.slice/user-60070.slice/user@60070.service/{memory.max,cpu.max,pids.max}",
+      "output": "PASS. Plan HTTP 201 status=applied, applied_at=2026-11-19T18:23:16Z, memory.max=2147483648, cpu.max='100000 100000', pids.max=512 (verificado de nuevo tras el deploy). App HTTP 201 con domain=null/ingress=null (catalog.py no persiste domain, segun el contrato). Operacion 61284bcd-ab2f-46f2-b982-f16abbc5ef7e -> status=succeeded, phase=complete, result.status=running, effective_services=[backend,database,frontend], memory_budget_bytes=2147483648, per-servicio memory=715827882 (1/3 de 2 GiB). NO aparecio 'service backend memory limit is invalid'. Nota de harness: la primera invocacion del plan dio 403 hasta que se ejecuto el seed del entrypoint que sincroniza apps.plans.manage al rol admin; esto es preparacion del clon, no un resultado de producto.",
+      "pass": true
+    },
+    {
+      "name": "published_route_no_bridge",
+      "command": "POST /api/v1/plugins/domains/app-hosts {application_id,service:'frontend',domain:'editores-0109r4v2.lab'}; ver evento domains.domain.added y outbox; refresh via app.state.rootless_routes; observar listener 127.71.1.1:20070, relay 172.25.0.1:40070, spanel-*.yml y curl -H 'Host: editores-0109r4v2.lab' http://127.0.0.1:9080/",
+      "output": "FAIL / NO CONVERGIO. Migracion 005 aplicada y app-hosts activo: POST devolvio HTTP 201 con site_id='<appid>:frontend' y la fila en domains_app_hosts tiene tenant_id=658e5ca2-... (propiedad del tenant correcta). El evento domains.domain.added se emitio (event_logs) y su fila de event_outbox paso a 'processed' tras drenar el outbox con la propia funcion del producto. La llamada directa al metododel producto app.state.rootless_routes.refresh(...) devolvio {'published':['editores-0109r4v2.lab'], 'host':'editores-0109r4v2.lab', 'slug':'e2e0109r4v2', 'endpoint':{loopback_address:'127.71.1.1', publish_port:20070, relay_port:40070, bind:'172.18.0.1'}} y escribio dynamic/spanel-route-216c23962cadb4f85f0a.yml apuntando al relay (backend http://172.18.0.1:40070). El relay se reinicio con SPANEL_EDGE_RELAY_BIND=172.25.0.1 y su status incluia el endpoint de la celda (bind 172.25.0.1:40070 -> 127.71.1.1:20070). PERO: (a) el bind inicial del plan-agent era 172.18.0.1 y el YAML quedo apuntando a esa IP, no a 172.25.0.1; (b) con SPANEL_TENANTS_ROOTLESS=true los contenedores del release se crearon en el daemon rootless de la celda (frontend/backend/database Up y healthy en /var/lib/spanel/cells/e2e0109r4v2/docker.sock), pero no existio el listener 127.71.1.1:20070; (c) la operacion de re-despliegue be6a638a-d55f-4ca2-9160-315afc930dfb quedo en status=running/phase=claim durante las 20 iteraciones del poll; el proceso observable del worker fue 'docker run --rm --network app-60fa545254874f45b836fbb9_default ... curlimages/curl ... curl -sS ... http://frontend:8080/' (red del daemon rootful). No hubo HTTP 200 del editor por el dominio (curl con Host devolvio 301 de redirect HTTPS, sin backend alcanzable). No se uso puente TCP ni MASQUERADE manual. Fallback legacy y HTTP 200 NO demostrados.",
+      "pass": false
+    },
+    {
+      "name": "rollback_rehearsal",
+      "command": "POST /applications/{id}/rollback con deployment real; observar ruta/runtime previos, contenedor rootful conservado y bandera SPANEL_TENANTS_ROOTLESS=false",
+      "output": "FAIL / NO EJECUTADO. No hubo un deploy rootless convergido con ruta publicada que restaurar: el re-despliegue rootless quedo en running/claim y el check 3 no cerro. No se fabrico metadata ni se simulo un cutover. Los contenedores rootful preexistentes del fixture se conservaron con sus IDs y estado Up; la tabla tenant_resource_runtimes del clon estaba vacia (el laboratorio corre rootful por defecto), por lo que tampoco existia un runtime migrado que demostrara que SPANEL_TENANTS_ROOTLESS=false no lo reescribe. Sin ejecutar: rollback real, conservacion de ruta/runtime y verificacion de la bandera.",
+      "pass": false
+    }
+  ],
+  "delta_denied": 0,
+  "apparmor": {
+    "profile": "spanel-cell-e2e0109r4v2 (retirado en la limpieza)",
+    "denied_from_first_boot": 0,
+    "preparation_denied": 0,
+    "build_denied": 0,
+    "audit_deny_rules_preserved": 8,
+    "note": "0 DENIED desde el primer arranque de la celda; los fallos fueron de orquestacion/probe y de configuracion del harness, no de AppArmor. Un intento suelto de deploy rootless fallo con 'service backend effective AppArmor profile is invalid' porque el perfil efectivo del contenedor en rootless es None; se corrigio con SPANEL_APPS_PROBE_BASELINE=rootless (config del producto), no con un parche del perfil."
+  },
+  "isolation": {
+    "other_tenants": "spanel.lab y pos-e2e.lab respondieron HTTP 301 (redirect normal) durante y despues del run. El relay quedo operativo con 17 listeners y sin el slug desechable.",
+    "core_before_after": "Los 6 Core quedaron running con PID y sha256(Config) byte-identicos antes/despues/final: Traefik 3640546/24ff8185ccd698b4, MariaDB 214967/fe927596d8f2e2fe, PMA 215055/ac199c23434168e9, PowerDNS auth 2869309/adf74046f333c513, PowerDNS DB 2847729/2d57f3f4507f925e, mail 215326/b205f620f0a89962.",
+    "rootful_fixture": "Los contenedores rootful preexistentes no se eliminaron ni se reescribio su runtime."
+  },
+  "gaps": [
+    {
+      "id": "GAP-0109R4-3",
+      "severity": "high",
+      "title": "El re-despliegue rootless no converge: running/claim sostenido con probe en red rootful",
+      "evidence": "Con SPANEL_TENANTS_ROOTLESS=true los contenedores se crearon en el daemon de la celda, pero el worker ejecuto 'docker run --network app-60fa545254874f45b836fbb9_default ... curl http://frontend:8080/' y la operacion be6a638a-... permanecio running/claim durante 20 iteraciones (≈7 min) sin publicar el listener 20070 ni HTTP 200.",
+      "impact": "Bloquea check 3 (ruta publicada sin puente) y, por dependencia, check 4 (rollback real) y el downgrade 005.",
+      "recommendation": "Verificar que el runner del probe de readiness use el mismo runtime que el deploy del release, o que el launcher del probe resuelva la red de la celda cuando el tenant es rootless."
+    },
+    {
+      "id": "SUSPICION-0109R4-1",
+      "severity": "high",
+      "title": "SOSPECHA (a verificar, NO conclusion): runtimes mezclados en un mismo deploy",
+      "evidence": "Deploy rootless -> contenedores en la celda; probe -> red app-<id>_default del daemon rootful, donde 'frontend' puede no existir. No se ha demostrado causalmente; solo es la hipotesis que explica el running/claim.",
+      "impact": "De confirmarse, explicaria la no convergencia del check 3.",
+      "recommendation": "Comparar con el mismo runtime_project el runner usado por _assert_probe/readiness frente al usado por el deploy, y repetir el E2E sin cambiar codigo de la aplicacion."
+    },
+    {
+      "id": "NOTE-0109R4-PREP-2",
+      "severity": "info",
+      "title": "Incidentes de harness, no de producto",
+      "evidence": "JWT expirado a mitad del poll dejo un bucle consultando /operations/ con OPSID vacio (corregido con re-login y guard); outbox con cientos de eventos pending y sin worker de cola events en el stack vivo (se levanto uno desechable y se dreno con la funcion del producto); relay preexistente con ejecutable borrado (restaurado en su ruta original). Ninguno se uso para decidir PASS."
+    }
+  ],
+  "rollback": "El run se PAUSO por peticion del usuario; no hubo rollback funcional de producto que ejecutar porque check 3 no convergio. Rollback de laboratorio completado: se detuvieron app/worker/events desechables y el plan-agent; se retiro el YAML spanel-route-216c23962cadb4f85f0a.yml; deprovision --purge-data devolvio state=retired; se terminaron el user manager y el proceso uid 60070, se eliminaron usuario, /run/user/60070, home, celda, unidad, perfil y tabla nft; se elimino la BD clonada; se borraron el stage y todos los temporales 0109r4v2. El relay se restauro en /home/lucas/.local/lib/spanel-edge-relay (su ejecutable ya estaba borrado antes de este run) y quedo operativo con 17 listeners y el mismo bind 172.25.0.1, sin el slug desechable. El DOWNGRADE de la migracion 005 NO se ejecuto: el run se pauso antes de completar check 3, por lo que no se puede afirmar que legacy quedara intacto tras downgrade.",
+  "final_state": "Limpieza verificada de forma independiente: 0 usuarios/celdas/perfiles/unidades/tablas nft/contenedores/imagenes/BD/listeners 3010,20070,40070/temporales 0109r4v2. Hashes restaurados byte-a-byte: registry=a3503ea9dcb53aab..., plans=dc2a7b9b3c39489c..., audit=15ad1bc5d49912b..., subuid=subgid=a295d25cb1976270.... En el host solo queda la regla Docker baseline '172.17.0.0/16 ! -o docker0'; los otros 10 usuarios de celda y sus rutas siguen intactos. Los 6 Core conservaron PID y hash. RESULTADO: BLOQUEADO — checks 1 y 2 PASS confirmados; check 3 FAIL/no convergido; check 4 y downgrade 005 no ejecutados; delta_denied=0; 8 audit deny intactas; sin PASS inferido.",
+  "cleanup_verified": true
+}

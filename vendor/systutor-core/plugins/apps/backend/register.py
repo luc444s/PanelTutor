@@ -20,6 +20,7 @@ from plugins.apps.backend.router import router
 from plugins.apps.backend.runtime.tenant_runtime import TenantRuntimeRegistry
 from plugins.apps.backend.settings import AppsSettings
 from plugins.apps.backend.states import OneTimeStates
+from systutor.contracts.app_hosts import list_app_hosts
 from systutor.contracts.domain_ownership import OwnedSite, register_site_provider
 from systutor.contracts.resource_runtime import (
     ManagedResource,
@@ -59,7 +60,9 @@ class AppsResources:
         return self._states
 
 
-def resolve_apps_sites(db: Session, tenant_id: str | None) -> list[OwnedSite]:
+def resolve_apps_sites(
+    db: Session, tenant_id: str | None, router_app: object | None = None
+) -> list[OwnedSite]:
     """Stable service identities for Domains routes.
 
     The site id is ``<application_id>:<service>`` and never a container name.
@@ -71,6 +74,19 @@ def resolve_apps_sites(db: Session, tenant_id: str | None) -> list[OwnedSite]:
     if tenant_id is not None:
         stmt = stmt.where(Application.tenant_id == tenant_id)
     result: list[OwnedSite] = []
+    app_hosts: dict[tuple[str, str, str], str] = {}
+    tenant_ids = (
+        [tenant_id]
+        if tenant_id is not None
+        else sorted({application.tenant_id for application in db.scalars(stmt)})
+    )
+    for current_tenant_id in tenant_ids:
+        for host in list_app_hosts(router_app, db, current_tenant_id):
+            app_hosts[(current_tenant_id, host.application_id, host.service)] = host.domain
+    # The platform-wide pre-scan consumed ``stmt``; rebuild it for site rows.
+    stmt = select(Application).where(Application.deleted_at.is_(None))
+    if tenant_id is not None:
+        stmt = stmt.where(Application.tenant_id == tenant_id)
     for app in db.scalars(stmt):
         if not app.active_deployment_id:
             continue
@@ -87,7 +103,8 @@ def resolve_apps_sites(db: Session, tenant_id: str | None) -> list[OwnedSite]:
                     f"{app.id}:{service}",
                     app.tenant_id,
                     container,
-                    app.domain if service == app.ingress_service else None,
+                    app_hosts.get((app.tenant_id, app.id, service))
+                    or (app.domain if service == app.ingress_service else None),
                 )
             )
     return result
@@ -186,7 +203,7 @@ def register(context: PluginContext) -> None:
     context.register_router(router)
     app = context.router_registry
     if app is not None:
-        rootless = build_rootless_routes()
+        rootless = build_rootless_routes(app)
         runtime_registry = build_runtime_registry(settings)
         app.state.apps_resources = AppsResources(
             settings,
@@ -198,5 +215,20 @@ def register(context: PluginContext) -> None:
             runtime_recorder=build_runtime_recorder(settings),
         )
         app.state.rootless_routes = rootless
-        register_site_provider(app, "apps", resolve_apps_sites)
+        def resolve_sites(db: Session, tenant_id: str | None) -> list[OwnedSite]:
+            return resolve_apps_sites(db, tenant_id, app)
+
+        register_site_provider(app, "apps", resolve_sites)
         register_resource_provider(app, "apps", resolve_apps_resources)
+        if rootless is not None and context.db_session_provider is not None:
+            def refresh_domain_route(event) -> None:
+                site_id = str(event.payload.get("site_id") or "")
+                application_id, separator, _service = site_id.rpartition(":")
+                if not separator or not application_id or not event.tenant_id:
+                    return
+                with context.db_session_provider() as db:
+                    rootless.refresh(db, event.tenant_id, application_id)
+
+            context.register_event_handler(
+                "domains.domain.added", refresh_domain_route
+            )

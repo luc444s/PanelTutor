@@ -9,7 +9,7 @@ Traefik uid; without it the spec falls back to a per-cell netns.
 from __future__ import annotations
 
 import os
-from ipaddress import IPv4Address
+from ipaddress import IPv4Address, IPv4Network
 from typing import Any
 
 from .alloc import validate_slug
@@ -18,6 +18,15 @@ _TRAEFIK_UID_ENV = "SPANEL_TRAEFIK_UID"
 _DEFAULT_TRAEFIK_UID = 1000  # host uid of the single central Traefik service
 _CELL_DNS_ENV = "SPANEL_TENANT_CELL_DNS"
 _DEFAULT_CELL_DNS = "10.0.2.3"  # slirp4netns DNS reachable inside the rootless netns
+# A.SPEC 0109-R3: the default bridge of each rootless cell.  The NAT rule that
+# gives containers egress lives *inside* the cell netns; --iptables=false on the
+# daemon is preserved and no host iptables rule is ever installed.
+_CELL_EGRESS_ENV = "SPANEL_TENANT_CELL_EGRESS_SUBNET"
+_DEFAULT_CELL_EGRESS = "172.17.0.0/16"
+# The builtin rootlesskit port driver honours the requested host IP, so a cell
+# can publish on its dedicated 127.x.y.z:20000+ address.  The slirp4netns port
+# driver only binds 127.0.0.1, which is why the old cells had no listener.
+_ROOTLESSKIT_PORT_DRIVER = "builtin"
 
 
 def traefik_uid() -> int:
@@ -59,6 +68,61 @@ def publish_port(index: int) -> int:
     return 20000 + (int(index) % 20000)
 
 
+def egress_subnet() -> str:
+    """Validated CIDR that receives MASQUERADE inside each cell netns."""
+    raw = os.environ.get(_CELL_EGRESS_ENV, _DEFAULT_CELL_EGRESS).strip()
+    try:
+        network = IPv4Network(raw, strict=False)
+    except ValueError:
+        raise ValueError(f"{_CELL_EGRESS_ENV} must be an IPv4 CIDR") from None
+    if network.is_loopback or network.is_multicast or network.is_unspecified:
+        raise ValueError(f"{_CELL_EGRESS_ENV} must be a unicast subnet")
+    if network.prefixlen == 0:
+        raise ValueError(f"{_CELL_EGRESS_ENV} must not be the whole IPv4 space")
+    return str(network)
+
+
+def masquerade_argv(subnet: str | None = None, action: str = "-A") -> list[str]:
+    """iptables argv for the cell-netns POSTROUTING MASQUERADE rule.
+
+    ``action`` is ``-A`` (append), ``-C`` (check, for idempotency) or ``-D``
+    (delete, for deprovision).  The caller is responsible for running it with
+    ``nsenter -t <cell dockerd pid> -n`` so it never touches the host netns.
+    """
+    if action not in {"-A", "-C", "-D"}:
+        raise ValueError(f"unsupported iptables action: {action!r}")
+    return [
+        "iptables", "-t", "nat", action, "POSTROUTING",
+        "-s", subnet or egress_subnet(), "-j", "MASQUERADE",
+    ]
+
+
+def netns_masquerade_argv(
+    dockerd_pid: int,
+    subnet: str | None = None,
+    action: str = "-A",
+) -> list[str]:
+    """Build a root-only command targeting the cell dockerd network namespace."""
+    pid = int(dockerd_pid)
+    if pid <= 0:
+        raise ValueError("dockerd pid must be positive")
+    return [
+        "/usr/bin/nsenter", "-t", str(pid), "-n",
+        *masquerade_argv(subnet, action),
+    ]
+
+
+def rootlesskit_port_driver_env(index: int) -> dict[str, str]:
+    """RootlessKit settings that publish a cell on 127.x.y.z:20000+.
+
+    ``builtin`` binds the parent IP supplied by Docker's port binding; the
+    slirp4netns port driver only ever binds 127.0.0.1, so the dedicated cell
+    loopback had no listener (GAP-0109R-7).  The publish address/port are
+    returned as evidence for the relay endpoint, not as extra env variables.
+    """
+    return {"DOCKERD_ROOTLESS_ROOTLESSKIT_PORT_DRIVER": _ROOTLESSKIT_PORT_DRIVER}
+
+
 def relay_port(index: int) -> int:
     """Stable host-side relay port for a cell (A.SPEC 0104).
 
@@ -79,6 +143,7 @@ def build_network_spec(
     uid = int(alloc["uid"])
     port = publish_port(index)
     table = f"spanel-cell-{slug}"
+    subnet = egress_subnet()
     spec: dict[str, Any] = {
         "slug": slug,
         "mode": mode,
@@ -87,6 +152,16 @@ def build_network_spec(
         "publish_port": port,
         "cell_uid": uid,
         "traefik_uid": traefik_uid(),
+        # A.SPEC 0109-R3: egress and publication are cell facts, carried on
+        # every spec so provisioning and deprovisioning use the same truth.
+        "egress_subnet": subnet,
+        "egress": {
+            "subnet": subnet,
+            "check": masquerade_argv(subnet, "-C"),
+            "add": masquerade_argv(subnet, "-A"),
+            "delete": masquerade_argv(subnet, "-D"),
+        },
+        "rootlesskit_env": rootlesskit_port_driver_env(index),
     }
     if mode == "skuid":
         spec["nft_rules"] = [

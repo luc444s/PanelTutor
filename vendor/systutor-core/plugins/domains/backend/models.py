@@ -51,6 +51,27 @@ class DomainRoute(Base):
     )
 
 
+class DomainAppHost(Base):
+    """Domains-owned Host assignment for one rootless application service."""
+
+    __tablename__ = "domains_app_hosts"
+    __table_args__ = (
+        UniqueConstraint("tenant_id", "application_id", "service"),
+        UniqueConstraint("domain"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    application_id: Mapped[str] = mapped_column(String(36), index=True)
+    service: Mapped[str] = mapped_column(String(255))
+    domain: Mapped[str] = mapped_column(String(253), index=True)
+    https: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
 class ObservedDomain(Base):
     """Rebuildable observation of one domain published by Traefik."""
 

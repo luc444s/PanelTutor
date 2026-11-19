@@ -148,6 +148,18 @@ class FakeExecutor(Executor):
         self._rec("start_daemon", slug=slug, uid=uid, driver=driver)
         return self.pid
 
+    def cell_dockerd_pid(self, cell_uid):
+        return self.pid
+
+    def ensure_cell_egress(self, cell_uid, subnet):
+        self._rec("ensure_cell_egress", cell_uid=cell_uid, subnet=subnet)
+
+    def remove_cell_egress(self, cell_uid, subnet):
+        self._rec("remove_cell_egress", cell_uid=cell_uid, subnet=subnet)
+
+    def cell_egress_enabled(self, cell_uid, subnet):
+        return True
+
     def stop_daemon(self, slug, uid=0, driver="cgroupfs"):
         self._rec("stop_daemon", slug=slug, uid=uid, driver=driver)
 
@@ -253,6 +265,7 @@ def test_provision_creates_cell_with_host_observed_uid_map(tmp_path) -> None:
     assert "ensure_user_manager" in executor.names()
     assert "write_daemon_config" in executor.names()
     assert "apply_network" in executor.names()
+    assert "ensure_cell_egress" in executor.names()
 
 
 def test_provision_is_idempotent(tmp_path) -> None:
@@ -298,7 +311,7 @@ def test_deprovision_keeps_data_by_default_and_is_idempotent(tmp_path) -> None:
     reg = alloc.load_registry(tmp_path)
     assert "acme" in reg["allocations"]  # data/allocation kept
     assert reg["allocations"]["acme"]["uid"] == before
-    assert {"stop_daemon", "remove_systemd_unit", "remove_network", "remove_profile"} <= set(executor.names())
+    assert {"remove_cell_egress", "stop_daemon", "remove_systemd_unit", "remove_network", "remove_profile"} <= set(executor.names())
 
 
 def test_purge_retires_uid_and_never_reuses(tmp_path) -> None:
@@ -515,6 +528,14 @@ def test_systemd_unit_uses_rootlesskit_netns_and_no_host_iptables() -> None:
     assert "Environment=SPANEL_TENANT_CELL_DNS=10.0.2.3" in unit
     assert "--dns ${SPANEL_TENANT_CELL_DNS}" in unit
     assert "--config-file=/var/lib/spanel/cells/acme/daemon.json" in unit
+    assert "ExecStartPost=" not in unit
+    assert "ExecStopPost=" not in unit
+
+
+def test_netns_masquerade_command_always_targets_dockerd_pid() -> None:
+    argv = network.netns_masquerade_argv(4242, "172.17.0.0/16", "-C")
+    assert argv[:5] == ["/usr/bin/nsenter", "-t", "4242", "-n", "iptables"]
+    assert argv[-4:] == ["-s", "172.17.0.0/16", "-j", "MASQUERADE"]
 
 
 def test_cell_dns_is_configurable_and_rejects_host_loopback(monkeypatch) -> None:
@@ -860,3 +881,191 @@ def test_run_user_switches_identity_via_runuser(monkeypatch) -> None:
     env = kwargs["env"]
     assert env["XDG_RUNTIME_DIR"] == "/run/user/60000"
     assert env["DBUS_SESSION_BUS_ADDRESS"] == "unix:path=/run/user/60000/bus"
+
+
+# --- A.SPEC 0109-R3: cell-netns egress + builtin rootlesskit port driver -----
+
+
+def test_network_spec_carries_nat_and_port_driver_for_both_modes() -> None:
+    for mode in ("skuid", "netns"):
+        spec = network.build_network_spec("acme", {"index": 3, "uid": 60003}, mode)
+
+        assert spec["egress_subnet"] == "172.17.0.0/16"
+        assert spec["egress"]["subnet"] == "172.17.0.0/16"
+        assert spec["egress"]["check"] == [
+            "iptables", "-t", "nat", "-C", "POSTROUTING",
+            "-s", "172.17.0.0/16", "-j", "MASQUERADE",
+        ]
+        assert spec["egress"]["add"][3] == "-A"
+        assert spec["egress"]["delete"][3] == "-D"
+        assert spec["egress"]["add"][4:] == spec["egress"]["delete"][4:]
+        assert spec["rootlesskit_env"] == {
+            "DOCKERD_ROOTLESS_ROOTLESSKIT_PORT_DRIVER": "builtin"
+        }
+        assert spec["loopback_address"].startswith("127.")
+        assert spec["publish_port"] == 20003
+
+
+def test_egress_subnet_is_validated_and_configurable(monkeypatch) -> None:
+    monkeypatch.setenv("SPANEL_TENANT_CELL_EGRESS_SUBNET", "10.7.0.0/16")
+    assert network.egress_subnet() == "10.7.0.0/16"
+
+    monkeypatch.setenv("SPANEL_TENANT_CELL_EGRESS_SUBNET", "127.0.0.0/8")
+    with pytest.raises(ValueError, match="unicast subnet"):
+        network.egress_subnet()
+
+    monkeypatch.setenv("SPANEL_TENANT_CELL_EGRESS_SUBNET", "0.0.0.0/0")
+    with pytest.raises(ValueError, match="whole IPv4 space"):
+        network.egress_subnet()
+
+    monkeypatch.setenv("SPANEL_TENANT_CELL_EGRESS_SUBNET", "not-a-cidr")
+    with pytest.raises(ValueError, match="IPv4 CIDR"):
+        network.egress_subnet()
+
+    with pytest.raises(ValueError, match="unsupported iptables action"):
+        network.masquerade_argv(action="-I")
+
+
+def test_user_unit_leaves_nat_to_the_privileged_host_lifecycle() -> None:
+    unit = systemd_unit("acme", 60000, "/some/path", "systemd")
+
+    assert "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_PORT_DRIVER=builtin\n" in unit
+    assert "ExecStartPost=" not in unit
+    assert "ExecStopPost=" not in unit
+    assert "nsenter" not in unit
+    # The invariants stay intact: no host iptables, NAT only in the cell netns.
+    assert "--iptables=false" in unit
+    assert "--ip6tables=false" in unit
+    assert "--dns ${SPANEL_TENANT_CELL_DNS}" in unit
+    assert "DOCKERD_ROOTLESS_ROOTLESSKIT_DETACH_NETNS=false" in unit
+
+
+def test_legacy_unit_also_leaves_nat_to_the_privileged_host_lifecycle() -> None:
+    unit = systemd_unit("acme", 60000, "/some/path", "cgroupfs")
+    assert "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_PORT_DRIVER=builtin\n" in unit
+    assert "ExecStartPost=" not in unit
+    assert "ExecStopPost=" not in unit
+    assert "--iptables=false" in unit
+
+
+def test_deprovision_spec_reverts_the_cell_nat(tmp_path) -> None:
+    svc, _, executor = _service(tmp_path)
+    svc.provision("acme")
+    svc.deprovision("acme", keep_data=False)
+
+    applied = next(kw["spec"] for name, kw in executor.calls if name == "apply_network")
+    removed = next(kw["spec"] for name, kw in executor.calls if name == "remove_network")
+    assert applied["egress"]["subnet"] == removed["egress"]["subnet"]
+    assert removed["egress"]["delete"] == [
+        "iptables", "-t", "nat", "-D", "POSTROUTING",
+        "-s", "172.17.0.0/16", "-j", "MASQUERADE",
+    ]
+
+
+def test_dockerd_pid_is_selected_by_cell_uid_not_wrapper_pid(tmp_path) -> None:
+    from scripts.tenant_cell.executor import dockerd_pid_for_uid
+
+    for pid, uid, argv0 in (
+        (7100, 60000, "/usr/bin/dockerd-rootless.sh"),
+        (7101, 60001, "/usr/bin/dockerd"),
+        (7331, 60000, "/usr/bin/dockerd"),
+    ):
+        process = tmp_path / str(pid)
+        process.mkdir()
+        (process / "status").write_text(
+            f"Name:\ttest\nUid:\t{uid}\t{uid}\t{uid}\t{uid}\n",
+            encoding="utf-8",
+        )
+        (process / "cmdline").write_bytes(argv0.encode() + b"\0--flag\0")
+
+    assert dockerd_pid_for_uid(60000, tmp_path) == 7331
+
+
+def test_cell_egress_rejects_host_netns_before_iptables(monkeypatch) -> None:
+    from scripts.tenant_cell import executor as exec_mod
+
+    local = exec_mod.LocalExecutor()
+    monkeypatch.setenv("SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS", "1")
+    monkeypatch.setattr(local, "cell_dockerd_pid", lambda _uid: 7331)
+    monkeypatch.setattr(exec_mod.os, "readlink", lambda _path: "net:[4026531840]")
+    calls: list[list[str]] = []
+    monkeypatch.setattr(
+        exec_mod.subprocess,
+        "run",
+        lambda argv, **_kwargs: calls.append(list(argv)),
+    )
+
+    with pytest.raises(RuntimeError, match="uses host netns"):
+        local.ensure_cell_egress(60000, "172.17.0.0/16")
+
+    assert calls == []
+
+
+def test_cell_egress_apply_is_pid_correct_and_idempotent(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from scripts.tenant_cell import executor as exec_mod
+
+    local = exec_mod.LocalExecutor()
+    installed = False
+    calls: list[list[str]] = []
+    monkeypatch.setenv("SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS", "1")
+    monkeypatch.setattr(local, "cell_dockerd_pid", lambda _uid: 7331)
+    monkeypatch.setattr(
+        exec_mod.os,
+        "readlink",
+        lambda path: "net:[cell]" if path == "/proc/7331/ns/net" else "net:[host]",
+    )
+
+    def fake_run(argv, **_kwargs):
+        nonlocal installed
+        calls.append(list(argv))
+        action = argv[7]
+        if action == "-C":
+            return SimpleNamespace(returncode=0 if installed else 1)
+        if action == "-A":
+            installed = True
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(exec_mod.subprocess, "run", fake_run)
+
+    local.ensure_cell_egress(60000, "172.17.0.0/16")
+    local.ensure_cell_egress(60000, "172.17.0.0/16")
+
+    assert all(call[2:4] == ["7331", "-n"] for call in calls)
+    assert [call[7] for call in calls].count("-A") == 1
+
+
+def test_cell_egress_remove_reverts_only_cell_rule(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from scripts.tenant_cell import executor as exec_mod
+
+    local = exec_mod.LocalExecutor()
+    installed = True
+    calls: list[list[str]] = []
+    monkeypatch.setenv("SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS", "1")
+    monkeypatch.setattr(local, "cell_dockerd_pid", lambda _uid: 7331)
+    monkeypatch.setattr(
+        exec_mod.os,
+        "readlink",
+        lambda path: "net:[cell]" if path == "/proc/7331/ns/net" else "net:[host]",
+    )
+
+    def fake_run(argv, **_kwargs):
+        nonlocal installed
+        calls.append(list(argv))
+        action = argv[7]
+        if action == "-C":
+            return SimpleNamespace(returncode=0 if installed else 1)
+        if action == "-D":
+            installed = False
+        return SimpleNamespace(returncode=0, stderr="", stdout="")
+
+    monkeypatch.setattr(exec_mod.subprocess, "run", fake_run)
+
+    local.remove_cell_egress(60000, "172.17.0.0/16")
+
+    assert installed is False
+    assert [call[7] for call in calls].count("-D") == 1
+    assert all(call[2:4] == ["7331", "-n"] for call in calls)

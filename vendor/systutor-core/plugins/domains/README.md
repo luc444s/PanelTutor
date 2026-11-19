@@ -17,6 +17,12 @@ The `systutor.contracts.domain_ownership` contract is the only bridge to
 Hosting: it publishes primaries and asks whether a domain is already an extra.
 No plugin imports the other's models.
 
+Rootless application Hosts are owned here in `domains_app_hosts` and exposed
+through `systutor.contracts.app_hosts`. Apps consumes that contract first. The
+historical `apps_applications.domain` field remains a read fallback while it
+exists; removing that fallback requires an explicit future decision and is not
+scheduled or date-driven.
+
 ## Reserving and linking (A.SPEC 0040)
 
 A domain can be created **without a site**: it is normalized and ownership is
@@ -44,6 +50,9 @@ resolver) and keeps the reservation if the proxy fails.
 | POST | `/api/v1/plugins/domains/{domain}/link` | `domains.domains.manage` |
 | DELETE | `/api/v1/plugins/domains/{domain}` | `domains.domains.manage` |
 | GET | `/api/v1/plugins/domains/{domain}/certificate` | `domains.domains.read` |
+| GET | `/api/v1/plugins/domains/app-hosts` | `domains.domains.read` |
+| POST | `/api/v1/plugins/domains/app-hosts` | `domains.domains.manage` |
+| DELETE | `/api/v1/plugins/domains/app-hosts` | `domains.domains.manage` |
 
 ## Configuration
 
