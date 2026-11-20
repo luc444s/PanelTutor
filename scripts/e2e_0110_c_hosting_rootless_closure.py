@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import http.client
 import http.cookiejar
 import io
 import json
@@ -799,7 +800,11 @@ def external_probe(
                     "bytes": len(payload),
                     "body_head": payload[:400].decode(errors="replace"),
                 }
-        except (urllib.error.HTTPError, urllib.error.URLError) as exc:
+        except (
+            urllib.error.HTTPError,
+            urllib.error.URLError,
+            http.client.HTTPException,
+        ) as exc:
             if time.monotonic() >= deadline_at:
                 if isinstance(exc, urllib.error.HTTPError):
                     return {"status": exc.code, "sha256": "", "bytes": 0}
