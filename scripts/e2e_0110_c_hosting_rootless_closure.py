@@ -2327,6 +2327,7 @@ def check_file_manager(
     ticket_payload = ticket["first_payload"]
     replay_status = ticket["second_status"]
     zipped = fm_zip(api, site_id, "e2e/ops", "bundle.zip", ["b.txt"])
+    fm_mkdir(api, site_id, "e2e/ops/out")
     extracted = fm_extract(api, site_id, "e2e/ops/bundle.zip", "e2e/ops/out")
     extracted_list = fm_list(api, site_id, "e2e/ops/out")
     extracted_names = {item.get("name") for item in extracted_list.get("entries", [])}
