@@ -1727,19 +1727,31 @@ def backup_import(
 
 def create_tenant(cfg: Config, api: Api, redactor: Redactor) -> dict[str, Any]:
     password = redactor.add(secrets.token_urlsafe(18))
-    payload = api.request(
-        "POST",
-        "/plugins/tenant/tenants",
-        {
-            "name": f"0110C Intruder {cfg.slug}",
-            "slug": cfg.intruder_tenant,
-            "domain": f"tenant-{cfg.slug}.{cfg.domain_suffix}",
-            "user_email": f"intruder-{cfg.slug}@example.invalid",
-            "user_password": password,
-            "user_full_name": "0110C Intruder",
-        },
-        timeout=120,
-    )
+    body = {
+        "name": f"0110C Intruder {cfg.slug}",
+        "slug": cfg.intruder_tenant,
+        "domain": f"tenant-{cfg.slug}.{cfg.domain_suffix}",
+        "user_email": f"intruder-{cfg.slug}@example.invalid",
+        "user_password": password,
+        "user_full_name": "0110C Intruder",
+    }
+    last_error: ApiError | None = None
+    for _attempt in range(10):
+        try:
+            payload = api.request(
+                "POST", "/plugins/tenant/tenants", body, timeout=120
+            )
+            break
+        except ApiError as exc:
+            last_error = exc
+            if exc.status != 404:
+                raise
+            # El enable del plugin puede terminar de montar rutas unos
+            # segundos después de que /core/plugins lo reporte activo.
+            time.sleep(3)
+    else:
+        assert last_error is not None
+        raise last_error
     return {
         "tenant": payload,
         "email": f"intruder-{cfg.slug}@example.invalid",
