@@ -256,7 +256,7 @@ def test_plugin_runtime_completion_e2e(
 
         assert client.get("/api/v1/plugins/billing/runtime", headers=headers).status_code == 404
 
-        install_response = client.post("/api/v1/plugin-runtime/billing/install", headers=headers)
+        install_response = client.post("/api/v1/core/plugins/billing/install", headers=headers)
         assert install_response.status_code == 200
         assert install_response.json()["state"] == "installed"
         assert hooks_log.read_text(encoding="utf-8").splitlines() == ["install"]
@@ -274,7 +274,7 @@ def test_plugin_runtime_completion_e2e(
             )
             assert installed_event is not None
 
-        enable_response = client.post("/api/v1/plugin-runtime/billing/enable", headers=headers)
+        enable_response = client.post("/api/v1/core/plugins/billing/enable", headers=headers)
         assert enable_response.status_code == 200
         assert enable_response.json()["state"] == "enabled"
         assert hooks_log.read_text(encoding="utf-8").splitlines() == ["install", "enable"]
@@ -314,7 +314,7 @@ def test_plugin_runtime_completion_e2e(
 
         assert listener_log.read_text(encoding="utf-8") == "billing.sample.created"
 
-        disable_response = client.post("/api/v1/plugin-runtime/billing/disable", headers=headers)
+        disable_response = client.post("/api/v1/core/plugins/billing/disable", headers=headers)
         assert disable_response.status_code == 200
         assert disable_response.json()["state"] == "disabled"
         assert hooks_log.read_text(encoding="utf-8").splitlines() == [
@@ -325,7 +325,7 @@ def test_plugin_runtime_completion_e2e(
         assert client.get("/api/v1/plugins/billing/runtime", headers=headers).status_code == 404
 
         uninstall_response = client.post(
-            "/api/v1/plugin-runtime/billing/uninstall",
+            "/api/v1/core/plugins/billing/uninstall",
             headers=headers,
         )
         assert uninstall_response.status_code == 200
@@ -378,10 +378,10 @@ def test_failed_plugin_does_not_expose_routes_and_persists_error(
     with TestClient(app, raise_server_exceptions=False) as client:
         headers = auth_headers(client)
 
-        install_response = client.post("/api/v1/plugin-runtime/broken/install", headers=headers)
+        install_response = client.post("/api/v1/core/plugins/broken/install", headers=headers)
         assert install_response.status_code == 200
 
-        enable_response = client.post("/api/v1/plugin-runtime/broken/enable", headers=headers)
+        enable_response = client.post("/api/v1/core/plugins/broken/enable", headers=headers)
         assert enable_response.status_code == 500
         assert client.get("/api/v1/plugins/broken/runtime", headers=headers).status_code == 404
 
