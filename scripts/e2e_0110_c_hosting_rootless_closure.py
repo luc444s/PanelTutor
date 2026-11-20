@@ -1941,8 +1941,14 @@ def phase_seed(cfg: Config, ev: Evidence, journal: Journal) -> None:
             # la API pública de Domains, sin tocar documentos a mano.
             admin.request(
                 "POST",
-                "/plugins/domains",
-                {"site_id": site["id"], "domain": domain, "www": False},
+                "/plugins/domains/routes",
+                {
+                    "site_id": site["id"],
+                    "domain": domain,
+                    "path": "/",
+                    "port": 80,
+                    "https": False,
+                },
                 timeout=300,
             )
         seeded = seed_files(admin, site["id"], f"{kind}-A")
