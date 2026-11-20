@@ -1884,8 +1884,52 @@ def phase_preflight(cfg: Config, ev: Evidence, journal: Journal) -> None:
 # ---------------------------------------------------------------------------
 
 
+def remove_stale_fixtures(cfg: Config, evidence: Evidence) -> None:
+    """Remove only leftovers owned by this fixture's exact site ids/slug."""
+    site_names = (
+        f"0110c-static-{cfg.slug}",
+        f"0110c-wp-{cfg.slug}",
+        f"intr-static-{cfg.slug}",
+    )
+    removed: list[str] = []
+    for site_name in site_names:
+        found = docker(
+            cfg, "ps", "-a", "--format", "{{.Names}}",
+            "--filter", f"label=spanel.site={site_name}", check=False,
+        )
+        for name in (n for n in found.stdout.splitlines() if n):
+            docker(cfg, "rm", "-f", name, check=False)
+            removed.append(name)
+    volumes = docker(
+        cfg, "volume", "ls", "--format", "{{.Name}}", check=False
+    )
+    for name in volumes.stdout.splitlines():
+        if any(
+            marker in name
+            for marker in (
+                f"0110c-wp-{cfg.slug}",
+                f"0110c-static-{cfg.slug}",
+                f"intr-static-{cfg.slug}",
+            )
+        ):
+            docker(cfg, "volume", "rm", "-f", name, check=False)
+            removed.append(name)
+    for path in route_documents(cfg):
+        try:
+            path.unlink()
+            removed.append(str(path))
+        except OSError:
+            continue
+    if removed:
+        evidence.data["repairs"].append(
+            {"action": "remove_stale_fixtures", "removed": sorted(removed)}
+        )
+        log(f"removed {len(removed)} stale fixture resources")
+
+
 def phase_setup(cfg: Config, ev: Evidence, journal: Journal) -> None:
     stage_tree(cfg)
+    remove_stale_fixtures(cfg, ev)
     clone_database(cfg)
     ev.data["repairs"].append({"action": "clone_database", "database": cfg.db})
     cells = [cfg.slug, cfg.intruder_slug]
@@ -3147,6 +3191,7 @@ def cleanup(
         except OSError as exc:
             errors.append(f"route {path}: {exc}")
     result["removed_routes"] = removed_routes
+    remove_stale_fixtures(cfg, ev)
     # Any container still labelled with one of our site ids was not reclaimed.
     shadow: list[str] = []
     for site in journal.data.get("fixtures", {}).get("sites", {}).values():
