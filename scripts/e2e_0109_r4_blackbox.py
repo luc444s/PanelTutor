@@ -20,14 +20,12 @@ from __future__ import annotations
 
 import argparse
 import hashlib
-import ipaddress
 import json
 import os
 import re
 import secrets
 import shutil
 import signal
-import socket
 import subprocess
 import sys
 import time
@@ -113,6 +111,7 @@ def run(
         timeout=timeout,
         input=input_text,
         env={**os.environ, **(env or {})},
+        check=False,
     )
     if check and completed.returncode:
         tail = (completed.stderr or completed.stdout).strip()[-800:]
@@ -204,7 +203,7 @@ def start_process(
         stdin=subprocess.DEVNULL,
         start_new_session=True,
         env={**os.environ, **env},
-        preexec_fn=preexec,
+        preexec_fn=preexec,  # noqa: PLW1509 - started before any thread exists
     )
     (runtime / f"{name}.pid").write_text(str(process.pid), encoding="utf-8")
     log(f"started {name} pid={process.pid} log={log_path}")
@@ -491,14 +490,38 @@ def _mounts(stage: Path, live_env: dict[str, str]) -> list[str]:
         "-v", f"{stage / AGENT_TOKEN_FILE}:{PLAN_AGENT_TOKEN}:ro",
         "-v", f"{DYNAMIC_DIR}:{DYNAMIC_DIR}:rw",
         "-v", f"{stage / 'proxy-backups'}:{stage / 'proxy-backups'}:rw",
-        "-v", f"{stage / 'vendor' / 'systutor-core' / 'src'}:"
-              "/app/vendor/systutor-core/src:ro",
+        "-v", (
+            f"{stage / 'vendor' / 'systutor-core' / 'src'}:"
+            "/app/vendor/systutor-core/src:ro"
+        ),
         "-v", f"{stage / 'vendor' / 'systutor-core' / 'plugins'}:/app/plugins:ro",
         "-v", "/var/lib/spanel/cells:/var/lib/spanel/cells:ro",
     ]
     if key_path and Path(key_path).exists():
         mounts += ["-v", f"{key_path}:/run/secrets/apps_key:ro"]
     return mounts
+
+
+def start_worker(
+    stage: Path, runtime_env: Path, live_env: dict[str, str], *,
+    rootless: bool = True,
+) -> None:
+    """Start only the Dramatiq worker (used by restart-recovery drills)."""
+    mode = "true" if rootless else "false"
+    baseline = "rootless" if rootless else "hardened"
+    docker("rm", "-f", WORKER_CONTAINER, check=False)
+    docker(
+        "run", "-d", "--network", "spanel_default",
+        "--env-file", str(runtime_env),
+        "-e", "PYTHONPATH=/app/vendor/systutor-core/src:/app/vendor/systutor-core:/app",
+        "-e", f"SPANEL_TENANTS_ROOTLESS={mode}",
+        "-e", f"SPANEL_APPS_PROBE_BASELINE={baseline}",
+        "-e", f"SPANEL_PLAN_AGENT_SOCKET={PLAN_AGENT_SOCKET}",
+        *_mounts(stage, live_env),
+        "--name", WORKER_CONTAINER,
+        IMAGE, "python", "/stage/scripts/e2e_dramatiq_worker.py",
+        "--processes", "1", "--threads", "1", "--queues", "apps",
+    )
 
 
 def start_stack(
@@ -530,9 +553,7 @@ def start_stack(
     ]
     docker("run", *common, "--name", APP_CONTAINER,
            "-p", "127.0.0.1:3010:3000", IMAGE)
-    docker("run", *common, "--name", WORKER_CONTAINER,
-           IMAGE, "python", "/stage/scripts/e2e_dramatiq_worker.py",
-           "--processes", "1", "--threads", "1", "--queues", "apps")
+    start_worker(stage, runtime_env, live_env, rootless=rootless)
     deadline = time.monotonic() + 180
     while time.monotonic() < deadline:
         probe = run(
@@ -666,7 +687,7 @@ def _host_facts() -> dict[str, str]:
 
 def api_module():
     sys.path.insert(0, str(Path(__file__).resolve().parent))
-    import e2e_apps_api  # noqa: PLC0415
+    import e2e_apps_api
 
     return e2e_apps_api
 
@@ -997,7 +1018,7 @@ def verify_deploy(
 def _write_dispatch_script(stage: Path) -> Path:
     path = stage / "dispatch_outbox.py"
     path.write_text(
-        "\n".join([
+        "\n".join([  # noqa: FLY002 - generated script is clearer as lines
             "import json",
             "from app.main import app",
             "from systutor.core.config import get_settings",
@@ -1272,7 +1293,7 @@ def check_flag_false(
 def _write_downgrade_script(stage: Path) -> Path:
     path = stage / "downgrade_005.py"
     path.write_text(
-        "\n".join([
+        "\n".join([  # noqa: FLY002 - generated script is clearer as lines
             "import json",
             "from systutor.core.config import get_settings",
             "from systutor.core.database import build_session_factory",
@@ -1546,7 +1567,7 @@ def cleanup(stage: Path, evidence: dict[str, Any]) -> None:
     else:
         allocation = run(
             ["python3", "-c",
-             "import json;print('spanel-%s' in json.load(open('/var/lib/spanel/registry.json'))['allocations'])" % SLUG],
+             f"import json;print('spanel-{SLUG}' in json.load(open('/var/lib/spanel/registry.json'))['allocations'])"],
             check=False,
         ).stdout.strip()
         if allocation != "True":
@@ -1822,9 +1843,7 @@ def main() -> int:
                     "pass": False, "error": str(exc)[:1200],
                     "trace": traceback.format_exc()[-2000:],
                 }
-        if args.phase == "cleanup":
-            cleanup(args.stage, evidence)
-        elif args.phase == "all" and (not args.keep or not failed):
+        if args.phase == "cleanup" or args.phase == "all" and (not args.keep or not failed):
             cleanup(args.stage, evidence)
         elif failed and args.keep:
             log("keeping resources for inspection (--keep)")

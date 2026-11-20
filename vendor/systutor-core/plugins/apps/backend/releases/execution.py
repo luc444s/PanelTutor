@@ -30,6 +30,7 @@ from ..runtime.tenant_plan import TenantPlan
 from ..runtime.tenant_runtime import tenant_slug
 from .pipeline import create_release, release_result
 from .planner import DeployScope, plan_deployment
+from .retention import configured_keep, prune_application_releases
 from .scoped_execution import ScopedDeployFailed, ScopedRestoreError
 from .store import find_release, release_store_root
 from .trusted import TrustedRelease
@@ -334,6 +335,7 @@ class ReleaseExecution:
                 db.commit()
                 deployment_id = deployment.id
             self.refresh_routes(application_id)
+            self._prune_releases(application_id, source[3])
         finally:
             lock.release()
         result = {
@@ -471,6 +473,7 @@ class ReleaseExecution:
                 db.commit()
                 deployment_id = deployment.id
             self.refresh_routes(application_id)
+            self._prune_releases(application_id, project)
         finally:
             lock.release()
         result = {
@@ -481,6 +484,35 @@ class ReleaseExecution:
         }
         result.update(release_result(release))
         return result
+
+    def _prune_releases(self, application_id: str, project: str) -> None:
+        """Best-effort retention; never fails a deployment or rollback."""
+        try:
+            project_root = release_store_root(os.environ) / project
+            with self.session_factory() as db:
+                app = db.get(Application, application_id)
+                if app is None:
+                    return
+                removed = prune_application_releases(
+                    db,
+                    application_id=application_id,
+                    project_root=project_root,
+                    keep=configured_keep(os.environ),
+                    active_deployment_id=app.active_deployment_id,
+                )
+            if removed:
+                logger.info(
+                    "apps_release_retention",
+                    extra={
+                        "application_id": application_id,
+                        "removed": len(removed),
+                    },
+                )
+        except Exception:  # noqa: BLE001 - retention must not block the operation
+            logger.warning(
+                "apps_release_retention_failed",
+                extra={"application_id": application_id},
+            )
 
     def refresh_routes(self, application_id: str) -> None:
         if self.route_refresh is None:
