@@ -2105,6 +2105,19 @@ def phase_seed(cfg: Config, ev: Evidence, journal: Journal) -> None:
         site = fixtures[kind]["site"]
         result = cli_rootless(cfg, "migrate", "--site", site["id"])
         migration[kind] = result
+        ev.record(
+            f"migration_{kind}",
+            "operator CLI 0110-A",
+            "migration retains a rollbackable rootless site",
+            {
+                "state": result.get("state"),
+                "ok": result.get("ok"),
+                "error": result.get("error"),
+                "steps": result.get("steps"),
+                "operation_id": result.get("operation_id"),
+            },
+            passed=result.get("state") == "retained",
+        )
         if result.get("state") != "retained":
             raise CheckFailed(f"{kind} migration did not retain a rollbackable state")
         after = http_marker(
