@@ -1060,6 +1060,18 @@ def clone_database(cfg: Config) -> None:
         "UPDATE event_outbox SET status = 'processed', processed_at = NOW(), "
         "error_message = NULL WHERE status IN ('pending', 'failed');",
     )
+    # El clon trae sitios del tenant real. Si el migrador los reconciliara,
+    # el ingress apuntaría a contenedores que no existen en esta celda.
+    for table in (
+        "hosting_rootless_routes",
+        "hosting_rootless_migrations",
+        "hosting_sites",
+    ):
+        clone_psql(cfg, f"DELETE FROM {table};")
+    clone_psql(
+        cfg,
+        "DELETE FROM tenant_resource_runtimes WHERE kind = 'hosting';",
+    )
 
 
 def clone_psql(cfg: Config, sql: str, **params: str) -> str:
