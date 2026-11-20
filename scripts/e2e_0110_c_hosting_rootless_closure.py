@@ -1816,7 +1816,7 @@ def phase_preflight(cfg: Config, ev: Evidence, journal: Journal) -> None:
         "preflight_host",
         "host",
         "root, cgroups v2, docker, live stack and disposable prerequisites",
-        {
+        lambda: {
             "euid": os.geteuid(),
             "cgroup": str(cgroup),
             "live_env": str(cfg.live_env),
