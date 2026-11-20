@@ -69,7 +69,9 @@ def test_add_domain_cloudflare_active_plan_apply_flow(tmp_path: Path, monkeypatc
         engine.dispose()
 
 
-def test_add_domain_cloudflare_inactive_or_unauthorized_is_rejected(tmp_path: Path, monkeypatch) -> None:
+def test_add_domain_cloudflare_inactive_or_unauthorized_is_rejected(
+    tmp_path: Path, monkeypatch
+) -> None:
     app, _fake, db, holder, _cipher, engine = build_app(tmp_path, monkeypatch)
     path = "/api/v1/plugins/domains/dns/cloudflare/provision/plan"
     body = {"domain": "newsite.example.com", "ipv4": "203.0.113.10", "www": False, "replace": False}

@@ -48,8 +48,24 @@ class FakeExecutor:
     def restart_user_manager(self, uid):
         self._rec("restart_user_manager", uid=uid)
 
-    def run_plan_probe(self, slug, uid, plan):
-        self._rec("run_plan_probe", slug=slug, uid=uid, plan=plan)
+    def read_plan_state(self, uid):
+        self._rec("read_plan_state", uid=uid)
+        return {
+            "slice": plans.user_slice(uid),
+            "effective": {},
+            "properties": {},
+            "owner_uid": str(uid),
+            "cgroup_path": "",
+        }
+
+    def apply_plan_in_place(self, uid, plan):
+        self._rec("apply_plan_in_place", uid=uid, plan=plan)
+
+    def reset_plan_properties(self, uid):
+        self._rec("reset_plan_properties", uid=uid)
+
+    def run_plan_probe(self, slug, uid, plan, **kwargs):
+        self._rec("run_plan_probe", slug=slug, uid=uid, plan=plan, **kwargs)
         return dict(self.evidence)
 
     def names(self) -> list[str]:
@@ -142,10 +158,11 @@ def test_real_unix_socket_enforces_peer_credentials(tmp_path: Path) -> None:
     client.sendall(plans_client.encode_frame(request))
     agent.handle_connection(server)
     reply = plans_client.decode_frame(client)
+    acme_uid = int(alloc.load_registry(tmp_path)["allocations"]["acme"]["uid"])
     assert reply["ok"] is True
-    assert reply["result"]["slice"] == "tenant-acme.slice"
+    assert reply["result"]["slice"] == plans.user_slice(acme_uid)
     assert executor.names() == [
-        "install_tenant_slice", "install_user_manager_dropin", "restart_user_manager",
+        "read_plan_state", "apply_plan_in_place", "read_plan_state",
     ]
     client.close()
 
@@ -174,7 +191,18 @@ def test_agent_rejects_tampered_or_expired_capability(tmp_path: Path) -> None:
 def test_agent_rejects_generic_exec_and_arbitrary_paths(tmp_path: Path) -> None:
     _cell(tmp_path)
     agent, executor = _agent(tmp_path)
-    assert host_agent.ALLOWED_OPS == ("apply", "remove", "verify", "reconcile")
+    assert host_agent.ALLOWED_OPS == (
+        "apply",
+        "apply_in_place",
+        "remove",
+        "verify",
+        "probe",
+        "reconcile",
+        "migrate_all",
+        "nat_apply",
+        "nat_remove",
+    )
+    assert "exec" not in host_agent.ALLOWED_OPS
     exec_request = _request("apply", plan=PLAN)
     exec_request["op"] = "exec"  # a token bound to apply cannot authorize exec
     assert _error(agent.dispatch(exec_request, Peer(4242, 100))) == host_agent.ERR_FORBIDDEN
@@ -188,11 +216,12 @@ def test_agent_derives_slice_from_the_validated_slug_only(tmp_path: Path) -> Non
     _cell(tmp_path)
     agent, executor = _agent(tmp_path)
     response = agent.dispatch(_request("apply", plan=PLAN), Peer(4242, 100))
+    acme_uid = int(alloc.load_registry(tmp_path)["allocations"]["acme"]["uid"])
     assert response["ok"] is True
-    assert response["result"]["slice"] == "tenant-acme.slice"
-    install = next(kw for name, kw in executor.calls if name == "install_tenant_slice")
-    assert install["slug"] == "acme"
-    assert "path" not in install and "unit" not in install
+    assert response["result"]["slice"] == plans.user_slice(acme_uid)
+    applied = next(kw for name, kw in executor.calls if name == "apply_plan_in_place")
+    assert applied["uid"] == acme_uid
+    assert "path" not in applied and "unit" not in applied
 
 
 def test_agent_refuses_an_unallocated_tenant(tmp_path: Path) -> None:
@@ -226,7 +255,7 @@ def test_agent_rejects_invalid_parameters_before_any_write(
 # --- lifecycle + reconciliation ---------------------------------------------
 
 
-def test_agent_supports_only_the_four_plan_operations(tmp_path: Path) -> None:
+def test_agent_supports_only_the_allowed_plan_operations(tmp_path: Path) -> None:
     _cell(tmp_path)
     agent, executor = _agent(tmp_path)
     assert agent.dispatch(_request("apply", plan=PLAN), Peer(4242, 100))["ok"]
@@ -267,9 +296,18 @@ def test_reconcile_removes_only_stale_cached_slugs(tmp_path: Path) -> None:
         Peer(4242, 100),
     )
     assert response["result"]["removed"] == ["beta"]
+    registry = alloc.load_registry(tmp_path)["allocations"]
+    acme_uid = int(registry["acme"]["uid"])
+    beta_uid = int(registry["beta"]["uid"])
     suffix = executor.calls[before:]
-    assert all(kw.get("slug") != "acme" for name, kw in suffix if name == "remove_tenant_slice")
-    assert any(kw.get("slug") == "beta" for name, kw in suffix if name == "remove_tenant_slice")
+    assert not any(
+        name == "reset_plan_properties" and kw.get("uid") == acme_uid
+        for name, kw in suffix
+    )
+    assert any(
+        name == "reset_plan_properties" and kw.get("uid") == beta_uid
+        for name, kw in suffix
+    )
 
 
 # --- deployment boundaries --------------------------------------------------
@@ -290,5 +328,6 @@ def test_host_wiring_lab_is_explicitly_non_production(tmp_path: Path) -> None:
     assert "LAB" in source and "NOT PRODUCTION" in source
     _cell(tmp_path)
     svc = host_wiring_lab.lab_plan_materializer(tmp_path, FakeExecutor())
+    acme_uid = int(alloc.load_registry(tmp_path)["allocations"]["acme"]["uid"])
     assert isinstance(svc, materializer.PlanMaterializer)
-    assert svc.apply("acme", PLAN)["slice"] == "tenant-acme.slice"
+    assert svc.apply("acme", PLAN)["slice"] == plans.user_slice(acme_uid)

@@ -61,6 +61,7 @@ class FakeCloudflare:
     def __init__(self) -> None:
         self.scopes = [
             {"id": "s1", "name": "Zone Read"},
+            {"id": "s4", "name": "Zone Write"},
             {"id": "s2", "name": "DNS Read"},
             {"id": "s3", "name": "DNS Write"},
         ]
@@ -183,10 +184,11 @@ def test_pkce_state_and_scope_helpers() -> None:
     assert resolve_scope_ids(
         [
             {"id": "1", "name": "Zone Read"},
-            {"id": "2", "name": "DNS Read"},
-            {"id": "3", "name": "DNS Write"},
+            {"id": "2", "name": "Zone Write"},
+            {"id": "3", "name": "DNS Read"},
+            {"id": "4", "name": "DNS Write"},
         ]
-    ) == ["1", "2", "3"]
+    ) == ["1", "2", "3", "4"]
     assert "token" not in success_page().lower()
     assert "tenant" not in failure_page().lower()
 
@@ -222,7 +224,9 @@ def test_callback_success_is_single_use_and_never_stores_plaintext(tmp_path: Pat
         assert REFRESH_CANARY.encode() not in (connection.refresh_ciphertext or b"")
         assert connection.status == "active"
         assert connection.account_name == "Cloudflare"
-        assert connection.scopes_json == ["Zone Read", "DNS Read", "DNS Write"]
+        assert connection.scopes_json == [
+            "Zone Read", "Zone Write", "DNS Read", "DNS Write"
+        ]
 
         replay = service.complete_callback(state=state, code="auth-code")
         assert replay.success is False
@@ -307,7 +311,9 @@ def test_failed_reconnect_keeps_previous_connection(tmp_path: Path) -> None:
         replaced = db.scalar(select(CloudflareConnection))
         assert replaced is not None
         assert replaced.access_ciphertext != original_access
-        assert replaced.scopes_json == ["Zone Read", "DNS Read", "DNS Write"]
+        assert replaced.scopes_json == [
+            "Zone Read", "Zone Write", "DNS Read", "DNS Write"
+        ]
     finally:
         db.close()
         engine.dispose()

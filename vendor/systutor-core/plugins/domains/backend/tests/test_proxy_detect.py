@@ -8,10 +8,15 @@ from pathlib import Path
 import pytest
 
 from plugins.domains.backend.proxy.config import Settings
-from plugins.domains.backend.proxy.core import EXIT_TRANSPORT, ProxyError
+from plugins.domains.backend.proxy.core import (
+    EXIT_TRANSPORT,
+    EXIT_VALIDATION,
+    ProxyError,
+)
 from plugins.domains.backend.proxy.detect import (
     choose_container,
     detect_docker,
+    detect_profile,
     directory_from_args,
     parse_ps,
     parse_static_config,
@@ -129,7 +134,8 @@ def test_parse_ps_and_preference() -> None:
     rows = parse_ps("b\ttraefik:v3\na\ttraefik:latest\nweb\tnginx\n")
     assert rows == [("b", "traefik:v3"), ("a", "traefik:latest"), ("web", "nginx")]
     assert choose_container(rows, "elegido") == "elegido"
-    assert choose_container([("spanel-traefik-lab", "traefik"), ("traefik", "traefik")], None) == "traefik"
+    rows = [("spanel-traefik-lab", "traefik"), ("traefik", "traefik")]
+    assert choose_container(rows, None) == "traefik"
 
 
 def test_parse_static_config_and_args() -> None:
@@ -374,3 +380,14 @@ def test_explicit_modes_do_not_fallback(tmp_path: Path) -> None:
             tmp_path, SPANEL_PROXY_TRANSPORT="docker"
         )
         select_transport(docker_settings, FakeDocker(info=False), env=docker_env)
+
+
+def test_detect_profile_rejects_unknown_profile_with_validation_exit(
+    tmp_path: Path,
+) -> None:
+    settings, env = make_settings(tmp_path)
+    env["SPANEL_PROXY_PROFILE"] = "does-not-exist"
+    with pytest.raises(ProxyError) as exc:
+        detect_profile(settings, ("letsencrypt",), env)
+    assert exc.value.exit_code == EXIT_VALIDATION
+    assert "invalid profile" in str(exc.value)
