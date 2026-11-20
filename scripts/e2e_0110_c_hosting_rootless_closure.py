@@ -1042,7 +1042,7 @@ def clone_database(cfg: Config) -> None:
 def clone_psql(cfg: Config, sql: str, **params: str) -> str:
     argv = ["docker", "exec", cfg.live_pg, "psql", "-U", "postgres", "-d", cfg.db, "-tA", "-c"]
     for key, value in params.items():
-        sql = sql.replace(f"%({key})s", value.replace("'", "''"))
+        sql = sql.replace(f"%({key})s", "'" + value.replace("'", "''") + "'")
     result = run([*argv, sql], timeout=120, check=True)
     return result.stdout.strip()
 
