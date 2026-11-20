@@ -647,7 +647,7 @@
     "harness_config": "SPANEL_TENANTS_ROOTLESS=true y SPANEL_APPS_PROBE_BASELINE=rootless solo en el entorno desechable. El plan-agent y el relay se ejecutan desde el stage con sus propios sockets y token; el relay usa un registro filtrado a la celda desechable.",
     "host": "lucas-ThinkPad-E570, Docker 29.1.3, kernel 7.0.0-28-generic, cgroups cgroup2fs, AppArmor unknown",
     "method": "API p\u00fablica en 127.0.0.1:3010, worker dramatiq apps, plan-agent y edge-relay desechables y privilegiados, celda rootless real. Observaci\u00f3n externa con systemd, docker, cgroups, ss, iptables, dmesg y AppArmor. Sin MASQUERADE manual, sin puente TCP y sin Alembic CLI.",
-    "migration_runtime": "Runtime migrador de plugins (downgrade_plugin); sin endpoint HTTP de downgrade.",
+    "migration_runtime": "Runtime migrador de plugins; downgrade 005 v\u00eda POST /api/v1/core/plugin-runtime/domains/migrate/downgrade.",
     "target": "spanel.lab (NO spanel.app)"
   },
   "finished_at": "2026-11-19T22:06:41.402410+00:00",

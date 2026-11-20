@@ -10,6 +10,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from systutor.api.deps import get_db_session
+from systutor.core.lifecycle import bootstrap_app_state
 from systutor.kernel.audit.service import record_audit
 from systutor.kernel.auth.dependencies import get_current_tenant_context, require_permission
 from systutor.kernel.auth.models import User
@@ -31,6 +32,16 @@ from systutor.kernel.permissions.service import (
     list_roles_for_tenant,
     remove_role_from_user,
     update_role_for_tenant,
+)
+from systutor.kernel.plugins.persistent import (
+    PluginOperationContext,
+    disable_plugin,
+    downgrade_plugin,
+    enable_plugin,
+    install_plugin,
+    rollback_plugin,
+    uninstall_plugin,
+    upgrade_plugin,
 )
 from systutor.kernel.plugins.service import (
     get_plugin_registry_record_by_plugin_id,
@@ -61,6 +72,7 @@ REQUIRE_BRANCHES_MANAGE = Depends(require_permission("core.branches.manage"))
 REQUIRE_AUDIT_READ = Depends(require_permission("core.audit.read"))
 REQUIRE_PERMISSION_MANAGE = Depends(require_permission("core.permission.manage"))
 REQUIRE_PLUGIN_READ = Depends(require_permission("core.plugin.read"))
+REQUIRE_PLUGIN_MANAGE = Depends(require_permission("core.plugin.manage"))
 
 
 class UserRead(BaseModel):
@@ -198,6 +210,10 @@ class PluginRegistryRead(BaseModel):
     updated_at: datetime
 
 
+class PluginRuntimeMigrationRequest(BaseModel):
+    target_revision: str | None = None
+
+
 def _resolve_branch(
     db: Session,
     *,
@@ -248,6 +264,48 @@ def _audit_write(
         correlation_id=getattr(request.state, "correlation_id", None),
         request_id=getattr(request.state, "request_id", None),
         details=details,
+    )
+
+
+def _plugin_runtime_audit(
+    db: Session,
+    request: Request,
+    current_user: User,
+    *,
+    action: str,
+    plugin_id: str,
+    details: dict,
+) -> None:
+    record_audit(
+        db,
+        tenant_id=current_user.tenant_id,
+        branch_id=current_user.branch_id,
+        actor_user_id=current_user.id,
+        actor_type="user",
+        module="core",
+        action=action,
+        entity_type="plugin",
+        entity_id=plugin_id,
+        result="success",
+        correlation_id=getattr(request.state, "correlation_id", None),
+        request_id=getattr(request.state, "request_id", None),
+        details=details,
+    )
+
+
+def _refresh_plugin_runtime(request: Request, db: Session) -> None:
+    bootstrap_app_state(request.app, request.app.state.settings)
+    db.expire_all()
+
+
+def _plugin_operation_context(request: Request, current_user: User) -> PluginOperationContext:
+    return PluginOperationContext(
+        actor_user_id=current_user.id,
+        actor_type="user",
+        tenant_id=current_user.tenant_id,
+        branch_id=current_user.branch_id,
+        correlation_id=getattr(request.state, "correlation_id", None),
+        request_id=getattr(request.state, "request_id", None),
     )
 
 
@@ -773,3 +831,272 @@ def get_plugin_registry_record(
     if record is None:
         raise _tenant_not_found("Plugin registry record")
     return PluginRegistryRead.model_validate(record)
+
+
+@router.get("/plugin-runtime/debug", response_model=list[PluginRegistryRead])
+def list_plugin_runtime_debug(
+    db: Session = Depends(get_db_session),
+    _: User = REQUIRE_PLUGIN_MANAGE,
+) -> list[PluginRegistryRead]:
+    return [
+        PluginRegistryRead.model_validate(record) for record in list_plugin_registry_records(db)
+    ]
+
+
+@router.post("/plugin-runtime/{plugin_id}/install", response_model=PluginRegistryRead)
+def install_plugin_runtime(
+    plugin_id: str,
+    request: Request,
+    db: Session = Depends(get_db_session),
+    current_user: User = REQUIRE_PLUGIN_MANAGE,
+) -> PluginRegistryRead:
+    request.app.state.plugin_registry.discover()
+    try:
+        record = install_plugin(
+            db,
+            registry=request.app.state.plugin_registry,
+            plugin_id=plugin_id,
+            context_builder=request.app.state.plugin_runtime.context_builder,
+            operation_context=_plugin_operation_context(request, current_user),
+        )
+    except Exception:
+        db.commit()
+        _refresh_plugin_runtime(request, db)
+        raise
+    _plugin_runtime_audit(
+        db,
+        request,
+        current_user,
+        action="plugin.install",
+        plugin_id=plugin_id,
+        details={"migration_version": record.migration_version},
+    )
+    db.commit()
+    _refresh_plugin_runtime(request, db)
+    refreshed = get_plugin_registry_record_by_plugin_id(db, plugin_id=plugin_id)
+    if refreshed is None:
+        raise _tenant_not_found("Plugin registry record")
+    return PluginRegistryRead.model_validate(refreshed)
+
+
+@router.post("/plugin-runtime/{plugin_id}/enable", response_model=PluginRegistryRead)
+def enable_plugin_runtime(
+    plugin_id: str,
+    request: Request,
+    db: Session = Depends(get_db_session),
+    current_user: User = REQUIRE_PLUGIN_MANAGE,
+) -> PluginRegistryRead:
+    request.app.state.plugin_registry.discover()
+    try:
+        enable_plugin(
+            db,
+            registry=request.app.state.plugin_registry,
+            plugin_id=plugin_id,
+            context_builder=request.app.state.plugin_runtime.context_builder,
+            operation_context=_plugin_operation_context(request, current_user),
+        )
+    except Exception:
+        db.commit()
+        _refresh_plugin_runtime(request, db)
+        raise
+    _plugin_runtime_audit(
+        db,
+        request,
+        current_user,
+        action="plugin.enable",
+        plugin_id=plugin_id,
+        details={},
+    )
+    db.commit()
+    _refresh_plugin_runtime(request, db)
+    refreshed = get_plugin_registry_record_by_plugin_id(db, plugin_id=plugin_id)
+    if refreshed is None:
+        raise _tenant_not_found("Plugin registry record")
+    return PluginRegistryRead.model_validate(refreshed)
+
+
+@router.post("/plugin-runtime/{plugin_id}/disable", response_model=PluginRegistryRead)
+def disable_plugin_runtime(
+    plugin_id: str,
+    request: Request,
+    db: Session = Depends(get_db_session),
+    current_user: User = REQUIRE_PLUGIN_MANAGE,
+) -> PluginRegistryRead:
+    request.app.state.plugin_registry.discover()
+    try:
+        disable_plugin(
+            db,
+            registry=request.app.state.plugin_registry,
+            plugin_id=plugin_id,
+            context_builder=request.app.state.plugin_runtime.context_builder,
+            operation_context=_plugin_operation_context(request, current_user),
+        )
+    except Exception:
+        db.commit()
+        _refresh_plugin_runtime(request, db)
+        raise
+    _plugin_runtime_audit(
+        db,
+        request,
+        current_user,
+        action="plugin.disable",
+        plugin_id=plugin_id,
+        details={},
+    )
+    db.commit()
+    _refresh_plugin_runtime(request, db)
+    refreshed = get_plugin_registry_record_by_plugin_id(db, plugin_id=plugin_id)
+    if refreshed is None:
+        raise _tenant_not_found("Plugin registry record")
+    return PluginRegistryRead.model_validate(refreshed)
+
+
+@router.post("/plugin-runtime/{plugin_id}/migrate/upgrade", response_model=PluginRegistryRead)
+def upgrade_plugin_runtime_migrations(
+    plugin_id: str,
+    payload: PluginRuntimeMigrationRequest,
+    request: Request,
+    db: Session = Depends(get_db_session),
+    current_user: User = REQUIRE_PLUGIN_MANAGE,
+) -> PluginRegistryRead:
+    request.app.state.plugin_registry.discover()
+    try:
+        record = upgrade_plugin(
+            db,
+            registry=request.app.state.plugin_registry,
+            plugin_id=plugin_id,
+            target_revision=payload.target_revision,
+            operation_context=_plugin_operation_context(request, current_user),
+        )
+    except Exception:
+        db.commit()
+        _refresh_plugin_runtime(request, db)
+        raise
+    _plugin_runtime_audit(
+        db,
+        request,
+        current_user,
+        action="plugin.migrate.upgrade",
+        plugin_id=plugin_id,
+        details={
+            "target_revision": payload.target_revision,
+            "migration_version": record.migration_version,
+        },
+    )
+    db.commit()
+    _refresh_plugin_runtime(request, db)
+    refreshed = get_plugin_registry_record_by_plugin_id(db, plugin_id=plugin_id)
+    if refreshed is None:
+        raise _tenant_not_found("Plugin registry record")
+    return PluginRegistryRead.model_validate(refreshed)
+
+
+@router.post("/plugin-runtime/{plugin_id}/migrate/downgrade", response_model=PluginRegistryRead)
+def downgrade_plugin_runtime_migrations(
+    plugin_id: str,
+    payload: PluginRuntimeMigrationRequest,
+    request: Request,
+    db: Session = Depends(get_db_session),
+    current_user: User = REQUIRE_PLUGIN_MANAGE,
+) -> PluginRegistryRead:
+    request.app.state.plugin_registry.discover()
+    try:
+        record = downgrade_plugin(
+            db,
+            registry=request.app.state.plugin_registry,
+            plugin_id=plugin_id,
+            target_revision=payload.target_revision,
+            operation_context=_plugin_operation_context(request, current_user),
+        )
+    except Exception:
+        db.commit()
+        _refresh_plugin_runtime(request, db)
+        raise
+    _plugin_runtime_audit(
+        db,
+        request,
+        current_user,
+        action="plugin.migrate.downgrade",
+        plugin_id=plugin_id,
+        details={
+            "target_revision": payload.target_revision,
+            "migration_version": record.migration_version,
+        },
+    )
+    db.commit()
+    _refresh_plugin_runtime(request, db)
+    refreshed = get_plugin_registry_record_by_plugin_id(db, plugin_id=plugin_id)
+    if refreshed is None:
+        raise _tenant_not_found("Plugin registry record")
+    return PluginRegistryRead.model_validate(refreshed)
+
+
+@router.post("/plugin-runtime/{plugin_id}/migrate/rollback", response_model=PluginRegistryRead)
+def rollback_plugin_runtime_migrations(
+    plugin_id: str,
+    request: Request,
+    db: Session = Depends(get_db_session),
+    current_user: User = REQUIRE_PLUGIN_MANAGE,
+) -> PluginRegistryRead:
+    request.app.state.plugin_registry.discover()
+    try:
+        record = rollback_plugin(
+            db,
+            registry=request.app.state.plugin_registry,
+            plugin_id=plugin_id,
+            operation_context=_plugin_operation_context(request, current_user),
+        )
+    except Exception:
+        db.commit()
+        _refresh_plugin_runtime(request, db)
+        raise
+    _plugin_runtime_audit(
+        db,
+        request,
+        current_user,
+        action="plugin.migrate.rollback",
+        plugin_id=plugin_id,
+        details={"migration_version": record.migration_version},
+    )
+    db.commit()
+    _refresh_plugin_runtime(request, db)
+    refreshed = get_plugin_registry_record_by_plugin_id(db, plugin_id=plugin_id)
+    if refreshed is None:
+        raise _tenant_not_found("Plugin registry record")
+    return PluginRegistryRead.model_validate(refreshed)
+
+
+@router.post("/plugin-runtime/{plugin_id}/uninstall", response_model=PluginRegistryRead)
+def uninstall_plugin_runtime(
+    plugin_id: str,
+    request: Request,
+    db: Session = Depends(get_db_session),
+    current_user: User = REQUIRE_PLUGIN_MANAGE,
+) -> PluginRegistryRead:
+    request.app.state.plugin_registry.discover()
+    try:
+        record = uninstall_plugin(
+            db,
+            registry=request.app.state.plugin_registry,
+            plugin_id=plugin_id,
+            context_builder=request.app.state.plugin_runtime.context_builder,
+            operation_context=_plugin_operation_context(request, current_user),
+        )
+    except Exception:
+        db.commit()
+        _refresh_plugin_runtime(request, db)
+        raise
+    _plugin_runtime_audit(
+        db,
+        request,
+        current_user,
+        action="plugin.uninstall",
+        plugin_id=plugin_id,
+        details={"migration_version": record.migration_version},
+    )
+    db.commit()
+    _refresh_plugin_runtime(request, db)
+    refreshed = get_plugin_registry_record_by_plugin_id(db, plugin_id=plugin_id)
+    if refreshed is None:
+        raise _tenant_not_found("Plugin registry record")
+    return PluginRegistryRead.model_validate(refreshed)

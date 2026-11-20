@@ -202,10 +202,11 @@ app, no con Alembic CLI:
 - Columna legacy `apps_applications.domain`: presente; valores antes/después
   idénticos (vacíos en el clon).
 
-La superficie HTTP legacy de plugin-runtime se retiró: ya no existe un endpoint
-de downgrade que pueda re-subir la migración por el refresh. El downgrade queda
-solo en el **runtime migrador** (`downgrade_plugin()`), que es lo que exige el
-A.SPEC y lo que ejerce el E2E.
+Observación: el endpoint HTTP legacy
+`/api/v1/plugin-runtime/domains/migrate/downgrade` responde 200 pero su refresh
+posterior vuelve a subir el plugin a 005. El A.SPEC exige el **runtime
+migrador**; el E2E ejerce `downgrade_plugin()` directamente, que es la
+superficie correcta y no re-sube la migración.
 
 ### 5.6 Limpieza verificada
 
@@ -254,9 +255,8 @@ en el JSON de evidencia y no se declara PASS.
 - El commit es local; **no se ha hecho push**.
 - Los documentos de R3 (`aspecs/0109-r3-*`, `artifacts/0109-r3-*`) quedan fuera
   del commit por pertenecer a otra fase.
-- Los endpoints HTTP legacy de plugin-runtime se eliminaron; el downgrade se
-  ejecuta solo con el runtime migrador (`downgrade_plugin()`), como exige el
-  A.SPEC.
+- El endpoint HTTP legacy de downgrade tiene el comportamiento de re-subida
+  descrito en 5.5; el runtime migrador directo es el que usa y exige el A.SPEC.
 - El E2E usa el directorio dinámico del Traefik del laboratorio y agentes
   desechables; no toca producción.
 

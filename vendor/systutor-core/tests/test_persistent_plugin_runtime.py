@@ -147,7 +147,7 @@ def _fetch_migration_revisions(db: Session) -> list[str]:
     return list(db.execute(query).scalars())
 
 
-def test_core_plugin_endpoints_cover_install_enable_disable(
+def test_plugin_runtime_debug_endpoints_cover_install_enable_disable(
     client,
     app,
     seeded_demo: dict[str, str],
@@ -158,50 +158,30 @@ def test_core_plugin_endpoints_cover_install_enable_disable(
     assert list_response.status_code == 200
     assert any(item["plugin_id"] == "alpha" for item in list_response.json())
 
-    disable_response = client.post("/api/v1/core/plugins/alpha/disable", headers=headers)
+    disable_response = client.post("/api/v1/plugin-runtime/alpha/disable", headers=headers)
     assert disable_response.status_code == 200
     assert disable_response.json()["state"] == "disabled"
     assert disable_response.json()["is_enabled"] is False
 
-    crm_install_response = client.post("/api/v1/core/plugins/beta/install", headers=headers)
+    crm_install_response = client.post("/api/v1/plugin-runtime/beta/install", headers=headers)
     assert crm_install_response.status_code == 200
-    crm_enable_response = client.post("/api/v1/core/plugins/beta/enable", headers=headers)
+    crm_enable_response = client.post("/api/v1/plugin-runtime/beta/enable", headers=headers)
     assert crm_enable_response.status_code == 200
 
-    install_response = client.post("/api/v1/core/plugins/alpha/install", headers=headers)
+    install_response = client.post("/api/v1/plugin-runtime/alpha/install", headers=headers)
     assert install_response.status_code == 200
     assert install_response.json()["state"] == "installed"
     assert install_response.json()["installed_at"] is not None
 
-    enable_response = client.post("/api/v1/core/plugins/alpha/enable", headers=headers)
+    enable_response = client.post("/api/v1/plugin-runtime/alpha/enable", headers=headers)
     assert enable_response.status_code == 200
     assert enable_response.json()["state"] == "enabled"
     assert enable_response.json()["is_enabled"] is True
 
-    list_after_enable = client.get("/api/v1/core/plugins", headers=headers)
-    assert list_after_enable.status_code == 200
-    alpha = next(item for item in list_after_enable.json() if item["plugin_id"] == "alpha")
+    debug_response = client.get("/api/v1/plugin-runtime/debug", headers=headers)
+    assert debug_response.status_code == 200
+    alpha = next(item for item in debug_response.json() if item["plugin_id"] == "alpha")
     assert alpha["state"] == "enabled"
-
-
-def test_legacy_plugin_runtime_surface_is_removed(
-    client,
-    seeded_demo: dict[str, str],
-) -> None:
-    headers = auth_headers(client)
-    legacy = [
-        ("GET", "/api/v1/plugin-runtime/debug"),
-        ("POST", "/api/v1/plugin-runtime/alpha/install"),
-        ("POST", "/api/v1/plugin-runtime/alpha/enable"),
-        ("POST", "/api/v1/plugin-runtime/alpha/disable"),
-        ("POST", "/api/v1/plugin-runtime/alpha/migrate/upgrade"),
-        ("POST", "/api/v1/plugin-runtime/alpha/migrate/downgrade"),
-        ("POST", "/api/v1/plugin-runtime/alpha/migrate/rollback"),
-        ("POST", "/api/v1/plugin-runtime/alpha/uninstall"),
-    ]
-    for method, path in legacy:
-        response = client.request(method, path, headers=headers)
-        assert response.status_code == 404, (method, path, response.status_code)
 
 
 def test_plugin_runtime_state_persists_after_reboot(
@@ -210,9 +190,9 @@ def test_plugin_runtime_state_persists_after_reboot(
     seeded_demo: dict[str, str],
 ) -> None:
     headers = auth_headers(client)
-    crm_enable_response = client.post("/api/v1/core/plugins/beta/enable", headers=headers)
+    crm_enable_response = client.post("/api/v1/plugin-runtime/beta/enable", headers=headers)
     assert crm_enable_response.status_code == 200
-    enable_response = client.post("/api/v1/core/plugins/alpha/enable", headers=headers)
+    enable_response = client.post("/api/v1/plugin-runtime/alpha/enable", headers=headers)
     assert enable_response.status_code == 200
 
     rebooted_app = create_app(app.state.settings)

@@ -1720,8 +1720,8 @@ def finalize_artifact(evidence: dict[str, Any], ok: bool) -> None:
         ),
         "fixture": f"{REPOSITORY}@{BRANCH}/{COMPOSE_FILE}",
         "migration_runtime": (
-            "Runtime migrador de plugins (downgrade_plugin); no hay "
-            "endpoint HTTP de downgrade."
+            "Runtime migrador de plugins; downgrade 005 vía "
+            "POST /api/v1/core/plugin-runtime/domains/migrate/downgrade."
         ),
     }
     gaps: list[dict[str, Any]] = []
