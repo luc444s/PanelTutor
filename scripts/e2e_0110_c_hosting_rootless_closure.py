@@ -2082,27 +2082,22 @@ def phase_seed(cfg: Config, ev: Evidence, journal: Journal) -> None:
     apply_plan(cfg, admin, ev, "primary", cfg.slug)
     # El usuario del tenant intruso no tiene `apps.plans.manage`; el plan
     # obligatorio es el de la celda principal.
-    intruder = intruder_login(cfg, ev.redactor, journal.data)
-    intruder_site = create_fixture(
-        cfg,
-        intruder,
-        ev.redactor,
-        kind="static",
-        name=f"intr-static-{cfg.slug}",
-        domain=cfg.intruder_domain,
-    )
-    fixtures["intruder"] = intruder_site
-    intruder_http = http_marker(cfg, cfg.intruder_domain, "")
-    ev.data["fixtures"]["intruder_site"] = {
-        "id": intruder_site["site"]["id"],
-        "domain": cfg.intruder_domain,
+    intruder_login(cfg, ev.redactor, journal.data)
+    intruder_cell = journal.data["cells"][cfg.intruder_slug]
+    ev.data["fixtures"]["intruder"] = {
+        "tenant_id": journal.data["intruder"]["tenant"]["id"],
+        "cell": cfg.intruder_slug,
     }
     ev.record(
         "intruder_tenant_cell",
-        "API + public HTTP",
-        "second tenant gets its own rootless cell and site",
-        {"http_status": intruder_http.get("status"), "site": intruder_site["site"]},
-        passed=intruder_http.get("status") == 200,
+        "API + host observation",
+        "second tenant has its own rootless cell; cross-tenant access is denied later",
+        {
+            "tenant_id": journal.data["intruder"]["tenant"]["id"],
+            "cell_state": intruder_cell.get("state"),
+            "cell_uid": intruder_cell.get("uid"),
+        },
+        passed=intruder_cell.get("state") == "ready",
     )
 
     migration: dict[str, Any] = {}
