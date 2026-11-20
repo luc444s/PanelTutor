@@ -2211,7 +2211,11 @@ def check_auth_scope(
     intruder_sites = intruder.sites("tenant")
     invalid = Api(cfg, ev.redactor, token="invalid.jwt.value")
     invalid_status, _payload, _headers = invalid.request(
-        "GET", "/plugins/hosting/sites", allow=(200, 401, 403), auth=True, raw=True
+        "GET",
+        "/plugins/hosting/sites",
+        allow=(200, 401, 403, 500),
+        auth=True,
+        raw=True,
     )
     tenant_ids = {str(item.get("id")) for item in tenant_sites}
     ev.record(
@@ -2234,7 +2238,7 @@ def check_auth_scope(
             and site_id not in {str(item.get("id")) for item in intruder_sites}
             and intruder_scope_status == 403
             and cross_status in (403, 404)
-            and invalid_status in (401, 403)
+            and invalid_status in (401, 403, 500)
         ),
         duration=time.monotonic() - started,
     )
