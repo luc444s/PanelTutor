@@ -1645,7 +1645,7 @@ def create_tenant(cfg: Config, api: Api, redactor: Redactor) -> dict[str, Any]:
         {
             "name": f"0110C Intruder {cfg.slug}",
             "slug": cfg.intruder_tenant,
-            "domain": None,
+            "domain": f"tenant-{cfg.slug}.{cfg.domain_suffix}",
             "user_email": f"intruder-{cfg.slug}@example.invalid",
             "user_password": password,
             "user_full_name": "0110C Intruder",
