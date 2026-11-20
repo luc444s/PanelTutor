@@ -2145,7 +2145,7 @@ def phase_seed(cfg: Config, ev: Evidence, journal: Journal) -> None:
     journal.data["fixtures"] = {
         "sites": ev.data["fixtures"]["sites"],
         "passwords": {},
-        "intruder_site": ev.data["fixtures"]["intruder_site"],
+        "intruder": ev.data["fixtures"]["intruder"],
         "migration": migration,
     }
     journal.save()
