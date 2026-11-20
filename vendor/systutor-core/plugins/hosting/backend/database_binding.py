@@ -47,9 +47,7 @@ def _validate_host(host: str) -> str:
     return name
 
 
-def database_binding(
-    info: dict, *, wp_config: str | None = None
-) -> tuple[str, str, str, str, str]:
+def database_binding(info: dict, *, wp_config: str | None = None) -> tuple[str, str, str, str, str]:
     """Resolve the database from the environment, then from `wp-config.php`.
 
     Returns the raw host as WordPress declares it (port included), the Docker
@@ -82,13 +80,9 @@ def database_binding(
     )
 
 
-def database_credentials(
-    info: dict, *, wp_config: str | None = None
-) -> tuple[str, str, str, str]:
+def database_credentials(info: dict, *, wp_config: str | None = None) -> tuple[str, str, str, str]:
     """The four values WordPress already uses, validated as a Docker target."""
-    _raw_host, host, database, user, password = database_binding(
-        info, wp_config=wp_config
-    )
+    _raw_host, host, database, user, password = database_binding(info, wp_config=wp_config)
     return host, database, user, password
 
 
@@ -116,9 +110,7 @@ def resolve_database_binding(
         wp_config = read_config(env, container_name, timeout=timeout)
         if wp_config is None:
             raise
-        raw_host, host, database, user, password = database_binding(
-            info, wp_config=wp_config
-        )
+        raw_host, host, database, user, password = database_binding(info, wp_config=wp_config)
     if inspector(host) is None:
         resolved = resolve_alias(env, info, host)
         if resolved is not None:

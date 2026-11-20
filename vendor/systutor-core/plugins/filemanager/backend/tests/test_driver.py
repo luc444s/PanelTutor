@@ -33,9 +33,7 @@ def test_php_runtime_execs_inside_the_target_container() -> None:
 
 
 def test_volume_runtime_mounts_the_site_in_the_helper_image() -> None:
-    target = FileTarget(
-        "spanel-demo-web", "/usr/share/nginx/html", "site-2", runtime="volume"
-    )
+    target = FileTarget("spanel-demo-web", "/usr/share/nginx/html", "site-2", runtime="volume")
     command = _shell(_command(target, "list", LOCAL, path=""))
     assert (
         "docker run --rm -i --network none --user 0 "
@@ -44,9 +42,7 @@ def test_volume_runtime_mounts_the_site_in_the_helper_image() -> None:
 
 
 def test_volume_runtime_accepts_a_configured_helper_and_quotes_it() -> None:
-    target = FileTarget(
-        "spanel-demo-web", "/usr/share/nginx/html", "site-2", runtime="volume"
-    )
+    target = FileTarget("spanel-demo-web", "/usr/share/nginx/html", "site-2", runtime="volume")
     command = _shell(
         _command(
             target,

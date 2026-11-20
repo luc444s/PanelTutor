@@ -19,6 +19,7 @@ class FileTarget:
     # script. `volume` means it does not (a static nginx site): the driver
     # mounts this container's volumes in a disposable helper image instead.
     runtime: Literal["php", "volume"] = "php"
+    execution_runtime: Literal["rootful", "rootless"] = "rootful"
 
 
 FileTargetResolver = Callable[[Session, str, str, bool, tuple[str, ...]], FileTarget | None]
@@ -32,9 +33,10 @@ def register_file_target(app: FastAPI, name: str, resolver: FileTargetResolver) 
         providers = {}
         app.state.file_target_providers = providers
     existing = providers.get(name)
-    if existing is not None and (
-        existing.__module__, existing.__qualname__
-    ) != (resolver.__module__, resolver.__qualname__):
+    if existing is not None and (existing.__module__, existing.__qualname__) != (
+        resolver.__module__,
+        resolver.__qualname__,
+    ):
         raise ValueError(f"Duplicate file target provider: {name}")
     providers[name] = resolver
 

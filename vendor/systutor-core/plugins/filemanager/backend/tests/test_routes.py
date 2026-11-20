@@ -158,9 +158,7 @@ def test_provider_scopes_site_and_upload_requires_manage(tmp_path, monkeypatch) 
         engine.dispose()
 
 
-def test_batch_delete_uses_one_operation_and_audits_only_the_count(
-    tmp_path, monkeypatch
-) -> None:
+def test_batch_delete_uses_one_operation_and_audits_only_the_count(tmp_path, monkeypatch) -> None:
     app, engine, token, own_id, other_id = _app(tmp_path / "batch.sqlite")
     seen: list[tuple[str, str, dict]] = []
 
@@ -184,19 +182,13 @@ def test_batch_delete_uses_one_operation_and_audits_only_the_count(
             assert response.status_code == 200
             assert response.json()["deleted"] == 2
             assert (
-                await client.post(
-                    base + other_id + "/entries/delete-batch", json={"paths": paths}
-                )
+                await client.post(base + other_id + "/entries/delete-batch", json={"paths": paths})
             ).status_code == 404
             assert (
-                await client.post(
-                    base + own_id + "/entries/delete-batch", json={"paths": []}
-                )
+                await client.post(base + own_id + "/entries/delete-batch", json={"paths": []})
             ).status_code == 422
             assert (
-                await client.post(
-                    base + own_id + "/entries/delete-batch", json={"paths": [1]}
-                )
+                await client.post(base + own_id + "/entries/delete-batch", json={"paths": [1]})
             ).status_code == 422
             assert (
                 await client.post(
@@ -207,19 +199,13 @@ def test_batch_delete_uses_one_operation_and_audits_only_the_count(
 
             with app.state.session_factory.begin() as db:
                 permission_id = db.scalar(
-                    select(Permission.id).where(
-                        Permission.name == "filemanager.files.manage"
-                    )
+                    select(Permission.id).where(Permission.name == "filemanager.files.manage")
                 )
                 db.execute(
-                    delete(RolePermission).where(
-                        RolePermission.permission_id == permission_id
-                    )
+                    delete(RolePermission).where(RolePermission.permission_id == permission_id)
                 )
             assert (
-                await client.post(
-                    base + own_id + "/entries/delete-batch", json={"paths": paths}
-                )
+                await client.post(base + own_id + "/entries/delete-batch", json={"paths": paths})
             ).status_code == 403
 
     try:
@@ -232,9 +218,7 @@ def test_batch_delete_uses_one_operation_and_audits_only_the_count(
             )
         ]
         with app.state.session_factory() as db:
-            audit = db.scalar(
-                select(AuditLog).where(AuditLog.action == "filemanager.delete_batch")
-            )
+            audit = db.scalar(select(AuditLog).where(AuditLog.action == "filemanager.delete_batch"))
             assert audit is not None
             assert audit.details == {"count": 2}
     finally:
@@ -351,9 +335,7 @@ def test_static_sites_use_the_volume_runtime(tmp_path) -> None:
         tenant_id = wordpress.tenant_id
 
     with app.state.session_factory() as db:
-        target = resolve_hosting_files(
-            db, tenant_id, static_id, False, ("hosting.sites.read",)
-        )
+        target = resolve_hosting_files(db, tenant_id, static_id, False, ("hosting.sites.read",))
         assert target is not None
         assert target.runtime == "volume"
         assert target.root == "/usr/share/nginx/html"

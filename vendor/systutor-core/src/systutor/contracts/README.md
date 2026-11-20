@@ -45,3 +45,13 @@ modelos desde Apps:
 Apps consulta este contrato primero. Mientras exista el campo histórico
 `apps_applications.domain`, puede usarlo como fallback cuando no haya fila; su
 retirada solo ocurrirá por una decisión explícita futura, nunca por fecha.
+
+## `container_runtime` y `resource_runtime`
+
+- `container_runtime` registra handles opacos `rootful`/`rootless`. Un handle
+  permite comandos acotados, inspect y transferencia de volúmenes por stream;
+  nunca expone el socket a una petición HTTP.
+- `resource_runtime` registra una única fuente de verdad para leer y fijar la
+  asignación explícita `(tenant, kind, resource_id)`. La ausencia se devuelve
+  como `None`: el consumidor decide altas legacy o falla cerrado, sin confundir
+  ausencia con una asignación rootful.

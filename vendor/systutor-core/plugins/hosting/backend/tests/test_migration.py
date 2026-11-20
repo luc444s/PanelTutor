@@ -14,9 +14,7 @@ from types import ModuleType
 from sqlalchemy import create_engine, inspect
 from sqlalchemy.orm import Session
 
-MIGRATION_PATH = (
-    Path(__file__).resolve().parents[2] / "migrations" / "001_create_hosting_sites.py"
-)
+MIGRATION_PATH = Path(__file__).resolve().parents[2] / "migrations" / "001_create_hosting_sites.py"
 
 
 def _cargar_migracion() -> ModuleType:

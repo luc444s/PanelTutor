@@ -36,6 +36,7 @@ from .phpmyadmin_session import (
     proxy_base,
     secure_request,
 )
+from .rootless_migration import RootlessMigrationService
 from .schemas import (
     CreateSiteRequest,
     CreateSiteResponse,
@@ -44,6 +45,8 @@ from .schemas import (
     PhpMyAdminSessionResponse,
     ResetPasswordRequest,
     ResetPasswordResponse,
+    RootlessFinalizeRequest,
+    RootlessOperationRequest,
     SecretRotationResponse,
     SiteConfigResponse,
     SiteConfigUpdateRequest,
@@ -61,8 +64,8 @@ from .settings import get_hosting_settings
 router = APIRouter(prefix="/sites", tags=["hosting"])
 
 
-def _get_hosting_service(db: Session = Depends(get_db_session)) -> HostingService:
-    return HostingService(db)
+def _get_hosting_service(request: Request, db: Session = Depends(get_db_session)) -> HostingService:
+    return HostingService(db, app=request.app)
 
 
 @router.get("", response_model=HostingSiteListResponse)
@@ -82,9 +85,7 @@ def list_sites(
             status_code=403,
             code="hosting.platform_scope_forbidden",
         )
-    return service.list_sites(
-        None if scope == "all" else tenant_context.current_tenant_id
-    )
+    return service.list_sites(None if scope == "all" else tenant_context.current_tenant_id)
 
 
 @router.post("", response_model=CreateSiteResponse, status_code=201)
@@ -360,6 +361,62 @@ def delete_site(
 ) -> None:
     service.delete_site(site, tenant_context, app=request.app)
     db.commit()
+
+
+def _rootless_service(request: Request, db: Session) -> RootlessMigrationService:
+    return RootlessMigrationService(request.app, db)
+
+
+@router.get("/{site_id}/rootless/plan")
+def rootless_plan(
+    request: Request,
+    site: HostingSite = Depends(get_owned_site),
+    _current_user: User = Depends(require_permission("hosting.sites.manage", platform_only=True)),
+    db: Session = Depends(get_db_session),
+) -> dict:
+    return _rootless_service(request, db).plan(site.id)
+
+
+@router.post("/{site_id}/rootless/migrate")
+def rootless_migrate(
+    request: Request,
+    site: HostingSite = Depends(get_owned_site),
+    _current_user: User = Depends(require_permission("hosting.sites.manage", platform_only=True)),
+    db: Session = Depends(get_db_session),
+) -> dict:
+    return _rootless_service(request, db).migrate(site.id)
+
+
+@router.post("/{site_id}/rootless/rollback")
+def rootless_rollback(
+    body: RootlessOperationRequest,
+    request: Request,
+    site: HostingSite = Depends(get_owned_site),
+    _current_user: User = Depends(require_permission("hosting.sites.manage", platform_only=True)),
+    db: Session = Depends(get_db_session),
+) -> dict:
+    return _rootless_service(request, db).rollback(site.id, body.operation_id)
+
+
+@router.post("/{site_id}/rootless/finalize")
+def rootless_finalize(
+    body: RootlessFinalizeRequest,
+    request: Request,
+    site: HostingSite = Depends(get_owned_site),
+    _current_user: User = Depends(require_permission("hosting.sites.manage", platform_only=True)),
+    db: Session = Depends(get_db_session),
+) -> dict:
+    return _rootless_service(request, db).finalize(site.id, body.operation_id, body.confirm_domain)
+
+
+@router.get("/{site_id}/rootless/status")
+def rootless_status(
+    request: Request,
+    site: HostingSite = Depends(get_owned_site),
+    _current_user: User = Depends(require_permission("hosting.sites.manage", platform_only=True)),
+    db: Session = Depends(get_db_session),
+) -> dict:
+    return _rootless_service(request, db).status(site.id)
 
 
 @router.get("/{site_id}/users", response_model=WordPressUserListResponse)

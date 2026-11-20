@@ -60,8 +60,6 @@ def test_kind_migration_up_down_up_with_backfill() -> None:
         # Idempotent on a second call.
         with Session(engine) as session:
             second.upgrade(session)
-        assert "kind" in {
-            c["name"] for c in inspect(engine).get_columns("hosting_sites")
-        }
+        assert "kind" in {c["name"] for c in inspect(engine).get_columns("hosting_sites")}
     finally:
         engine.dispose()

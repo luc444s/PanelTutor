@@ -104,8 +104,14 @@ def _execute(
 
 
 CORE_NAMES = {
-    "traefik", "mariadb", "phpmyadmin", "powerdns", "docker-mailserver",
-    "mailserver", "spanel-mail", "spanel-core",
+    "traefik",
+    "mariadb",
+    "phpmyadmin",
+    "powerdns",
+    "docker-mailserver",
+    "mailserver",
+    "spanel-mail",
+    "spanel-core",
 }
 MIGRATION_KINDS = ("static", "wordpress", "app")
 
@@ -130,6 +136,58 @@ class MigrationBackend:
 
     def rollback(self, resource: dict[str, Any], token: Any) -> None:
         return None
+
+
+class HostingMigrationBackend(MigrationBackend):
+    """Production bridge to Hosting's real shadow-copy service."""
+
+    def __init__(self) -> None:
+        from app.main import create_app
+        from plugins.hosting.backend.rootless_migration import RootlessMigrationService
+        from systutor.core.lifecycle import ensure_session_factory
+
+        self.app = create_app()
+        self.db = ensure_session_factory(self.app)()
+        self.service = RootlessMigrationService(self.app, self.db)
+
+    def resources(self) -> list[dict[str, Any]]:
+        from plugins.hosting.backend.models import HostingSite
+        from sqlalchemy import select
+
+        return [
+            {
+                "kind": site.kind,
+                "resource_id": site.id,
+                "name": site.container_name,
+                "container_name": site.container_name,
+                "runtime": self.service.resolver.assigned(
+                    site.tenant_id, site.kind, site.id
+                )
+                or "rootful",
+            }
+            for site in self.db.scalars(select(HostingSite))
+            if site.kind in {"static", "wordpress"}
+        ]
+
+    def migrate(self, resource: dict[str, Any]) -> Any:
+        result = self.service.migrate(str(resource["resource_id"]))
+        if not result.get("ok"):
+            raise RuntimeError(str(result.get("error") or "hosting migration failed"))
+        return result.get("operation_id")
+
+    def verify(self, resource: dict[str, Any]) -> bool:
+        return (
+            self.service.status(str(resource["resource_id"])).get("state") == "retained"
+        )
+
+    def set_runtime(self, resource: dict[str, Any], runtime: str) -> None:
+        # RootlessMigrationService owns the transactional registry transition.
+        if runtime == "rootless" and not self.verify(resource):
+            raise RuntimeError("hosting migration has not reached retained state")
+
+    def rollback(self, resource: dict[str, Any], token: Any) -> None:
+        if token:
+            self.service.rollback(str(resource["resource_id"]), str(token))
 
 
 def _is_core_resource(resource: dict[str, Any]) -> bool:
@@ -160,21 +218,27 @@ class MigrationService:
     ) -> dict[str, Any]:
         if only is not None and only not in MIGRATION_KINDS:
             raise ValueError("--only must be static, wordpress, or app")
-        if not dry_run and os.environ.get("SPANEL_TENANTS_ROOTLESS", "false").lower() != "true":
+        if (
+            not dry_run
+            and os.environ.get("SPANEL_TENANTS_ROOTLESS", "false").lower() != "true"
+        ):
             raise plans.MutationDisabled(
                 "SPANEL_TENANTS_ROOTLESS=true is required to apply migrations"
             )
         selected = [
-            row for row in self.backend.resources()
+            row
+            for row in self.backend.resources()
             if row.get("kind") in MIGRATION_KINDS
             and (only is None or row.get("kind") == only)
             and str(row.get("resource_id")) not in exclude
             and not _is_core_resource(row)
         ]
-        selected.sort(key=lambda row: (
-            MIGRATION_KINDS.index(str(row["kind"])),
-            str(row.get("resource_id", "")),
-        ))
+        selected.sort(
+            key=lambda row: (
+                MIGRATION_KINDS.index(str(row["kind"])),
+                str(row.get("resource_id", "")),
+            )
+        )
         results: list[dict[str, Any]] = []
         for resource in selected:
             resource_id = str(resource["resource_id"])
@@ -208,10 +272,8 @@ class MigrationService:
 
 
 def _migration_service(data_root: str) -> MigrationService:
-    # Production injects the 0107-backed adapter; the safe default inventories
-    # nothing and therefore cannot mutate an unregistered resource.
     del data_root
-    return MigrationService(MigrationBackend())
+    return MigrationService(HostingMigrationBackend())
 
 
 @app.command()
@@ -273,7 +335,14 @@ def _provision_blueprint(slug: str, data_root: str) -> dict[str, Any]:
         "docker_socket": f"/var/lib/spanel/cells/{slug}/docker.sock",
         "limits": active["plan"] if active else None,
         "mutation": False,
-        "would_create": ["user", "subuid", "subgid", "cell_dirs", "apparmor", "docker_socket"],
+        "would_create": [
+            "user",
+            "subuid",
+            "subgid",
+            "cell_dirs",
+            "apparmor",
+            "docker_socket",
+        ],
     }
 
 
@@ -284,9 +353,7 @@ def status(
     data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
 ) -> None:
     """Report effective cell state, including the host-observed uid_map."""
-    result = _execute(
-        lambda: _service(data_root).status(slug), json_output, "status"
-    )
+    result = _execute(lambda: _service(data_root).status(slug), json_output, "status")
     _emit(result, json_output)
 
 
@@ -296,7 +363,9 @@ def list_cells(
     data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
 ) -> None:
     """List all known cells."""
-    result = _execute(lambda: {"cells": _service(data_root).list_cells()}, json_output, "list")
+    result = _execute(
+        lambda: {"cells": _service(data_root).list_cells()}, json_output, "list"
+    )
     _emit(result, json_output)
 
 
@@ -307,9 +376,7 @@ def repair(
     data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
 ) -> None:
     """Re-install profile and network rules without touching cell data."""
-    result = _execute(
-        lambda: _service(data_root).repair(slug), json_output, "repair"
-    )
+    result = _execute(lambda: _service(data_root).repair(slug), json_output, "repair")
     _emit(result, json_output)
 
 
@@ -330,7 +397,10 @@ def migrate(
     """Migrate a driver, or preview/run sequential per-resource migration."""
     if all_resources:
         if slug is not None or driver is not None:
-            _emit({"error": "--all is mutually exclusive with --slug/--driver"}, json_output)
+            _emit(
+                {"error": "--all is mutually exclusive with --slug/--driver"},
+                json_output,
+            )
             raise typer.Exit(code=2)
         result = _execute(
             lambda: _migration_service(data_root).run(
@@ -352,7 +422,9 @@ def migrate(
     result = _execute(
         lambda: _service(data_root).migrate(
             slug, driver or alloc.DEFAULT_CGROUP_DRIVER
-        ), json_output, "migrate"
+        ),
+        json_output,
+        "migrate",
     )
     _emit(result, json_output)
 
@@ -375,7 +447,9 @@ def verify(
 @app.command()
 def deprovision(
     slug: str = typer.Option(..., "--slug", help="Validated tenant slug."),
-    keep_data: bool = typer.Option(True, "--keep-data", help="Keep app data (default)."),
+    keep_data: bool = typer.Option(
+        True, "--keep-data", help="Keep app data (default)."
+    ),
     purge_data: bool = typer.Option(False, "--purge-data", help="Purge app data."),
     json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
     data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
@@ -391,7 +465,9 @@ def deprovision(
     _emit(result, json_output)
 
 
-apparmor_app = typer.Typer(name="apparmor", add_completion=False, help="Manage cell profiles.")
+apparmor_app = typer.Typer(
+    name="apparmor", add_completion=False, help="Manage cell profiles."
+)
 app.add_typer(apparmor_app, name="apparmor")
 
 
@@ -402,7 +478,9 @@ def apparmor_install(
     data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
 ) -> None:
     result = _execute(
-        lambda: _service(data_root).apparmor_install(slug), json_output, "apparmor_install"
+        lambda: _service(data_root).apparmor_install(slug),
+        json_output,
+        "apparmor_install",
     )
     _emit(result, json_output)
 
@@ -414,7 +492,9 @@ def apparmor_verify(
     data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
 ) -> None:
     result = _execute(
-        lambda: _service(data_root).apparmor_verify(slug), json_output, "apparmor_verify"
+        lambda: _service(data_root).apparmor_verify(slug),
+        json_output,
+        "apparmor_verify",
     )
     _emit(result, json_output)
 
@@ -426,7 +506,9 @@ def apparmor_remove(
     data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
 ) -> None:
     result = _execute(
-        lambda: _service(data_root).apparmor_remove(slug), json_output, "apparmor_remove"
+        lambda: _service(data_root).apparmor_remove(slug),
+        json_output,
+        "apparmor_remove",
     )
     _emit(result, json_output)
 
@@ -447,7 +529,9 @@ def _plan_service(data_root: str) -> materializer.PlanMaterializer:
     )
 
 
-def _plan_preview(slug: str, memory: str, cpus: float, pids: int, data_root: str) -> dict[str, Any]:
+def _plan_preview(
+    slug: str, memory: str, cpus: float, pids: int, data_root: str
+) -> dict[str, Any]:
     checked = plans.validate_plan(memory, cpus, pids)
     cell = alloc.load_registry(data_root)["allocations"].get(alloc.validate_slug(slug))
     if cell is None:
@@ -476,7 +560,8 @@ def _plan_apply_command(
         (lambda: _plan_preview(slug, memory, cpus, pids, data_root))
         if dry_run
         else lambda: _plan_service(data_root).apply(
-            slug, {"memory": memory, "cpus": cpus, "pids": pids}),
+            slug, {"memory": memory, "cpus": cpus, "pids": pids}
+        ),
         json_output,
         "plan_apply",
     )
@@ -643,9 +728,7 @@ def edge_relay(
     except Exception as exc:  # noqa: BLE001 - surface a bind failure cleanly
         _emit({"error": str(exc), "verb": "edge_relay"}, json_output)
         raise typer.Exit(code=1) from None
-    agent = relay.RelayControlAgent(
-        tcp, allowed_uids={network.traefik_uid()}
-    )
+    agent = relay.RelayControlAgent(tcp, allowed_uids={network.traefik_uid()})
     path = Path(relay.socket_path_from_env())
     path.parent.mkdir(parents=True, exist_ok=True)
     path.unlink(missing_ok=True)

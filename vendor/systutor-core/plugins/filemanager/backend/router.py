@@ -14,6 +14,7 @@ from fastapi.security import HTTPAuthorizationCredentials
 from pydantic import BaseModel, Field
 from starlette.types import Receive, Scope, Send
 
+from systutor.contracts.container_runtime import ContainerRuntimeHandle, resolve_container_runtime
 from systutor.contracts.file_targets import FileTarget, resolve_file_target
 from systutor.core.lifecycle import ensure_session_factory
 from systutor.kernel.audit.service import record_audit
@@ -63,6 +64,7 @@ class Access:
     tenant_id: str
     branch_id: str | None
     user_id: str
+    runtime: ContainerRuntimeHandle | None = None
 
 
 def authorize(
@@ -114,7 +116,16 @@ def _authorize_target(
         )
         if target is None:
             raise HTTPException(404, "File target not found")
-        return Access(target, context.current_tenant_id, context.current_branch_id, user.id)
+        runtime = (
+            resolve_container_runtime(
+                request.app, db, context.current_tenant_id, target.execution_runtime
+            )
+            if target.execution_runtime == "rootless"
+            else None
+        )
+        return Access(
+            target, context.current_tenant_id, context.current_branch_id, user.id, runtime
+        )
 
 
 def docker_environment() -> dict[str, str]:
@@ -131,6 +142,24 @@ def docker_environment() -> dict[str, str]:
             "SPANEL_FILEMANAGER_HELPER_IMAGE",
         )
     }
+
+
+def file_operation(access: Access, op: str, **kwargs) -> dict:
+    if access.runtime is None:
+        return operation(access.target, op, docker_environment(), **kwargs)
+    return operation(access.target, op, docker_environment(), access.runtime, **kwargs)
+
+
+def file_upload(access: Access, op: str, source, limit: int, **kwargs) -> dict:
+    if access.runtime is None:
+        return upload(access.target, op, docker_environment(), source, limit, **kwargs)
+    return upload(access.target, op, docker_environment(), source, limit, access.runtime, **kwargs)
+
+
+def file_download(access: Access, path: str):
+    if access.runtime is None:
+        return download(access.target, docker_environment(), path)
+    return download(access.target, docker_environment(), path, access.runtime)
 
 
 def ticket_access(
@@ -162,8 +191,15 @@ def ticket_access(
         )
         if target is None:
             raise HTTPException(404, "File target not found")
+        runtime = (
+            resolve_container_runtime(
+                request.app, db, context.current_tenant_id, target.execution_runtime
+            )
+            if target.execution_runtime == "rootless"
+            else None
+        )
         return Access(
-            target, context.current_tenant_id, context.current_branch_id, user.id
+            target, context.current_tenant_id, context.current_branch_id, user.id, runtime
         ), record["path"]
 
 
@@ -197,12 +233,12 @@ def audited(
 
 @router.get("/entries")
 def entries(path: str = "", access: Access = Depends(authorize)) -> dict:
-    return operation(access.target, "list", docker_environment(), path=path)
+    return file_operation(access, "list", path=path)
 
 
 @router.get("/text")
 def read_text(path: str, request: Request, access: Access = Depends(authorize)) -> dict:
-    result = operation(access.target, "read", docker_environment(), path=path, limit=EDIT_LIMIT)
+    result = file_operation(access, "read", path=path, limit=EDIT_LIMIT)
     audited(request, access, "filemanager.text.read", path)
     return result
 
@@ -217,10 +253,9 @@ def save_text(
     encoded = body.content.encode("utf-8")
     if len(encoded) > EDIT_LIMIT:
         raise HTTPException(413, "File too large to edit")
-    result = upload(
-        access.target,
+    result = file_upload(
+        access,
         "write",
-        docker_environment(),
         io.BytesIO(encoded),
         EDIT_LIMIT,
         path=path,
@@ -242,10 +277,9 @@ def add_file(
     if not name or "/" in name or "\\" in name or name in (".", "..") or path.startswith("/"):
         raise HTTPException(400, "Invalid file name")
     relative = "/".join(part for part in (path.strip("/"), name) if part)
-    result = upload(
-        access.target,
+    result = file_upload(
+        access,
         "upload",
-        docker_environment(),
         file.file,
         TRANSFER_LIMIT,
         path=relative,
@@ -269,11 +303,11 @@ class ManagedDownload(StreamingResponse):
 
 @router.get("/download")
 def get_file(path: str, request: Request, access: Access = Depends(authorize)) -> Response:
-    info = operation(access.target, "stat", docker_environment(), path=path)
+    info = file_operation(access, "stat", path=path)
     if info.get("directory"):
         raise HTTPException(400, "Select a file")
     audited(request, access, "filemanager.download", path)
-    process, chunks = download(access.target, docker_environment(), path)
+    process, chunks = file_download(access, path)
     name = quote(str(info["name"]), safe="")
     return ManagedDownload(
         process,
@@ -324,38 +358,28 @@ def redeem_download_ticket(
 
 @router.post("/directories")
 def mkdir(body: NewDirectory, request: Request, access: Access = Depends(authorize)) -> dict:
-    result = operation(access.target, "mkdir", docker_environment(), path=body.path)
+    result = file_operation(access, "mkdir", path=body.path)
     audited(request, access, "filemanager.mkdir", body.path)
     return result
 
 
 @router.patch("/entries")
 def rename(body: Rename, request: Request, access: Access = Depends(authorize)) -> dict:
-    result = operation(
-        access.target,
-        "rename",
-        docker_environment(),
-        path=body.path,
-        name=body.name,
-    )
+    result = file_operation(access, "rename", path=body.path, name=body.name)
     audited(request, access, "filemanager.rename", body.path)
     return result
 
 
 @router.delete("/entries")
 def remove(path: str, request: Request, access: Access = Depends(authorize)) -> dict:
-    result = operation(access.target, "delete", docker_environment(), path=path)
+    result = file_operation(access, "delete", path=path)
     audited(request, access, "filemanager.delete", path)
     return result
 
 
 @router.post("/entries/delete-batch")
-def remove_batch(
-    body: DeleteBatch, request: Request, access: Access = Depends(authorize)
-) -> dict:
-    result = operation(
-        access.target, "delete_many", docker_environment(), paths=body.paths
-    )
+def remove_batch(body: DeleteBatch, request: Request, access: Access = Depends(authorize)) -> dict:
+    result = file_operation(access, "delete_many", paths=body.paths)
     audited(
         request,
         access,
@@ -367,26 +391,13 @@ def remove_batch(
 
 @router.post("/archives")
 def compress(body: Archive, request: Request, access: Access = Depends(authorize)) -> dict:
-    result = operation(
-        access.target,
-        "zip",
-        docker_environment(),
-        path=body.path,
-        name=body.name,
-        entries=body.entries,
-    )
+    result = file_operation(access, "zip", path=body.path, name=body.name, entries=body.entries)
     audited(request, access, "filemanager.compress", body.path)
     return result
 
 
 @router.post("/archives/extract")
 def extract(body: Extract, request: Request, access: Access = Depends(authorize)) -> dict:
-    result = operation(
-        access.target,
-        "extract",
-        docker_environment(),
-        path=body.path,
-        destination=body.destination,
-    )
+    result = file_operation(access, "extract", path=body.path, destination=body.destination)
     audited(request, access, "filemanager.extract", body.destination)
     return result

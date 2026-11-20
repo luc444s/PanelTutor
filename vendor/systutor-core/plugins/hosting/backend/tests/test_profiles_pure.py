@@ -38,40 +38,55 @@ def _king_spec(command: str | None = None) -> ProfileSpec:
 
 # --- V2: validate_profile --------------------------------------------------
 
+
 def test_validate_profile_rejects_privileged_or_empty_image() -> None:
     with pytest.raises(ProfileValidationError):
         validate_profile(
             image="--privileged",
-            web_root="/srv", container_port=80, health_mode="marker",
+            web_root="/srv",
+            container_port=80,
+            health_mode="marker",
         )
     with pytest.raises(ProfileValidationError):
         validate_profile(
-            image="", web_root="/srv", container_port=80, health_mode="marker",
+            image="",
+            web_root="/srv",
+            container_port=80,
+            health_mode="marker",
         )
     with pytest.raises(ProfileValidationError):
         validate_profile(
             image="registry.local/app --privileged",
-            web_root="/srv", container_port=80, health_mode="marker",
+            web_root="/srv",
+            container_port=80,
+            health_mode="marker",
         )
 
 
 def test_validate_profile_rejects_port_outside_range() -> None:
     with pytest.raises(ProfileValidationError):
         validate_profile(
-            image="nginx:alpine", web_root="/srv", container_port=0, health_mode="marker",
+            image="nginx:alpine",
+            web_root="/srv",
+            container_port=0,
+            health_mode="marker",
         )
     with pytest.raises(ProfileValidationError):
         validate_profile(
-            image="nginx:alpine", web_root="/srv",
-            container_port=65536, health_mode="marker",
+            image="nginx:alpine",
+            web_root="/srv",
+            container_port=65536,
+            health_mode="marker",
         )
 
 
 def test_validate_profile_rejects_relative_web_root() -> None:
     with pytest.raises(ProfileValidationError):
         validate_profile(
-            image="nginx:alpine", web_root="usr/share",
-            container_port=80, health_mode="marker",
+            image="nginx:alpine",
+            web_root="usr/share",
+            container_port=80,
+            health_mode="marker",
         )
 
 
@@ -80,7 +95,9 @@ def test_validate_profile_rejects_non_object_or_non_string_env() -> None:
     for bad_env in bad_envs:
         with pytest.raises(ProfileValidationError):
             validate_profile(
-                image="nginx:alpine", web_root="/srv", container_port=80,
+                image="nginx:alpine",
+                web_root="/srv",
+                container_port=80,
                 health_mode="marker",
                 env_json=bad_env,  # type: ignore[arg-type]
             )
@@ -102,6 +119,7 @@ def test_validate_profile_accepts_a_good_shape() -> None:
 
 # --- V2: run argv for a custom profile --------------------------------------
 
+
 def test_custom_profile_run_args_carry_env_mount_and_port() -> None:
     settings = HostingSettings(network="proxy-lab", static_image="nginx:alpine")
     names = StaticNames.for_profile("pagina", _king_spec())
@@ -119,22 +137,19 @@ def test_custom_profile_run_args_carry_env_mount_and_port() -> None:
 
 def test_custom_profile_command_appends_sh_c() -> None:
     settings = HostingSettings(network="proxy-lab")
-    names = StaticNames.for_profile(
-        "pagina", _king_spec(command="npm install && npm run build")
-    )
+    names = StaticNames.for_profile("pagina", _king_spec(command="npm install && npm run build"))
     args = build_static_run_args(names, settings, "t1", "pagina.spanel")
     assert args[-3:] == ["sh", "-c", "npm install && npm run build"]
 
 
 def test_env_only_enters_when_defined() -> None:
     settings = HostingSettings(network="proxy-lab")
-    plain = build_static_run_args(
-        StaticNames("pagina"), settings, "t1", "pagina.spanel"
-    )
+    plain = build_static_run_args(StaticNames("pagina"), settings, "t1", "pagina.spanel")
     assert "--env" not in plain
 
 
 # --- I1: the builtin nginx reproduces the A.SPEC 0031 argv -------------------
+
 
 def test_builtin_nginx_argv_matches_the_0031_shape() -> None:
     settings = HostingSettings(network="proxy-lab", static_image="nginx:alpine")
@@ -155,6 +170,7 @@ def test_builtin_nginx_argv_matches_the_0031_shape() -> None:
 
 
 # --- the seed and the health marker -----------------------------------------
+
 
 def test_seed_carries_the_profile_marker() -> None:
     html = profiled_content("king")["index.html"]

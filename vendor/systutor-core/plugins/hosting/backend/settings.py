@@ -151,9 +151,7 @@ def register_hosting_settings() -> HostingSettings:
             "SPANEL_HOSTING_BACKUP_SCRIPTS_DIR", _default_backup_scripts_dir()
         ).strip()
         or _default_backup_scripts_dir(),
-        backup_link_ttl=min(
-            900, max(30, _int_env("SPANEL_HOSTING_BACKUP_LINK_TTL", 300))
-        ),
+        backup_link_ttl=min(900, max(30, _int_env("SPANEL_HOSTING_BACKUP_LINK_TTL", 300))),
         backup_max_upload_bytes=max(
             1024 * 1024,
             _int_env("SPANEL_HOSTING_BACKUP_MAX_UPLOAD_BYTES", 5 * 1024 * 1024 * 1024),

@@ -75,9 +75,7 @@ def resolver_objetivo(
         raise Fallo("neither --id nor --usuario was given: the row cannot be selected")
 
     validar_sql_seguro(login, etiqueta="the user")
-    filas = filas_de_usuarios(
-        env, db, usuario, password, base, prefijo, f"user_login='{login}'"
-    )
+    filas = filas_de_usuarios(env, db, usuario, password, base, prefijo, f"user_login='{login}'")
     if not filas:
         # El mismo mensaje que daba el script antes de A.SPEC 0011.
         raise Fallo(f"user {login!r} does not exist in {prefijo}users")

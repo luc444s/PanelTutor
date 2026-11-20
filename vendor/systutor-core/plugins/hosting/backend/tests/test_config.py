@@ -130,9 +130,7 @@ def test_site_dir_sanitiza_el_nombre() -> None:
 
 
 def test_build_run_args_reutiliza_volumen_y_labels() -> None:
-    args = build_run_args(
-        _inspect(), name="spanel-demo-wp", env_file="/opt/spanel/sites/x/wp.env"
-    )
+    args = build_run_args(_inspect(), name="spanel-demo-wp", env_file="/opt/spanel/sites/x/wp.env")
     assert args[:3] == ["-d", "--name", "spanel-demo-wp"]
     assert "--network" in args and "proxy" in args
     assert "--label" in args and "spanel.tenant=tenant-1" in args

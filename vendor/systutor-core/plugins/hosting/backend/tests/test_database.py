@@ -35,7 +35,7 @@ def test_el_printf_conserva_los_saltos_de_linea() -> None:
 def test_la_password_llega_por_stdin() -> None:
     comando = build_db_command("spanel-db", "wp_demo")
     assert "IFS= read -r spanel_p" in comando
-    assert "--defaults-extra-file=\"$spanel_f\"" in comando
+    assert '--defaults-extra-file="$spanel_f"' in comando
 
 
 def test_el_fallback_de_entorno_no_lee_stdin() -> None:
@@ -56,12 +56,8 @@ def test_las_credenciales_del_sitio_van_primero(monkeypatch) -> None:
         return "ok"
 
     monkeypatch.setattr(database, "pedir", fake_pedir)
-    monkeypatch.setattr(
-        database, "credenciales_en_el_contenedor", lambda _env, _db: True
-    )
-    assert database.ejecutar_sql(
-        {}, "db", "base", "SHOW TABLES", usuario="u", password="p"
-    ) == "ok"
+    monkeypatch.setattr(database, "credenciales_en_el_contenedor", lambda _env, _db: True)
+    assert database.ejecutar_sql({}, "db", "base", "SHOW TABLES", usuario="u", password="p") == "ok"
     assert calls == [
         (build_db_command("db", "base"), "u\np\nSHOW TABLES"),
     ]
@@ -79,12 +75,8 @@ def test_un_1045_reintenta_con_el_entorno_del_contenedor(monkeypatch) -> None:
         return "ok"
 
     monkeypatch.setattr(database, "pedir", fake_pedir)
-    monkeypatch.setattr(
-        database, "credenciales_en_el_contenedor", lambda _env, _db: True
-    )
-    assert database.ejecutar_sql(
-        {}, "db", "base", "SHOW TABLES", usuario="u", password="p"
-    ) == "ok"
+    monkeypatch.setattr(database, "credenciales_en_el_contenedor", lambda _env, _db: True)
+    assert database.ejecutar_sql({}, "db", "base", "SHOW TABLES", usuario="u", password="p") == "ok"
     assert calls[0][1] == "u\np\nSHOW TABLES"
     assert calls[1] == (
         build_db_command("db", "base", from_environment=True),
@@ -102,11 +94,7 @@ def test_un_error_que_no_es_de_credenciales_no_se_reintenta(monkeypatch) -> None
         raise database.Fallo("ERROR 1064: syntax error")
 
     monkeypatch.setattr(database, "pedir", fake_pedir)
-    monkeypatch.setattr(
-        database, "credenciales_en_el_contenedor", lambda _env, _db: True
-    )
+    monkeypatch.setattr(database, "credenciales_en_el_contenedor", lambda _env, _db: True)
     with pytest.raises(database.Fallo):
-        database.ejecutar_sql(
-            {}, "db", "base", "SHOW TABLES", usuario="u", password="p"
-        )
+        database.ejecutar_sql({}, "db", "base", "SHOW TABLES", usuario="u", password="p")
     assert len(calls) == 1

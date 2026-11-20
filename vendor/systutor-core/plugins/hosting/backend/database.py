@@ -76,11 +76,11 @@ def build_db_command(
         f"docker exec -i {db} sh -c '"
         "IFS= read -r spanel_u; IFS= read -r spanel_p; "
         "spanel_f=$(mktemp); "
-        "chmod 600 \"$spanel_f\"; "
-        "printf \"[client]\\nuser=%s\\npassword=%s\\n\" \"$spanel_u\" \"$spanel_p\" "
-        "> \"$spanel_f\"; "
-        f"mariadb --defaults-extra-file=\"$spanel_f\" {base}{flags}; "
-        "spanel_rc=$?; rm -f \"$spanel_f\"; exit $spanel_rc"
+        'chmod 600 "$spanel_f"; '
+        'printf "[client]\\nuser=%s\\npassword=%s\\n" "$spanel_u" "$spanel_p" '
+        '> "$spanel_f"; '
+        f'mariadb --defaults-extra-file="$spanel_f" {base}{flags}; '
+        'spanel_rc=$?; rm -f "$spanel_f"; exit $spanel_rc'
         "'"
     )
 
@@ -209,9 +209,7 @@ def red_de(info: dict, db: str) -> str:
     """
     redes = list((info.get("NetworkSettings", {}).get("Networks") or {}).keys())
     if not redes:
-        raise Fallo(
-            "the WordPress container is not on any network; the database cannot be reached"
-        )
+        raise Fallo("the WordPress container is not on any network; the database cannot be reached")
     return redes[0]
 
 
@@ -301,9 +299,7 @@ def _redes_de_un_contenedor(env: dict[str, str], contenedor: str) -> dict:
     return datos if isinstance(datos, dict) else {}
 
 
-def resolver_alias_de_contenedor(
-    env: dict[str, str], info: dict, host: str
-) -> str | None:
+def resolver_alias_de_contenedor(env: dict[str, str], info: dict, host: str) -> str | None:
     """Resolve `host` through the site's own networks, never a global scan.
 
     It only runs after `docker inspect <host>` failed. The returned name is a
@@ -368,9 +364,7 @@ def prefijo_de_tablas(
         }
     )
     if not prefijos:
-        raise Fallo(
-            "no table ending in 'users' was found: the site is not installed"
-        )
+        raise Fallo("no table ending in 'users' was found: the site is not installed")
     if len(prefijos) > 1:
         raise Fallo(
             f"there is more than one table prefix ({', '.join(prefijos)}); "

@@ -9,6 +9,8 @@ import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
+from systutor.contracts.container_runtime import ContainerRuntimeError, ContainerRuntimeHandle
+
 from .inspection import inspect_container
 from .network import connect_args, multi_database_enabled
 from .settings import HostingSettings, docker_env
@@ -39,13 +41,30 @@ class SiteNames:
     def db(self) -> str:
         return f"spanel-{self.slug}-db"
 
+    @property
+    def private_network(self) -> str:
+        return f"spanel-{self.slug}-private"
+
 
 class Provisioner:
-    def __init__(self, settings: HostingSettings) -> None:
+    def __init__(
+        self, settings: HostingSettings, runtime: ContainerRuntimeHandle | None = None
+    ) -> None:
         self.settings = settings
         self.env = docker_env(settings)
+        self.runtime = runtime
+        self.network = (
+            "spanel-hosting" if runtime and runtime.runtime == "rootless" else settings.network
+        )
 
     def command(self, *args: str, input: str | None = None) -> str:
+        if self.runtime is not None:
+            try:
+                return self.runtime.command(
+                    tuple(args), input=input.encode() if input is not None else None
+                ).decode(errors="replace")
+            except ContainerRuntimeError as exc:
+                raise Fallo(f"docker {args[0] if args else ''}: {exc}") from exc
         command = "docker " + " ".join(shlex.quote(arg) for arg in args)
         result = run(
             build_docker_argv(command, env=self.env),
@@ -72,8 +91,8 @@ class Provisioner:
             return False
 
     def preflight(self, names: SiteNames) -> None:
-        if not self.exists("network", self.settings.network):
-            raise Fallo(f"Network {self.settings.network} does not exist")
+        if not self.exists("network", self.network):
+            raise Fallo(f"Network {self.network} does not exist")
         for name in (names.wp, names.db):
             if self.exists("container", name) or self.exists("volume", name):
                 raise Fallo(f"A resource named {name} already exists")
@@ -118,19 +137,26 @@ class Provisioner:
         wp_file = f"{stable_dir}/wp.env"
         created: list[tuple[str, str]] = []
         try:
-            escribir_archivo_remoto_en(
-                self.env,
-                db_file,
+            db_content = (
                 f"MYSQL_DATABASE={db_name}\nMYSQL_USER={db_user}\n"
-                f"MYSQL_PASSWORD={db_password}\nMYSQL_ROOT_PASSWORD={root_password}\n",
+                f"MYSQL_PASSWORD={db_password}\nMYSQL_ROOT_PASSWORD={root_password}\n"
             )
-            escribir_archivo_remoto_en(
-                self.env,
-                wp_file,
+            wp_content = (
                 f"WORDPRESS_DB_HOST={names.db}\nWORDPRESS_DB_USER={db_user}\n"
                 f"WORDPRESS_DB_PASSWORD={db_password}\nWORDPRESS_DB_NAME={db_name}\n"
-                f"MYSQL_PWD={db_password}\n",
+                f"MYSQL_PWD={db_password}\n"
             )
+            if self.runtime is not None:
+                db_file = self.runtime.write_private(f"{names.wp}/db.env", db_content.encode())
+                wp_file = self.runtime.write_private(f"{names.wp}/wp.env", wp_content.encode())
+            else:
+                escribir_archivo_remoto_en(self.env, db_file, db_content)
+                escribir_archivo_remoto_en(self.env, wp_file, wp_content)
+            site_network = self.network
+            if self.runtime is not None and self.runtime.runtime == "rootless":
+                created.append(("network", names.private_network))
+                self.command("network", "create", "--internal", *labels, names.private_network)
+                site_network = names.private_network
             for name in (names.db, names.wp):
                 created.append(("volume", name))
                 self.command("volume", "create", *labels, name)
@@ -141,7 +167,7 @@ class Provisioner:
                 "--name",
                 names.db,
                 "--network",
-                self.settings.network,
+                site_network,
                 *labels,
                 "--env-file",
                 db_file,
@@ -164,7 +190,7 @@ class Provisioner:
                     "run",
                     "--rm",
                     "--network",
-                    self.settings.network,
+                    site_network,
                     "--env-file",
                     wp_file,
                     self.settings.db_image,
@@ -189,6 +215,7 @@ class Provisioner:
                     f"traefik.http.services.{names.slug}.loadbalancer.server.port=80",
                 ]
                 if self.settings.traefik
+                and (self.runtime is None or self.runtime.runtime == "rootful")
                 else []
             )
             created.append(("container", names.wp))
@@ -198,7 +225,7 @@ class Provisioner:
                 "--name",
                 names.wp,
                 "--network",
-                self.settings.network,
+                site_network,
                 *labels,
                 *traefik,
                 "--env-file",
@@ -207,11 +234,13 @@ class Provisioner:
                 f"{names.wp}:/var/www/html",
                 self.settings.wp_image,
             )
+            if site_network != self.network:
+                self.command("network", "connect", self.network, names.wp)
             cli = (
                 "run",
                 "--rm",
                 "--network",
-                self.settings.network,
+                site_network,
                 "--volumes-from",
                 names.wp,
                 "--env-file",
@@ -224,7 +253,7 @@ class Provisioner:
                 "-i",
                 "--rm",
                 "--network",
-                self.settings.network,
+                site_network,
                 "--volumes-from",
                 names.wp,
                 "--env-file",
@@ -248,23 +277,31 @@ class Provisioner:
         except Exception as exc:
             failures = self.cleanup(names, tenant_id, created)
             # A failed attempt leaves no stable copy of a secret it generated.
-            run(
-                build_docker_argv(f"rm -rf {shlex.quote(stable_dir)}", env=self.env),
-                env=self.env,
-            )
+            if self.runtime is not None:
+                self.runtime.remove_private(f"{names.wp}/db.env")
+                self.runtime.remove_private(f"{names.wp}/wp.env")
+            else:
+                run(
+                    build_docker_argv(f"rm -rf {shlex.quote(stable_dir)}", env=self.env),
+                    env=self.env,
+                )
             if failures:
                 raise Fallo(f"{exc}; limpieza incompleta: {'; '.join(failures)}") from exc
             raise
 
     def _owned(self, kind: str, name: str, names: SiteNames, tenant_id: str) -> bool:
         if kind == "container":
-            info = inspect_container(self.env, name, timeout=self.settings.command_timeout)
+            info = (
+                self.runtime.inspect("container", name)
+                if self.runtime is not None
+                else inspect_container(self.env, name, timeout=self.settings.command_timeout)
+            )
             labels = ((info or {}).get("Config") or {}).get("Labels") or {}
         else:
             import json
 
             try:
-                info = json.loads(self.command("volume", "inspect", name))[0]
+                info = json.loads(self.command(kind, "inspect", name))[0]
             except Fallo:
                 return False
             labels = info.get("Labels") or {}
@@ -279,6 +316,11 @@ class Provisioner:
             else [
                 ("volume", names.db),
                 ("volume", names.wp),
+                *(
+                    [("network", names.private_network)]
+                    if self.runtime is not None and self.runtime.runtime == "rootless"
+                    else []
+                ),
                 ("container", names.db),
                 ("container", names.wp),
             ]
@@ -287,9 +329,12 @@ class Provisioner:
         for kind, name in reversed(resources):
             try:
                 if self._owned(kind, name, names, tenant_id):
-                    self.command("rm", "-f", name) if kind == "container" else self.command(
-                        "volume", "rm", name
-                    )
+                    if kind == "container":
+                        self.command("rm", "-f", name)
+                    elif kind == "network":
+                        self.command("network", "rm", name)
+                    else:
+                        self.command("volume", "rm", name)
             except Exception as exc:
                 failures.append(f"{kind} {name}: {exc}")
         return failures

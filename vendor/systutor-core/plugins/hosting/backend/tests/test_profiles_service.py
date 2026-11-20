@@ -83,9 +83,7 @@ def test_invalid_profile_shapes_are_rejected_by_the_schema(override) -> None:
 
 
 def test_valid_profile_passes_the_schema() -> None:
-    body = StaticProfileCreate.model_validate(
-        profile_data(env_json={"FOO": "1"})
-    )
+    body = StaticProfileCreate.model_validate(profile_data(env_json={"FOO": "1"}))
     assert body.env_json == {"FOO": "1"}
 
 
@@ -99,9 +97,10 @@ def test_get_lists_the_builtin(db: Session) -> None:
 
 
 def test_post_creates_and_must_be_unique(db: Session) -> None:
-    summary = service(db).create_profile(context(), StaticProfileCreate.model_validate(profile_data(
-        env_json={"HUGO_BASE_URL": "http://x"}
-    )))
+    summary = service(db).create_profile(
+        context(),
+        StaticProfileCreate.model_validate(profile_data(env_json={"HUGO_BASE_URL": "http://x"})),
+    )
     assert summary.id == "boot"
     # The response never carries env VALUES, only names.
     assert summary.env_keys == ["HUGO_BASE_URL"]
