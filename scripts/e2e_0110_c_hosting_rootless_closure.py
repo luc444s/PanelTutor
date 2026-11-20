@@ -1881,6 +1881,16 @@ def phase_seed(cfg: Config, ev: Evidence, journal: Journal) -> None:
             cfg, admin, ev.redactor, kind=kind, name=name, domain=domain
         )
         site = created["site"]
+        if kind == "wordpress":
+            # El laboratorio usa el file-provider de Traefik; el alta de un
+            # WordPress rootful no publica el dominio por sí sola. Se hace por
+            # la API pública de Domains, sin tocar documentos a mano.
+            admin.request(
+                "POST",
+                "/plugins/domains",
+                {"site_id": site["id"], "domain": domain, "www": False},
+                timeout=300,
+            )
         seeded = seed_files(admin, site["id"], f"{kind}-A")
         public = http_marker(cfg, domain, seeded["sha256"])
         fixtures[kind] = {
