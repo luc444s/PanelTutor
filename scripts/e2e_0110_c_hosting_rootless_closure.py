@@ -1394,36 +1394,40 @@ def restart_stack_rootless(cfg: Config, runtime_env: Path) -> None:
 
 
 def migrate_clone_kernel(cfg: Config, evidence: Evidence) -> None:
-    """Apply the kernel runtime migrations to the disposable clone.
+    """Apply the shipped kernel compatibility migration to the clone only.
 
-    This is the systutor-core runtime migrador (``alembic.ini`` executed from
-    the app image), never the Alembic CLI invoked by hand against the host DB.
-    The lab's main branch is behind revision 20261119_0011, which restores the
-    default for ``users.is_superadmin`` required by the code under test.
+    The lab host was provisioned without an ``alembic_version`` table, so a
+    full Alembic upgrade would try to recreate every table. The code under
+    test needs kernel revision ``20261119_0011`` (default for
+    ``users.is_superadmin``); its exact SQL is applied idempotently to the
+    disposable clone. No Alembic CLI and no change to the live database.
     """
-    script = cfg.stage / "kernel_migrate.py"
-    script.write_text(
-        'import json\n'
-        'from alembic import command\n'
-        'from alembic.config import Config\n'
-        'config = Config("/app/vendor/systutor-core/alembic.ini")\n'
-        'command.upgrade(config, "head")\n'
-        'print(json.dumps({"kernel_migrations": "head"}))\n',
-        encoding="utf-8",
+    exists = clone_psql(
+        cfg,
+        "SELECT count(*) FROM information_schema.columns "
+        "WHERE table_name = 'users' AND column_name = 'is_superadmin';",
     )
-    script.chmod(0o644)
-    result = docker(
-        cfg, "exec", cfg.app, "python", "/stage/kernel_migrate.py", check=False
-    )
-    if result.returncode:
-        raise Precondition(
-            f"kernel migration of the disposable clone failed: "
-            f"{(result.stdout or result.stderr)[-600:]}"
+    if exists != "1":
+        evidence.data["repairs"].append(
+            {"action": "kernel_compat", "status": "column absent, nothing to do"}
         )
-    evidence.data["repairs"].append(
-        {"action": "kernel_migrations", "target": cfg.db, "output": result.stdout.strip()[-200:]}
+        return
+    clone_psql(
+        cfg,
+        "ALTER TABLE users ALTER COLUMN is_superadmin SET DEFAULT false;",
     )
-    log("disposable clone migrated to kernel head")
+    clone_psql(
+        cfg,
+        "UPDATE users SET is_superadmin = false WHERE is_superadmin IS NULL;",
+    )
+    evidence.data["repairs"].append(
+        {
+            "action": "kernel_compat_migration",
+            "revision": "20261119_0011",
+            "target": cfg.db,
+        }
+    )
+    log("disposable clone has the kernel is_superadmin compatibility default")
 
 
 def wait_plugins(api: Api, timeout: float = 240.0) -> None:
