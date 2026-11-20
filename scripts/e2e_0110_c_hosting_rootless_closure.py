@@ -86,6 +86,8 @@ REQUIRED_CHECKS = (
     "rootful_fixtures",
     "intruder_tenant_cell",
     "migrate_static_then_wordpress",
+    "plan_primary",
+    "plan_intruder",
     "auth_rbac_scope",
     "lifecycle_static",
     "lifecycle_wordpress",
@@ -1456,20 +1458,40 @@ def wait_plugins(api: Api, timeout: float = 240.0) -> None:
     raise Precondition(f"required plugins did not become enabled: {last}")
 
 
-def apply_plan(api: Api, evidence: Evidence, label: str) -> None:
+def apply_plan(
+    cfg: Config, api: Api, evidence: Evidence, label: str, slug: str
+) -> None:
     plan = api.request(
         "POST",
         "/plugins/apps/plan",
         {"memory_bytes": MEMORY_PLAN, "cpus": CPU_PLAN, "pids": PIDS_PLAN},
     )
-    verified = api.request("POST", "/plugins/apps/plan/verify")
+    verified: Any = None
+    verify_error = ""
+    for _attempt in range(4):
+        try:
+            verified = api.request("POST", "/plugins/apps/plan/verify")
+            if isinstance(verified, dict) and verified.get("ok") is True:
+                break
+        except Exception as exc:  # noqa: BLE001 - los cgroups son la prueba real
+            verify_error = str(exc)[:300]
+        time.sleep(3)
+    uid = int(allocation(slug)["uid"])
+    limits = cgroup_limits(uid)
+    passed = (
+        plan.get("status") == "applied"
+        and limits.get("memory.max") == str(MEMORY_PLAN)
+        and limits.get("pids.max") == str(PIDS_PLAN)
+    )
     evidence.record(
         f"plan_{label}",
-        "POST /plugins/apps/plan",
+        "POST /plugins/apps/plan + host cgroups",
         {"memory": MEMORY_PLAN, "cpus": CPU_PLAN, "pids": PIDS_PLAN},
-        {"plan": plan, "verify": verified},
-        passed=plan.get("status") == "applied" and verified.get("ok") is True,
+        {"plan": plan, "verify": verified, "verify_error": verify_error, "cgroups": limits},
+        passed=passed,
     )
+    if not passed:
+        raise CheckFailed(f"plan for {label} was not effective on the host")
 
 
 # ---------------------------------------------------------------------------
@@ -2031,9 +2053,9 @@ def phase_seed(cfg: Config, ev: Evidence, journal: Journal) -> None:
     restart_stack_rootless(cfg, runtime_env)
     admin = admin_login(cfg, ev.redactor)
     wait_plugins(admin)
-    apply_plan(admin, ev, "primary")
+    apply_plan(cfg, admin, ev, "primary", cfg.slug)
     intruder = intruder_login(cfg, ev.redactor, journal.data)
-    apply_plan(intruder, ev, "intruder")
+    apply_plan(cfg, intruder, ev, "intruder", cfg.intruder_slug)
     intruder_site = create_fixture(
         cfg,
         intruder,
