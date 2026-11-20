@@ -15,13 +15,14 @@ from __future__ import annotations
 
 import os
 from collections.abc import Mapping
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..models import Deployment
-from .store import discard_tree
+from .store import discard_tree, read_descriptor
 
 DEFAULT_KEEP = 10
 _IN_FLIGHT = {"building"}
@@ -91,6 +92,9 @@ def prune_application_releases(
     project_root: Path,
     keep: int,
     active_deployment_id: str | None,
+    store_root: Path | None = None,
+    tenant_id: str | None = None,
+    grace_seconds: int = 3600,
 ) -> list[str]:
     keep_paths = kept_release_paths(
         db,
@@ -99,4 +103,58 @@ def prune_application_releases(
         keep=keep,
         active_deployment_id=active_deployment_id,
     )
-    return prune_deployed_releases(Path(project_root), keep_paths)
+    removed = prune_deployed_releases(Path(project_root), keep_paths)
+    if store_root is not None and tenant_id is not None:
+        removed += prune_hardened_releases(
+            Path(store_root),
+            tenant_id=tenant_id,
+            application_id=application_id,
+            keep_release_ids={path.name for path in keep_paths},
+            grace_seconds=grace_seconds,
+        )
+    return removed
+
+
+def prune_hardened_releases(
+    root: Path,
+    *,
+    tenant_id: str,
+    application_id: str,
+    keep_release_ids: set[str],
+    grace_seconds: int = 3600,
+    now: datetime | None = None,
+) -> list[str]:
+    """Discard signed release directories not needed for rollback.
+
+    The descriptor's ``release_id`` is the same identifier stored in
+    ``Deployment.release``; the newest N deployments are preserved by the
+    caller.  A grace window protects releases whose deployment row has not been
+    committed yet.
+    """
+    base = Path(root) / "hardened" / tenant_id / application_id
+    if not base.is_dir() or base.is_symlink():
+        return []
+    moment = now or datetime.now(UTC)
+    removed: list[str] = []
+    for path in sorted(base.iterdir()):
+        if path.parent != base:
+            continue
+        try:
+            release = read_descriptor(path / "release.json")
+        except Exception:  # noqa: BLE001 - unknown entries are left untouched
+            continue
+        if release.release_id in keep_release_ids:
+            continue
+        try:
+            created = datetime.fromisoformat(
+                str(release.created_at).replace("Z", "+00:00")
+            )
+        except ValueError:
+            continue
+        if created.tzinfo is None:
+            created = created.replace(tzinfo=UTC)
+        if moment - created < timedelta(seconds=max(0, grace_seconds)):
+            continue
+        discard_tree(path)
+        removed.append(str(path))
+    return removed

@@ -260,7 +260,16 @@ en el JSON de evidencia y no se declara PASS.
 - El E2E usa el directorio dinámico del Traefik del laboratorio y agentes
   desechables; no toca producción.
 
-## 9. Referencias
+## 9. Cierre operativo posterior (R5)
+
+Los drills operativos de Apps (concurrencia, reinicio de worker, soak con
+retención, OOM, HTTPS y backup/restore) se cerraron en una fase posterior:
+
+- Informe: `artifacts/0109-r5-informe-operativo.md`
+- Evidencia: `artifacts/0109-r5-operations-e2e.json` (`ok: true`, 6/6 drills)
+- Base operativa: commit `3aaee3a`
+
+## 10. Referencias
 
 - Evidencia oficial (PASS):
   `artifacts/0109-r4-host-nat-and-domains-owned-hosts-e2e.json`

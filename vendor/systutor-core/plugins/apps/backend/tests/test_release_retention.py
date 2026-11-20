@@ -4,11 +4,13 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+from plugins.apps.backend.releases import retention
 from plugins.apps.backend.releases.retention import (
     configured_keep,
     kept_release_paths,
     prune_application_releases,
     prune_deployed_releases,
+    prune_hardened_releases,
 )
 
 
@@ -107,3 +109,38 @@ def test_retention_keeps_active_newest_and_in_flight(tmp_path: Path) -> None:
     assert sorted(p.name for p in releases.iterdir()) == [
         "r0", "r1", "r4", "r5",
     ]
+
+
+def test_hardened_retention_prunes_old_unkept_only(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    base = tmp_path / "hardened" / "t1" / "a1"
+    for name in ("d1", "d2", "d3"):
+        (base / name).mkdir(parents=True)
+    now = datetime(2026, 1, 1, 12, 0, tzinfo=UTC)
+    descriptors = {
+        base / "d1" / "release.json": SimpleNamespace(
+            release_id="r1", created_at="2026-01-01T10:00:00+00:00"
+        ),
+        base / "d2" / "release.json": SimpleNamespace(
+            release_id="r2", created_at="2026-01-01T09:00:00+00:00"
+        ),
+        base / "d3" / "release.json": SimpleNamespace(
+            release_id="r3", created_at="2026-01-01T11:59:00+00:00"
+        ),
+    }
+    monkeypatch.setattr(
+        retention, "read_descriptor", lambda path: descriptors[path]
+    )
+    removed = prune_hardened_releases(
+        tmp_path,
+        tenant_id="t1",
+        application_id="a1",
+        keep_release_ids={"r1"},
+        grace_seconds=1800,
+        now=now,
+    )
+    assert removed == [str(base / "d2")]
+    assert (base / "d1").is_dir()
+    assert not (base / "d2").exists()
+    assert (base / "d3").is_dir()

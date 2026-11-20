@@ -324,15 +324,28 @@ def check_https(
     if not isinstance(created, dict) or created.get("domain") != domain:
         raise r4.E2E("HTTPS app-host creation failed")
     r4.dispatch_outbox(stage)
-    documents = r4._route_documents(domain)
-    text = documents[0]["content"] if documents else ""
-    curl = r4.run(
-        ["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}",
-         "--connect-timeout", "5", "--max-time", "10",
-         "-H", f"Host: {domain}", "http://127.0.0.1:9080/"],
-        check=False,
-    )
-    status = curl.stdout.strip()
+    deadline = time.monotonic() + 90
+    documents: list[dict[str, Any]] = []
+    text = ""
+    status = ""
+    while time.monotonic() < deadline:
+        documents = r4._route_documents(domain)
+        text = documents[0]["content"] if documents else ""
+        curl = r4.run(
+            ["curl", "-sS", "-o", "/dev/null", "-w", "%{http_code}",
+             "--connect-timeout", "5", "--max-time", "10",
+             "-H", f"Host: {domain}", "http://127.0.0.1:9080/"],
+            check=False,
+        )
+        status = curl.stdout.strip()
+        if (
+            documents
+            and "websecure" in text
+            and ("tls" in text or "redirectScheme" in text)
+            and status in {"301", "308"}
+        ):
+            break
+        time.sleep(2)
     passed = (
         bool(documents)
         and "websecure" in text

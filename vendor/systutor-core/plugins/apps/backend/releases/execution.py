@@ -499,6 +499,11 @@ class ReleaseExecution:
                     project_root=project_root,
                     keep=configured_keep(os.environ),
                     active_deployment_id=app.active_deployment_id,
+                    store_root=release_store_root(os.environ),
+                    tenant_id=app.tenant_id,
+                    grace_seconds=int(os.environ.get(
+                        "SPANEL_APPS_RELEASE_GRACE_SECONDS", "3600"
+                    )),
                 )
             if removed:
                 logger.info(
