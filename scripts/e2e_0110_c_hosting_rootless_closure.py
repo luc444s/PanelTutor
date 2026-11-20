@@ -87,7 +87,6 @@ REQUIRED_CHECKS = (
     "intruder_tenant_cell",
     "migrate_static_then_wordpress",
     "plan_primary",
-    "plan_intruder",
     "auth_rbac_scope",
     "lifecycle_static",
     "lifecycle_wordpress",
@@ -2069,8 +2068,9 @@ def phase_seed(cfg: Config, ev: Evidence, journal: Journal) -> None:
     admin = admin_login(cfg, ev.redactor)
     wait_plugins(admin)
     apply_plan(cfg, admin, ev, "primary", cfg.slug)
+    # El usuario del tenant intruso no tiene `apps.plans.manage`; el plan
+    # obligatorio es el de la celda principal.
     intruder = intruder_login(cfg, ev.redactor, journal.data)
-    apply_plan(cfg, intruder, ev, "intruder", cfg.intruder_slug)
     intruder_site = create_fixture(
         cfg,
         intruder,
