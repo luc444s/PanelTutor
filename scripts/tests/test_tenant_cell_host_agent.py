@@ -1,0 +1,171 @@
+"""A.SPEC 0110-B: the host agent only opens bounded DB relays.
+
+The broker and the Docker connector are faked here; these tests cover the
+privilege boundary: peer uid, HMAC binding, tenant allocation, bounded request
+fields and handler dispatch.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+
+from scripts.tenant_cell import alloc, db_broker, host_agent, materializer
+from scripts.tenant_cell.host_agent import Peer, PlanAgent
+
+SECRET = "db-relay-secret"
+UID = 4242
+
+
+class FakeExecutor:
+    """The materializer is never used by DB relay operations."""
+
+
+def _cell(tmp_path: Path, slug: str = "demo") -> None:
+    alloc.allocate(str(tmp_path), slug)
+    alloc.update_allocation(tmp_path, slug, state="ready", cgroup_driver="systemd")
+
+
+def _agent(tmp_path: Path, handler: Any) -> PlanAgent:
+    return PlanAgent(
+        materializer.PlanMaterializer(FakeExecutor(), tmp_path),
+        secret=SECRET,
+        allowed_uids={UID},
+        data_root=tmp_path,
+        peer_resolver=lambda _sock: Peer(UID, 100),
+        db_relay_handler=handler,
+    )
+
+
+def _request(op: str, *, tenant: str = "demo", slug: str = "demo", **extra: Any):
+    request: dict[str, Any] = {
+        "op": op,
+        "tenant": tenant,
+        "slug": slug,
+        "token": db_broker.issue_capability(SECRET, op=op, tenant=tenant, slug=slug),
+    }
+    request.update(extra)
+    return request
+
+
+def _open_fields() -> dict[str, Any]:
+    return {
+        "site_id": "site-1",
+        "pma_session_id": "session-1",
+        "relay_id": "pma-relay-1",
+        "source_ip": "172.24.0.3",
+        "ttl": 1500,
+    }
+
+
+def _error(response: dict[str, Any]) -> str:
+    return response["error"]["code"]
+
+
+def test_open_is_dispatched_only_after_authorization(tmp_path: Path) -> None:
+    _cell(tmp_path)
+    seen: list[tuple[str, dict[str, Any]]] = []
+
+    def handler(op: str, request: dict[str, Any]) -> dict[str, Any]:
+        seen.append((op, request))
+        return {
+            "relay_id": request["relay_id"],
+            "broker_host": "172.24.0.1",
+            "broker_port": 41000,
+            "expires_at": 1,
+        }
+
+    agent = _agent(tmp_path, handler)
+    response = agent.dispatch(_request("db_relay_open", **_open_fields()), Peer(UID, 100))
+    assert response["ok"] is True
+    assert response["result"]["broker_port"] == 41000
+    assert seen[0][0] == "db_relay_open"
+    assert seen[0][1]["site_id"] == "site-1"
+
+
+def test_capability_is_bound_to_the_operation(tmp_path: Path) -> None:
+    _cell(tmp_path)
+    calls: list[str] = []
+    agent = _agent(tmp_path, lambda op, request: calls.append(op) or {})
+    request = _request("db_relay_status", relay_id="pma-relay-1")
+    request["op"] = "db_relay_close"
+    response = agent.dispatch(request, Peer(UID, 100))
+    assert _error(response) == host_agent.ERR_CAP
+    assert calls == []
+
+
+def test_tenant_must_match_slug_and_allocation(tmp_path: Path) -> None:
+    _cell(tmp_path)
+    agent = _agent(tmp_path, lambda op, request: {})
+    mismatch = _request(
+        "db_relay_open", tenant="other", slug="demo", **_open_fields()
+    )
+    assert _error(agent.dispatch(mismatch, Peer(UID, 100))) == host_agent.ERR_FORBIDDEN
+    unknown = _request(
+        "db_relay_open", tenant="missing", slug="missing", **_open_fields()
+    )
+    assert _error(agent.dispatch(unknown, Peer(UID, 100))) == host_agent.ERR_TENANT
+
+
+@pytest.mark.parametrize("ttl", [0, -1, 3601, "60", None])
+def test_ttl_is_bounded(tmp_path: Path, ttl: Any) -> None:
+    _cell(tmp_path)
+    agent = _agent(tmp_path, lambda op, request: {})
+    fields = _open_fields()
+    fields["ttl"] = ttl
+    response = agent.dispatch(_request("db_relay_open", **fields), Peer(UID, 100))
+    assert _error(response) == host_agent.ERR_REQUEST
+
+
+@pytest.mark.parametrize("missing", ["site_id", "pma_session_id", "relay_id", "source_ip"])
+def test_open_requires_session_scoped_fields(tmp_path: Path, missing: str) -> None:
+    _cell(tmp_path)
+    agent = _agent(tmp_path, lambda op, request: {})
+    fields = _open_fields()
+    fields[missing] = ""
+    response = agent.dispatch(_request("db_relay_open", **fields), Peer(UID, 100))
+    assert _error(response) == host_agent.ERR_REQUEST
+
+
+def test_close_and_status_require_or_list_a_relay(tmp_path: Path) -> None:
+    _cell(tmp_path)
+    seen: list[tuple[str, str | None]] = []
+
+    def handler(op: str, request: dict[str, Any]) -> dict[str, Any]:
+        seen.append((op, request.get("relay_id")))
+        return {"relay_id": request.get("relay_id")}
+
+    agent = _agent(tmp_path, handler)
+    assert agent.dispatch(
+        _request("db_relay_close", relay_id="pma-relay-1"), Peer(UID, 100)
+    )["ok"]
+    assert agent.dispatch(_request("db_relay_status"), Peer(UID, 100))["ok"]
+    assert seen == [("db_relay_close", "pma-relay-1"), ("db_relay_status", None)]
+
+
+def test_reconcile_requires_a_global_subject(tmp_path: Path) -> None:
+    _cell(tmp_path)
+    seen: list[str] = []
+    agent = _agent(tmp_path, lambda op, request: seen.append(op) or {})
+    bad = _request("db_relay_reconcile", tenant="demo", slug="demo")
+    assert _error(agent.dispatch(bad, Peer(UID, 100))) == host_agent.ERR_FORBIDDEN
+    good = _request(
+        "db_relay_reconcile",
+        tenant=host_agent.RECONCILE_SUBJECT,
+        slug=host_agent.RECONCILE_SUBJECT,
+    )
+    assert agent.dispatch(good, Peer(UID, 100))["ok"]
+    assert seen == ["db_relay_reconcile"]
+
+
+def test_untrusted_peer_never_reaches_the_handler(tmp_path: Path) -> None:
+    _cell(tmp_path)
+    calls: list[str] = []
+    agent = _agent(tmp_path, lambda op, request: calls.append(op) or {})
+    response = agent.dispatch(
+        _request("db_relay_open", **_open_fields()), Peer(9999, 100)
+    )
+    assert _error(response) == host_agent.ERR_PEER
+    assert calls == []

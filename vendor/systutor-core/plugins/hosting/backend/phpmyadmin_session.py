@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import secrets
 import threading
 import time
@@ -20,6 +21,7 @@ from systutor.kernel.tenants.service import validate_user_branch_scope
 
 from .models import HostingSite
 
+logger = logging.getLogger(__name__)
 COOKIE = "spanel_pma"
 MESSAGE = "The phpMyAdmin session expired; reopen phpMyAdmin"
 _ticket_lock = threading.Lock()
@@ -45,6 +47,11 @@ class PmaSession:
     site_id: str
     cookies: dict[str, str]
     expires_at: float
+    # A.SPEC 0110-B: a rootless session owns one ephemeral relay. Rootful
+    # sessions keep both fields empty and the legacy path unchanged.
+    relay_id: str | None = None
+    tenant_slug: str | None = None
+    runtime: str | None = None
 
     def save(self) -> None:
         remaining = int(self.expires_at - time.time())
@@ -53,10 +60,27 @@ class PmaSession:
 
 
 def create_session(
-    user_id: str, tenant_id: str, site_id: str, cookies: dict[str, str], ttl: int
+    user_id: str,
+    tenant_id: str,
+    site_id: str,
+    cookies: dict[str, str],
+    ttl: int,
+    *,
+    relay_id: str | None = None,
+    tenant_slug: str | None = None,
+    runtime: str | None = None,
+    session_id: str | None = None,
 ) -> tuple[PmaSession, str]:
     record = PmaSession(
-        secrets.token_urlsafe(32), user_id, tenant_id, site_id, cookies, time.time() + ttl
+        session_id or secrets.token_urlsafe(32),
+        user_id,
+        tenant_id,
+        site_id,
+        cookies,
+        time.time() + ttl,
+        relay_id=relay_id,
+        tenant_slug=tenant_slug,
+        runtime=runtime,
     )
     record.save()
     ticket = secrets.token_urlsafe(32)
@@ -74,10 +98,30 @@ def load_session(identifier: str | None) -> PmaSession | None:
         session = PmaSession(**json.loads(raw))
         if session.id == identifier and session.expires_at > time.time():
             return session
+        _close_relay(session)
     except (TypeError, ValueError, KeyError):
         pass
     cache().delete(session_key(identifier))
     return None
+
+
+def _close_relay(session: PmaSession) -> None:
+    """Best-effort relay cleanup; the relay also expires on its own TTL."""
+    if not session.relay_id:
+        return
+    from .phpmyadmin_broker import close_relay_quietly
+    from .settings import get_hosting_settings
+
+    logger.info(
+        "hosting.phpmyadmin.relay_closed relay=%s tenant=%s site=%s runtime=%s",
+        session.relay_id,
+        session.tenant_id,
+        session.site_id,
+        session.runtime,
+    )
+    close_relay_quietly(
+        get_hosting_settings(), session.tenant_slug, session.relay_id
+    )
 
 
 def exchange_ticket(ticket: str, site_id: str) -> PmaSession | None:
@@ -94,6 +138,7 @@ def exchange_ticket(ticket: str, site_id: str) -> PmaSession | None:
 
 def invalidate(session: PmaSession) -> None:
     cache().delete(session_key(session.id))
+    _close_relay(session)
 
 
 def secure_request(request: Request) -> bool:

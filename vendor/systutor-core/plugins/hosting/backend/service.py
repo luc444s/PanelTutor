@@ -58,6 +58,12 @@ from .network import (
     validate_network_name,
 )
 from .passwords import hash_de_password
+from .phpmyadmin_broker import (
+    PmaBrokerClient,
+    broker_enabled,
+    server_address,
+    source_ip_from_env,
+)
 from .phpmyadmin_proxy import PmaClient
 from .profiles import ProfileSpec, spec_from_row
 from .provisioner import Provisioner, SiteNames, slug_for
@@ -904,8 +910,78 @@ class HostingService:
             )
         return True
 
+    def phpmyadmin_relay_server(
+        self,
+        site: HostingSite,
+        tenant_context: TenantContext,
+        pma_session_id: str,
+    ) -> dict[str, str] | None:
+        """Open the ephemeral rootless relay; rootful sites keep the old path."""
+        runtime = self._runtime_for(site)
+        if runtime is None or runtime.runtime != "rootless":
+            return None
+        if not broker_enabled(self._settings):
+            raise AppError(
+                "Rootless phpMyAdmin access is disabled",
+                status_code=409,
+                code="hosting_phpmyadmin_unavailable",
+            )
+        if not self._settings.phpmyadmin_arbitrary:
+            raise AppError(
+                "phpMyAdmin arbitrary-server mode is required for rootless access",
+                status_code=409,
+                code="hosting_phpmyadmin_unavailable",
+            )
+        slug = runtime.health().tenant_slug
+        if not slug:
+            raise AppError(
+                "The tenant cell has no slug",
+                status_code=409,
+                code="hosting_phpmyadmin_unavailable",
+            )
+        client = PmaBrokerClient(
+            self._settings.phpmyadmin_broker_socket,
+            self._settings.phpmyadmin_broker_token_file,
+            timeout=self._settings.phpmyadmin_broker_timeout,
+        )
+        try:
+            result = client.open(
+                tenant=slug,
+                tenant_id=site.tenant_id,
+                site_id=site.id,
+                pma_session_id=pma_session_id,
+                source_ip=source_ip_from_env(self._settings),
+                ttl=self._settings.phpmyadmin_session_ttl,
+            )
+        except Exception:
+            self._audit_site(
+                site,
+                tenant_context,
+                "phpmyadmin_relay_rejected",
+                {"runtime": "rootless", "reason": "relay_open_failed"},
+            )
+            raise
+        relay = {
+            "relay_id": str(result["relay_id"]),
+            "server": server_address(result),
+            "tenant_slug": slug,
+            "runtime": "rootless",
+        }
+        self._audit_site(
+            site,
+            tenant_context,
+            "phpmyadmin_relay_opened",
+            {"runtime": "rootless", "relay_id": relay["relay_id"]},
+        )
+        return relay
+
     def phpmyadmin_login_credentials(
-        self, site: HostingSite, tenant_context: TenantContext, client: PmaClient
+        self,
+        site: HostingSite,
+        tenant_context: TenantContext,
+        client: PmaClient,
+        *,
+        server: str | None = None,
     ) -> dict[str, str]:
         """Log in upstream here; the HTTP route never receives the DB password."""
         self._require_wordpress(site)
@@ -931,7 +1007,9 @@ class HostingService:
             )
         network = self._settings.phpmyadmin_db_network.strip()
         arbitrary = self._settings.phpmyadmin_arbitrary
-        multi = multi_database_enabled(arbitrary, network)
+        # A rootless site is reached only through the ephemeral relay; it must
+        # never be attached to the rootful phpMyAdmin network.
+        multi = server is None and multi_database_enabled(arbitrary, network)
         connected = False
         if multi:
             try:
@@ -944,7 +1022,9 @@ class HostingService:
                 ) from exc
             connected = self._ensure_database_network(db_info, host, network)
         # `None` keeps the old fixed-server POST byte-for-byte.
-        cookies = client.login(user, password, host if multi else None)
+        cookies = client.login(
+            user, password, server if server is not None else (host if multi else None)
+        )
         details = {"database": database, "host": host}
         if connected:
             details["network"] = network

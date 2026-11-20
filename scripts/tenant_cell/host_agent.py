@@ -22,6 +22,7 @@ import hmac
 import json
 import socket
 import struct
+import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -33,15 +34,17 @@ from . import alloc, materializer, network, plans, relay
 ALLOWED_OPS = (
     "apply", "apply_in_place", "remove", "verify", "probe", "reconcile",
     "migrate_all", "nat_apply", "nat_remove",
+    "db_relay_open", "db_relay_close", "db_relay_reconcile",
 )
-# A.SPEC 0104: ``endpoint`` is a read-only host fact, deliberately kept out of
-# the mutation allowlist (ALLOWED_OPS) so existing callers keep the same gate.
-READ_OPS = ("endpoint", "nat_status")
+# A.SPEC 0104/0110-B: read-only host facts stay out of the mutation allowlist
+# so existing callers keep the same gate.
+READ_OPS = ("endpoint", "nat_status", "db_relay_status")
 ALL_OPS = ALLOWED_OPS + READ_OPS
 RECONCILE_SUBJECT = "*"
 REQUEST_KEYS = {
     "op", "tenant", "slug", "token", "plan", "desired", "dry_run",
     "only", "exclude", "stop_on_failure", "memory_mb", "seconds",
+    "site_id", "pma_session_id", "ttl", "relay_id", "tenant_id", "source_ip",
 }
 PLAN_KEYS = plans.PLAN_KEYS
 DESIRED_KEYS = {"tenant", "slug", "plan", "status", "desired_hash"}
@@ -185,6 +188,7 @@ class PlanAgent:
         endpoint_resolver: Callable[[str, str | Path], dict[str, Any]] | None = None,
         migration_handler: Callable[..., dict[str, Any]] | None = None,
         nat_handler: Callable[[str, str], dict[str, Any]] | None = None,
+        db_relay_handler: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
     ) -> None:
         if not secret:
             raise ValueError("the host agent requires a shared secret")
@@ -200,6 +204,7 @@ class PlanAgent:
         self.endpoint_resolver = endpoint_resolver or resolve_endpoint
         self.migration_handler = migration_handler
         self.nat_handler = nat_handler
+        self.db_relay_handler = db_relay_handler
 
     def authorize_peer(self, peer: Peer) -> None:
         if peer.uid not in self.allowed_uids:
@@ -239,12 +244,14 @@ class PlanAgent:
             self.secret, request.get("token"), op=op,
             tenant=str(tenant), slug=str(slug), now=self.clock(),
         )
-        if op in ("reconcile", "migrate_all"):
+        if op in ("reconcile", "migrate_all", "db_relay_reconcile"):
             if tenant != RECONCILE_SUBJECT or slug != RECONCILE_SUBJECT:
                 raise AuthorizationError(ERR_FORBIDDEN, f"{op} has no tenant subject")
             if op == "reconcile":
                 self._validate_desired(request.get("desired"))
-            elif request.get("only") not in (None, "static", "wordpress", "app"):
+            elif op == "migrate_all" and request.get("only") not in (
+                None, "static", "wordpress", "app"
+            ):
                 raise AuthorizationError(ERR_REQUEST, "invalid migration kind")
             return op
         checked = plans.validate_slug(str(slug))
@@ -253,7 +260,29 @@ class PlanAgent:
         self._authorize_tenant(checked)
         if op in ("apply", "apply_in_place", "verify", "probe"):
             self._validate_plan(request.get("plan"))
+        if op.startswith("db_relay_"):
+            self._validate_db_relay(op, request)
         return op
+
+    def _validate_db_relay(self, op: str, request: dict[str, Any]) -> None:
+        if op == "db_relay_open":
+            for key in ("site_id", "pma_session_id", "relay_id", "source_ip"):
+                if not isinstance(request.get(key), str) or not request[key].strip():
+                    raise AuthorizationError(ERR_REQUEST, f"{key} is required")
+            ttl = request.get("ttl")
+            if not isinstance(ttl, int) or not 1 <= ttl <= 3600:
+                raise AuthorizationError(ERR_REQUEST, "ttl must be 1..3600")
+            return
+        if op == "db_relay_status":
+            # Without a relay id the operator lists the tenant's relays.
+            relay_id = request.get("relay_id")
+            if relay_id is not None and (
+                not isinstance(relay_id, str) or not relay_id.strip()
+            ):
+                raise AuthorizationError(ERR_REQUEST, "invalid relay_id")
+            return
+        if not isinstance(request.get("relay_id"), str) or not request["relay_id"].strip():
+            raise AuthorizationError(ERR_REQUEST, "relay_id is required")
 
     def dispatch(self, request: dict[str, Any], peer: Peer) -> dict[str, Any]:
         try:
@@ -279,6 +308,12 @@ class PlanAgent:
                     raise RuntimeError("cell NAT handler is not configured")
                 slug = plans.validate_slug(str(request["slug"]))
                 result = self.nat_handler(op, slug)
+            elif op.startswith("db_relay_"):
+                if self.db_relay_handler is None:
+                    raise RuntimeError("database relay handler is not configured")
+                if not request.get("relay_id") and op == "db_relay_open":
+                    raise AuthorizationError(ERR_REQUEST, "relay_id is required")
+                result = self.db_relay_handler(op, request)
             else:
                 slug = plans.validate_slug(str(request["slug"]))
                 if op in ("apply", "apply_in_place"):
@@ -354,7 +389,68 @@ def build_agent_from_env(data_root: str | Path) -> PlanAgent:
         ),
         data_root=data_root,
         nat_handler=lambda op, slug: _cell_nat(executor, data_root, op, slug),
+        db_relay_handler=_db_relay_handler(data_root),
     )
+
+
+def _site_descriptor(data_root: str | Path, slug: str, site_id: str) -> dict[str, Any]:
+    """Resolve site -> managed DB container/network from the panel database."""
+    import os
+
+    import sqlalchemy as sa
+
+    url = os.environ.get("SYSTUTOR_DATABASE_URL", "").strip()
+    if not url:
+        raise ValueError("SYSTUTOR_DATABASE_URL is not configured")
+    engine = sa.create_engine(url, pool_pre_ping=True)
+    try:
+        with engine.connect() as conn:
+            row = conn.execute(
+                sa.text(
+                    "SELECT s.container_name, s.kind, r.runtime "
+                    "FROM hosting_sites s "
+                    "JOIN tenants t ON t.id = s.tenant_id "
+                    "LEFT JOIN tenant_resource_runtimes r "
+                    "  ON r.resource_id = s.id AND r.kind = s.kind "
+                    "WHERE s.id = :site_id AND t.slug = :slug"
+                ),
+                {"site_id": site_id, "slug": slug},
+            ).first()
+    finally:
+        engine.dispose()
+    if row is None:
+        raise ValueError("site not found for this tenant")
+    container, kind, runtime = row
+    if kind != "wordpress" or runtime != "rootless":
+        raise ValueError("site is not a rootless WordPress database")
+    suffix = container.removeprefix("spanel-").removesuffix("-wp")
+    allocation = alloc.load_registry(data_root)["allocations"].get(slug)
+    if allocation is None:
+        raise ValueError(f"tenant {slug} has no cell allocation")
+    return {
+        "db_container": f"spanel-{suffix}-db",
+        "private_network": f"spanel-{suffix}-private",
+        "target_host": network.loopback_address(int(allocation["index"])),
+    }
+
+
+def _db_relay_handler(data_root: str | Path) -> Any:
+    """Build the ephemeral DB relay handler; it fails closed when unconfigured."""
+    from . import db_broker
+
+    broker = db_broker.DBBroker(connector=db_broker.CellConnector(data_root))
+    handler = db_broker.DBRelayHandler(
+        broker, lambda slug, site_id: _site_descriptor(data_root, slug, site_id)
+    )
+
+    def reconcile() -> None:
+        try:
+            broker.reconcile()
+        except Exception:  # noqa: BLE001 - startup reconcile must never block
+            return
+
+    threading.Thread(target=reconcile, name="db-relay-reconcile", daemon=True).start()
+    return handler
 
 
 def read_secret(path: str | Path) -> str:

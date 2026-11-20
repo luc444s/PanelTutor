@@ -18,7 +18,7 @@ import click.core
 import typer
 from typer.core import TyperOption
 
-from . import alloc, host_agent, materializer, network, plans, relay
+from . import alloc, db_broker, host_agent, materializer, network, plans, relay
 from . import doctor as doctor_mod
 from .cells import CellNotFound, CellService, ProvisionRefused
 from .executor import LocalExecutor
@@ -659,6 +659,93 @@ def plan_import(
     """Migrate a legacy plans.json to the materializer (no silent fallback)."""
     result = _execute(
         lambda: _import_plans(from_file, data_root), json_output, "plan_import"
+    )
+    _emit(result, json_output)
+
+
+# --- A.SPEC 0110-B: ephemeral database relays ------------------------------
+
+
+def _agent_secret() -> str:
+    token_file = os.environ.get(
+        "SPANEL_PLAN_AGENT_TOKEN_FILE", "/etc/spanel/plan_agent_token"
+    )
+    return host_agent.read_secret(token_file)
+
+
+def _db_relay_request(op: str, slug: str, **fields: Any) -> dict[str, Any]:
+    """Operator diagnostics go through the same privileged agent socket."""
+    token = db_broker.issue_capability(
+        _agent_secret(), op=op, tenant=slug, slug=slug
+    )
+    request = {"op": op, "tenant": slug, "slug": slug, "token": token, **fields}
+    path = host_agent.socket_path_from_env()
+    sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    sock.settimeout(10)
+    try:
+        sock.connect(str(path))
+        host_agent.write_frame(sock, request)
+        response = host_agent.read_frame(sock)
+    finally:
+        sock.close()
+    if not response.get("ok"):
+        error = response.get("error") or {}
+        raise db_broker.BrokerError(str(error.get("message", "relay request failed")))
+    result = response.get("result")
+    return result if isinstance(result, dict) else {}
+
+
+db_relay_app = typer.Typer(help="Diagnose ephemeral rootless database relays.")
+app.add_typer(db_relay_app, name="db-relay")
+
+
+@db_relay_app.command("list")
+def db_relay_list(
+    slug: str = typer.Option(..., "--slug"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    result = _execute(
+        lambda: _db_relay_request("db_relay_status", slug), json_output, "db_relay_list"
+    )
+    _emit(result, json_output)
+
+
+@db_relay_app.command("status")
+def db_relay_status(
+    slug: str = typer.Option(..., "--slug"),
+    relay: str = typer.Option(..., "--relay"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    result = _execute(
+        lambda: _db_relay_request("db_relay_status", slug, relay_id=relay),
+        json_output,
+        "db_relay_status",
+    )
+    _emit(result, json_output)
+
+
+@db_relay_app.command("close")
+def db_relay_close(
+    slug: str = typer.Option(..., "--slug"),
+    relay: str = typer.Option(..., "--relay"),
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    result = _execute(
+        lambda: _db_relay_request("db_relay_close", slug, relay_id=relay),
+        json_output,
+        "db_relay_close",
+    )
+    _emit(result, json_output)
+
+
+@db_relay_app.command("reconcile")
+def db_relay_reconcile(
+    json_output: bool = typer.Option(False, "--json"),
+) -> None:
+    result = _execute(
+        lambda: _db_relay_request("db_relay_reconcile", "*"),
+        json_output,
+        "db_relay_reconcile",
     )
     _emit(result, json_output)
 
