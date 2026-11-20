@@ -513,20 +513,32 @@ def cell_uid(slug: str) -> int | None:
         return None
 
 
-def cgroup_limits(uid: int) -> dict[str, str]:
-    base = Path(
+def cgroup_limits(
+    uid: int, *, slug: str | None = None, cgroup_path: str | None = None
+) -> dict[str, str]:
+    """Read effective limits from the cell/tenant cgroup (layout varies)."""
+    candidates: list[Path] = []
+    if cgroup_path:
+        candidates.append(Path("/sys/fs/cgroup") / str(cgroup_path).lstrip("/"))
+    if slug:
+        candidates.append(Path(f"/sys/fs/cgroup/tenant.slice/tenant-{slug}.slice"))
+    user_base = Path(
         f"/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/user.slice"
     )
-    scopes = sorted(base.glob("spanel-cell-*.scope")) if base.is_dir() else []
+    if user_base.is_dir():
+        candidates.extend(sorted(user_base.glob("spanel-cell-*.scope")))
     result: dict[str, str] = {}
-    if not scopes:
-        return result
-    scope = scopes[0]
-    for key in ("memory.max", "cpu.max", "pids.max"):
-        path = scope / key
-        if path.exists():
-            result[key] = path.read_text(encoding="utf-8").strip()
-    result["scope"] = str(scope)
+    for scope in candidates:
+        if not scope.is_dir():
+            continue
+        values = {
+            key: (scope / key).read_text(encoding="utf-8").strip()
+            for key in ("memory.max", "cpu.max", "pids.max")
+            if (scope / key).exists()
+        }
+        if values:
+            result = {**values, "scope": str(scope)}
+            break
     return result
 
 
@@ -1477,7 +1489,7 @@ def apply_plan(
             verify_error = str(exc)[:300]
         time.sleep(3)
     uid = int(allocation(slug)["uid"])
-    limits = cgroup_limits(uid)
+    limits = cgroup_limits(uid, slug=slug, cgroup_path=plan.get("cgroup_path"))
     passed = (
         plan.get("status") == "applied"
         and limits.get("memory.max") == str(MEMORY_PLAN)
@@ -2992,7 +3004,7 @@ def phase_attest(cfg: Config, ev: Evidence, journal: Journal) -> None:
         for item in inventory.get("resources", [])
     }
     uid = int(allocation(cfg.slug)["uid"])
-    limits = cgroup_limits(uid)
+    limits = cgroup_limits(uid, slug=cfg.slug)
     pid_result = run(
         ["systemctl", "show", "-p", "MainPID", "--value", f"spanel-cell-{cfg.slug}"],
         check=False,
@@ -3036,7 +3048,7 @@ def phase_attest(cfg: Config, ev: Evidence, journal: Journal) -> None:
         and '"spanel.role":"cell-infra"' in ingress_text
     )
     scope = str(limits.get("scope", ""))
-    cgroup_scope_ok = all(
+    cgroup_scope_ok = f"tenant-{cfg.slug}.slice" in scope or all(
         part in scope
         for part in (
             f"user-{uid}.slice",
