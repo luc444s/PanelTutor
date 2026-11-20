@@ -1,0 +1,75 @@
+{
+  "spec": "0109-r3-cell-plumbing-and-cutover",
+  "date": "2026-11-19T16:45:00Z",
+  "result": "FAIL",
+  "environment": {
+    "target": "spanel.lab (NO spanel.app)",
+    "host": "lucas@100.67.5.50 (lucas-ThinkPad-E570), Docker 29.1.3, kernel 7.0.0-28-generic, cgroups v2, AppArmor enforce, nft skuid",
+    "code_under_test": "Working tree sin commitear de remove-hardener, copiado sin .git a /home/lucas/spanel-e2e-0109r3-stage y construido como spanel-e2e-0109r3-app:latest. No se modifico codigo ni perfil de la aplicacion.",
+    "database": "Clon desechable sysadmin_e2e0109r3 de sysadmin. Para reutilizar por superficie publica la instalacion GitHub ya cifrada del admin, solo en el clon se cambio el slug del Demo Tenant a e2e0109r3final; la BD viva no se toco.",
+    "method": "Login, POST /plan, POST /applications, POST /deployments y GET /operations por API publica en 127.0.0.1:3010 con Host: spanel.lab. Observacion externa con systemd, journal, docker, cgroups, ss, iptables/nft, AppArmor, dmesg y PID/hash de Core. Celda aprovisionada exclusivamente con el CLI real del stage. No se anadio MASQUERADE manual, puente TCP ni regla AppArmor.",
+    "fixture": "luc444s/software-de-gestion-para-editores, branch feature/workflow-diseno, docker-compose.dokploy.yml, tres servicios",
+    "first_boot": "provision devolvio state=degraded, uid=60070. spanel-cell-e2e0109r3final.service fallo en cada arranque porque ExecStartPost intento nsenter desde el user manager y recibio EPERM."
+  },
+  "checks": [
+    {
+      "name": "egress_without_manual_nat",
+      "command": "provision --slug e2e0109r3final --json con SPANEL_TENANT_CELL_DNS=192.168.18.1; luego DOCKER_HOST=unix:///var/lib/spanel/cells/e2e0109r3final/docker.sock docker run --rm alpine wget -q -O /dev/null https://registry.npmjs.org/vite && echo NET_OK; systemctl/journal; iptables/nft externo",
+      "output": "FAIL real antes de poder ejecutar wget: provision -> state=degraded, apparmor.effective=false, uid=60070. Servicio: ActiveState=failed, Result=exit-code, MainPID=0. ExecStartPost='/usr/bin/nsenter -t $MAINPID -n iptables ... MASQUERADE' termino status=1; journal exacto: 'nsenter: fallo al volver a asociar al espacio de nombres ns/net: Operacion no permitida'. El socket docker.sock no existio y la sonda devolvio 'failed to connect to the docker API ... no such file or directory' + NET_FAIL. No se instalo NAT manual. No hubo netns vivo donde observar la regla. El host ya tenia su regla Docker preexistente 172.17/16; no se anadio una regla de celda. Las reglas temporales del daemon rootful usadas por el harness (puerto 3010) desaparecieron al retirar sus contenedores y el ruleset semantico final fue identico al baseline.",
+      "pass": false
+    },
+    {
+      "name": "aggregate_2gb_from_first_deploy",
+      "command": "POST /api/v1/plugins/apps/plan antes del deploy con memory_bytes=2147483648, cpus=1, pids=512; POST /applications; POST /applications/{id}/deployments; GET /operations/{id}; cat user@60070.service/{memory.max,cpu.max,pids.max}",
+      "output": "La mitad de plan paso: HTTP 201 status=applied ANTES del deploy; cgroup agregada memory.max=2147483648, cpu.max='100000 100000', pids.max=512. Aplicacion HTTP 201 y deploy HTTP 202, pero la operacion 654744bc-a275-4873-ba3a-dc1b9515caf6 termino status=failed, phase=failed, public_error='command failed (1): docker', result=null, porque la celda no arranco ni creo socket. No aparecio 'service backend memory limit is invalid', pero el contrato exige fixture de 3 servicios running desde el primer deploy; eso no se alcanzo y no se infiere PASS.",
+      "pass": false
+    },
+    {
+      "name": "published_route_no_bridge",
+      "command": "POST /api/v1/plugins/apps/applications con domain=editores-0109r3.lab, ingress_service=frontend, ingress_port=80; GET de la app; ss -ltnp; find dynamic/spanel-*.yml; curl -H 'Host: editores-0109r3.lab' http://127.0.0.1:9080/",
+      "output": "FAIL. La respuesta publica HTTP 201 devolvio domain=null, ingress_service=null e ingress_port=null pese a enviarlos; GET posterior confirmo los tres null, active_deployment=null y services=[]. No existio listener nuevo 127.x.y.z:20000+ (el unico 127.68.1.1:20067 era preexistente), no aparecio un spanel-*.yml para 0109r3 y el dominio dio HTTP 404. No se uso ni creo puente TCP. Como la celda fallo al arrancar, RootlessRoutePublisher tampoco pudo completar una publicacion real.",
+      "pass": false
+    },
+    {
+      "name": "rollback_rehearsal",
+      "command": "Deployment real por API sobre la app desechable; observar operacion, representacion publica, rutas/runtime y contenedores rootful; repetir administracion con SPANEL_TENANTS_ROOTLESS=false solo si existe cutover confirmado",
+      "output": "FAIL honesto/no ejercitable: el unico deploy real del run fallo antes de crear deployment activo (active_deployment=null, deployments=[]), por lo que nunca existio cutover rootless ni ruta/runtime previa de esta app que restaurar. No se fabrico metadata ni se parcheo el entorno para simularlo. Los tres contenedores rootful preexistentes software-de-gestion-para-editores-main_{backend,db,frontend}_1 quedaron presentes, pero eso por si solo no demuestra rollback. Tampoco puede afirmarse que un recurso migrado siga administrable con flag=false porque ningun recurso fue migrado en este run.",
+      "pass": false
+    }
+  ],
+  "delta_denied": 0,
+  "apparmor": {
+    "audit_marker_before_provision": 2658,
+    "profile": "spanel-cell-e2e0109r3final",
+    "denied_after_marker": 0,
+    "preparation_denied": 0,
+    "build_denied": 0,
+    "audit_deny_rules_preserved": 8,
+    "note": "delta_denied=0 es literal pero no salva el resultado: el fallo fue EPERM de nsenter en ExecStartPost antes del build, no un DENIED de AppArmor."
+  },
+  "isolation": {
+    "other_tenants": "spanel.lab=200 y pos-e2e.lab=200 durante la observacion",
+    "core_before_after": "Identicos y running: traefik 3640546/24ff8185ccd698b4, mariadb 214967/fe927596d8f2e2fe, PMA 215055/ac199c23434168e9, powerdns-auth 2869309/adf74046f333c513, powerdns-db 2847729/2d57f3f4507f925e, mail 215326/b205f620f0a89962. Verificados otra vez tras limpieza."
+  },
+  "gaps": [
+    {
+      "id": "GAP-0109R3-1",
+      "severity": "high",
+      "title": "ExecStartPost no puede entrar al netns desde la unidad de usuario",
+      "evidence": "El unit generado ejecuta nsenter -t $MAINPID -n iptables desde systemd --user. En el lab termina EPERM, systemd mata dockerd-rootless y repite hasta start-limit-hit; provision queda degraded y no existe docker.sock.",
+      "impact": "Bloquea egress, build/deploy, listener, publicacion y simulacro de rollback. Los cuatro checks contractuales quedan en FAIL.",
+      "recommendation": "Replantear el mecanismo privilegiado que materializa NAT dentro del netns y repetir el E2E sin regla manual."
+    },
+    {
+      "id": "GAP-0109R3-2",
+      "severity": "medium",
+      "title": "La superficie publica de ApplicationCreate no conserva domain/ingress",
+      "evidence": "OpenAPI acepta domain, ingress_service e ingress_port. POST envio editores-0109r3.lab/frontend/80, pero HTTP 201 y GET devolvieron los tres campos null.",
+      "impact": "Aun con celda operativa, no quedo un app.domain observable para que RootlessRoutePublisher publicara el Host en este run.",
+      "recommendation": "Corregir o documentar la superficie publica que asigna app.domain y repetir la publicacion gobernada."
+    }
+  ],
+  "rollback": "Rollback de laboratorio ejecutado, no rollback funcional del producto. Se retiraron app/worker/Redis desechables y su puerto 3010; se desprovisiono la celda con el CLI real (state=retired) y se terminaron el user manager y el plan-agent; se eliminaron usuario uid 60070, /run/user/60070, directorio, unidad, perfil y tabla nft; se hizo DROP de sysadmin_e2e0109r3; se borraron volumen, imagen, stage, pylibs, socket/token y scripts temporales. registry.json, plans.json, audit.jsonl, /etc/subuid y /etc/subgid se restauraron byte-a-byte. No se modifico codigo de aplicacion, AppArmor ni rutas para forzar PASS.",
+  "final_state": "Limpieza verificada: usuario, celda, socket, procesos, contenedores, imagen, volumen, BD, listener 3010/20070, ruta 0109r3 y temporales ausentes. Hashes restaurados: registry=a3503ea9dcb53aab..., plans=dc2a7b9b3c39489c..., audit=15ad1bc5d49912b..., subuid=subgid=a295d25cb1976270.... Ruleset iptables semantico final identico al baseline. Los 6 Core conservaron PID/hash y siguieron running. RESULTADO: FAIL 0/4, con delta_denied=0 y 8 audit deny intactas; fallo de producto reproducible en el primer arranque, sin parche de laboratorio.",
+  "cleanup_verified": true
+}
