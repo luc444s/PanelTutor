@@ -1397,7 +1397,7 @@ def migrate_clone_kernel(cfg: Config, evidence: Evidence) -> None:
     """Apply the shipped kernel compatibility migration to the clone only.
 
     The lab host was provisioned without an ``alembic_version`` table, so a
-    full Alembic upgrade would try to recreate every table. The code under
+    full upgrade from the migration metadata would recreate every table. The code under
     test needs kernel revision ``20261119_0011`` (default for
     ``users.is_superadmin``); its exact SQL is applied idempotently to the
     disposable clone. No Alembic CLI and no change to the live database.
