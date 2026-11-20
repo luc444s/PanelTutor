@@ -916,7 +916,11 @@ def stage_tree(cfg: Config) -> None:
                     dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
                 )
-        for rel in ("vendor/systutor-core/src", "vendor/systutor-core/plugins"):
+        for rel in (
+            "vendor/systutor-core/src",
+            "vendor/systutor-core/plugins",
+            "vendor/systutor-core/migrations",
+        ):
             source = ROOT / rel
             if source.exists():
                 shutil.copytree(
@@ -925,6 +929,9 @@ def stage_tree(cfg: Config) -> None:
                     dirs_exist_ok=True,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"),
                 )
+        ini = ROOT / "vendor/systutor-core/alembic.ini"
+        if ini.exists():
+            shutil.copy2(ini, stage / "vendor/systutor-core/alembic.ini")
         marker.write_text(now(), encoding="utf-8")
     pylibs = stage / "pylibs"
     pylibs.mkdir(exist_ok=True)
@@ -1320,6 +1327,14 @@ def _mounts(cfg: Config) -> list[str]:
             "/app/vendor/systutor-core/src:ro"
         ),
         "-v", f"{cfg.stage / 'vendor' / 'systutor-core' / 'plugins'}:/app/plugins:ro",
+        "-v", (
+            f"{cfg.stage / 'vendor' / 'systutor-core' / 'alembic.ini'}:"
+            "/app/vendor/systutor-core/alembic.ini:ro"
+        ),
+        "-v", (
+            f"{cfg.stage / 'vendor' / 'systutor-core' / 'migrations'}:"
+            "/app/vendor/systutor-core/migrations:ro"
+        ),
         "-v", "/var/lib/spanel/cells:/var/lib/spanel/cells:ro",
         "-v", "/var/lib/spanel/registry.json:/var/lib/spanel/registry.json:ro",
     ]
@@ -1376,6 +1391,39 @@ def start_stack(cfg: Config, runtime_env: Path, *, rootless: bool) -> None:
 
 def restart_stack_rootless(cfg: Config, runtime_env: Path) -> None:
     start_stack(cfg, runtime_env, rootless=True)
+
+
+def migrate_clone_kernel(cfg: Config, evidence: Evidence) -> None:
+    """Apply the kernel runtime migrations to the disposable clone.
+
+    This is the systutor-core runtime migrador (``alembic.ini`` executed from
+    the app image), never the Alembic CLI invoked by hand against the host DB.
+    The lab's main branch is behind revision 20261119_0011, which restores the
+    default for ``users.is_superadmin`` required by the code under test.
+    """
+    script = cfg.stage / "kernel_migrate.py"
+    script.write_text(
+        'import json\n'
+        'from alembic import command\n'
+        'from alembic.config import Config\n'
+        'config = Config("/app/vendor/systutor-core/alembic.ini")\n'
+        'command.upgrade(config, "head")\n'
+        'print(json.dumps({"kernel_migrations": "head"}))\n',
+        encoding="utf-8",
+    )
+    script.chmod(0o644)
+    result = docker(
+        cfg, "exec", cfg.app, "python", "/stage/kernel_migrate.py", check=False
+    )
+    if result.returncode:
+        raise Precondition(
+            f"kernel migration of the disposable clone failed: "
+            f"{(result.stdout or result.stderr)[-600:]}"
+        )
+    evidence.data["repairs"].append(
+        {"action": "kernel_migrations", "target": cfg.db, "output": result.stdout.strip()[-200:]}
+    )
+    log("disposable clone migrated to kernel head")
 
 
 def wait_plugins(api: Api, timeout: float = 240.0) -> None:
@@ -1845,6 +1893,7 @@ def phase_setup(cfg: Config, ev: Evidence, journal: Journal) -> None:
     prepare_agents(cfg, cells, ev)
     runtime_env, _values = write_runtime_env(cfg)
     start_stack(cfg, runtime_env, rootless=False)
+    migrate_clone_kernel(cfg, ev)
     admin = admin_login(cfg, ev.redactor)
     wait_plugins(admin)
     tenant = create_tenant(cfg, admin, ev.redactor)
@@ -3148,6 +3197,7 @@ def cleanup(
     # 7. Disposable secrets.
     for name in (
         "app.env", "plan_agent_token", "dispatch_outbox.py", "downgrade_005.py",
+        "kernel_migrate.py",
     ):
         (cfg.stage / name).unlink(missing_ok=True)
     for rel in (
