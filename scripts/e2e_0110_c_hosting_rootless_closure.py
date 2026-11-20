@@ -522,6 +522,9 @@ def cgroup_limits(
         candidates.append(Path("/sys/fs/cgroup") / str(cgroup_path).lstrip("/"))
     if slug:
         candidates.append(Path(f"/sys/fs/cgroup/tenant.slice/tenant-{slug}.slice"))
+    candidates.append(
+        Path(f"/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service")
+    )
     user_base = Path(
         f"/sys/fs/cgroup/user.slice/user-{uid}.slice/user@{uid}.service/user.slice"
     )
@@ -3048,12 +3051,16 @@ def phase_attest(cfg: Config, ev: Evidence, journal: Journal) -> None:
         and '"spanel.role":"cell-infra"' in ingress_text
     )
     scope = str(limits.get("scope", ""))
-    cgroup_scope_ok = f"tenant-{cfg.slug}.slice" in scope or all(
-        part in scope
-        for part in (
-            f"user-{uid}.slice",
-            f"user@{uid}.service",
-            f"spanel-cell-{cfg.slug}.scope",
+    cgroup_scope_ok = (
+        f"tenant-{cfg.slug}.slice" in scope
+        or (f"user-{uid}.slice" in scope and f"user@{uid}.service" in scope)
+        or all(
+            part in scope
+            for part in (
+                f"user-{uid}.slice",
+                f"user@{uid}.service",
+                f"spanel-cell-{cfg.slug}.scope",
+            )
         )
     )
     db_published = cell_docker(
