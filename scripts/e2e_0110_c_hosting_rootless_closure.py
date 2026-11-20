@@ -1275,6 +1275,7 @@ def write_runtime_env(cfg: Config) -> tuple[Path, dict[str, str]]:
     values["SPANEL_PLAN_AGENT_TOKEN_FILE"] = "/run/secrets/plan_agent_token"
     values["SPANEL_ROOTLESS_ROUTES_HTTPS"] = "false"
     values["SPANEL_TENANTS_DATA_ROOT"] = "/var/lib/spanel"
+    values["SPANEL_TENANT_RESOURCE_INVENTORY"] = "true"
     values.setdefault("SPANEL_DOMAINS_PROFILE", "internal")
     values["SPANEL_PROXY_TRANSPORT"] = "local"
     values["SPANEL_PROXY_CONFIG_DIR"] = str(cfg.dynamic_dir)
@@ -1640,7 +1641,7 @@ def create_tenant(cfg: Config, api: Api, redactor: Redactor) -> dict[str, Any]:
     password = redactor.add(secrets.token_urlsafe(18))
     payload = api.request(
         "POST",
-        "/tenants",
+        "/plugins/tenant/tenants",
         {
             "name": f"0110C Intruder {cfg.slug}",
             "slug": cfg.intruder_tenant,
@@ -2858,7 +2859,9 @@ def phase_attest(cfg: Config, ev: Evidence, journal: Journal) -> None:
     admin = admin_login(cfg, ev.redactor)
     sites = _site_ids(journal)
     tenant_id = str(admin.me().get("tenant_id") or journal.data["tenant"]["tenant_id"])
-    inventory = admin.request("GET", f"/tenants/{tenant_id}/resources")
+    inventory = admin.request(
+        "GET", f"/plugins/tenant/tenants/{tenant_id}/resources"
+    )
     runtimes = {
         item.get("resource_id"): item.get("runtime")
         for item in inventory.get("resources", [])
