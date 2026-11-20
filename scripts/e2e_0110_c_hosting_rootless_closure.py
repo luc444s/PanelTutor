@@ -348,6 +348,9 @@ class Config:
     )
     live_db: str = field(default_factory=lambda: os.getenv("SPANEL_E2E_LIVE_DB", LIVE_DB))
     live_pg: str = field(default_factory=lambda: os.getenv("SPANEL_E2E_LIVE_PG", LIVE_PG))
+    live_redis: str = field(
+        default_factory=lambda: os.getenv("SPANEL_E2E_LIVE_REDIS", "spanel-redis-1")
+    )
     image: str = field(default_factory=lambda: os.getenv("SPANEL_E2E_APP_IMAGE", APP_IMAGE))
     live_env: Path = field(
         default_factory=lambda: Path(
@@ -1779,7 +1782,7 @@ def phase_preflight(cfg: Config, ev: Evidence, journal: Journal) -> None:
         raise Precondition(f"Traefik dynamic directory is missing: {cfg.dynamic_dir}")
     if not Path("/var/lib/spanel/registry.json").is_file():
         raise Precondition("host cell registry is missing")
-    for name in (cfg.live_pg, cfg.redis, cfg.traefik_container):
+    for name in (cfg.live_pg, cfg.live_redis, cfg.traefik_container):
         result = docker(cfg, "inspect", "-f", "{{.State.Running}}", name, check=False)
         if result.returncode or result.stdout.strip() != "true":
             raise Precondition(f"required live container is not running: {name}")
