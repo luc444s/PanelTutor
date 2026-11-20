@@ -1403,6 +1403,10 @@ def start_stack(cfg: Config, runtime_env: Path, *, rootless: bool) -> None:
         "--processes", "1", "--threads", "1", "--queues", "apps",
         check=True,
     )
+    # La verificación HTTP del producto resuelve los Hosts .lab al Traefik del
+    # laboratorio; sin esta red el contenedor desechable no alcanza ese bridge.
+    for name in (cfg.app, cfg.worker):
+        docker(cfg, "network", "connect", cfg.proxy_network, name, check=False)
     deadline = time.monotonic() + 240
     while time.monotonic() < deadline:
         probe = run(
