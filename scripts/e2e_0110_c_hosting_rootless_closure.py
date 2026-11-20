@@ -1351,7 +1351,7 @@ def _mounts(cfg: Config) -> list[str]:
             f"{cfg.stage / 'vendor' / 'systutor-core' / 'migrations'}:"
             "/app/vendor/systutor-core/migrations:ro"
         ),
-        "-v", "/var/lib/spanel/cells:/var/lib/spanel/cells:ro",
+        "-v", "/var/lib/spanel/cells:/var/lib/spanel/cells:rw",
         "-v", "/var/lib/spanel/registry.json:/var/lib/spanel/registry.json:ro",
     ]
     if Path(cfg.sites_dir).exists():
