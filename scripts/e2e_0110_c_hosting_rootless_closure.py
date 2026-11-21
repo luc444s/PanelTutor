@@ -1625,7 +1625,12 @@ def fm_list(api: Api, site_id: str, path: str = "") -> dict[str, Any]:
 
 
 def fm_mkdir(api: Api, site_id: str, path: str) -> dict[str, Any]:
-    return api.request("POST", f"{fm_base(site_id)}/directories", {"path": path})
+    try:
+        return api.request("POST", f"{fm_base(site_id)}/directories", {"path": path})
+    except ApiError as exc:
+        if exc.status == 409:
+            return {"exists": True}
+        raise
 
 
 def fm_upload(
@@ -1796,7 +1801,16 @@ def create_tenant(cfg: Config, api: Api, redactor: Redactor) -> dict[str, Any]:
 def create_fixture(
     cfg: Config, api: Api, redactor: Redactor, *, kind: str, name: str, domain: str
 ) -> dict[str, Any]:
-    payload = api.create_site(kind=kind, name=name, domain=domain)
+    try:
+        payload = api.create_site(kind=kind, name=name, domain=domain)
+    except ApiError as exc:
+        if exc.status != 409:
+            raise
+        # Resume: el sitio ya existe en este clon; se reutiliza por dominio.
+        for row in api.sites():
+            if row.get("domain") == domain:
+                return {"site": row, "admin_password": None}
+        raise
     site = payload["site"]
     if payload.get("admin_password"):
         redactor.add(payload["admin_password"])
@@ -2065,18 +2079,22 @@ def phase_seed(cfg: Config, ev: Evidence, journal: Journal) -> None:
             # El laboratorio usa el file-provider de Traefik; el alta de un
             # WordPress rootful no publica el dominio por sí sola. Se hace por
             # la API pública de Domains, sin tocar documentos a mano.
-            admin.request(
-                "POST",
-                "/plugins/domains/routes",
-                {
-                    "site_id": site["id"],
-                    "domain": domain,
-                    "path": "/",
-                    "port": 80,
-                    "https": False,
-                },
-                timeout=300,
-            )
+            try:
+                admin.request(
+                    "POST",
+                    "/plugins/domains/routes",
+                    {
+                        "site_id": site["id"],
+                        "domain": domain,
+                        "path": "/",
+                        "port": 80,
+                        "https": False,
+                    },
+                    timeout=300,
+                )
+            except ApiError as exc:
+                if exc.status != 409:
+                    raise
         seeded = seed_files(admin, site["id"], f"{kind}-A")
         public = http_marker(cfg, domain, seeded["sha256"])
         fixtures[kind] = {
