@@ -1593,7 +1593,13 @@ def wp_request(
 
 def wp_login(cfg: Config, domain: str, user: str, password: str) -> dict[str, Any]:
     jar, opener = wp_opener(cfg)
-    status, body, _headers = wp_request(cfg, opener, domain, "/wp-login.php")
+    status, body, _headers = 0, b"", {}
+    for _attempt in range(4):
+        status, body, _headers = wp_request(cfg, opener, domain, "/wp-login.php")
+        if status == 200:
+            break
+        # El file-provider de Traefik puede recargar tarde tras un lifecycle.
+        time.sleep(2)
     if status != 200:
         return {"ok": False, "stage": "form", "status": status}
     text = body.decode(errors="replace")
