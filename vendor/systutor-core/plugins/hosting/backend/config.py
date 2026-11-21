@@ -320,7 +320,8 @@ class RawAdapter:
         ).strip()
         # En celdas rootless el volumen está dentro del user namespace del
         # tenant: uid 0 del helper es el dueño real de los ficheros del sitio.
-        if self.runtime is not None and self.runtime.runtime == "rootless":
+        rootless_helper = self.runtime is not None and self.runtime.runtime == "rootless"
+        if rootless_helper:
             owner = "0"
         self.provisioner.command(
             "run",
@@ -337,6 +338,7 @@ class RawAdapter:
             path,
             "wordpress:cli",
             "wp",
+            *( ["--allow-root"] if rootless_helper else [] ),
             "config",
             "shuffle-salts",
         )
