@@ -383,6 +383,9 @@ class Config:
     hosting_network: str = field(
         default_factory=lambda: os.getenv("SPANEL_E2E_HOSTING_NETWORK", "proxy")
     )
+    pma_source_ip: str = field(
+        default_factory=lambda: os.getenv("SPANEL_E2E_PMA_SOURCE_IP", "172.25.0.1")
+    )
     dynamic_dir: Path = field(
         default_factory=lambda: Path(
             os.getenv(
@@ -1348,6 +1351,7 @@ def write_runtime_env(cfg: Config) -> tuple[Path, dict[str, str]]:
     values["SPANEL_HOSTING_TRAEFIK"] = values.get("SPANEL_HOSTING_TRAEFIK", "true")
     values["SPANEL_HOSTING_NETWORK"] = cfg.hosting_network
     values["SPANEL_PHPMYADMIN_ARBITRARY"] = "true"
+    values["SPANEL_PHPMYADMIN_SOURCE_IP"] = cfg.pma_source_ip
     values.setdefault("SPANEL_HOSTING_WP_IMAGE", "wordpress:latest")
     values.setdefault("SPANEL_HOSTING_DB_IMAGE", "mariadb:11")
     values.setdefault("SPANEL_HOSTING_STATIC_IMAGE", "nginx:alpine")
@@ -1420,6 +1424,8 @@ def start_stack(cfg: Config, runtime_env: Path, *, rootless: bool) -> None:
         ),
         "-e",
         f"SPANEL_PHPMYADMIN_ARBITRARY={'true' if rootless else 'false'}",
+        "-e",
+        f"SPANEL_PHPMYADMIN_SOURCE_IP={cfg.pma_source_ip}",
         *_mounts(cfg),
     ]
     docker(
