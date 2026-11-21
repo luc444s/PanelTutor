@@ -95,7 +95,15 @@ def export_archive(
         with zipfile.ZipFile(archive_path, "x", zipfile.ZIP_DEFLATED) as archive:
             archive.writestr("manifest.json", json.dumps(manifest, sort_keys=True))
             for path in files:
-                archive.write(path, path.relative_to(work).as_posix())
+                # La tar del contenedor puede traer mtimes de 1970; ZIP no los
+                # admite. Se normaliza la entrada y se conserva el contenido.
+                info = zipfile.ZipInfo(
+                    path.relative_to(work).as_posix(),
+                    date_time=(1980, 1, 1, 0, 0, 0),
+                )
+                info.compress_type = zipfile.ZIP_DEFLATED
+                info.external_attr = 0o600 << 16
+                archive.writestr(info, path.read_bytes())
         verify_archive(archive_path, site)
         archive_path.chmod(0o600)
         return archive_path
