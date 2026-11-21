@@ -1163,12 +1163,23 @@ def remove_cell_leftovers(slug: str) -> list[str]:
 
 
 def agent_env(cfg: Config) -> dict[str, str]:
-    return {
+    env = {
         "PYTHONPATH": f"{cfg.stage / 'pylibs'}:{cfg.stage / 'scripts'}",
         "SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS": "1",
         "SPANEL_EDGE_RELAY_BIND": cfg.relay_bind,
         "SPANEL_EDGE_RELAY_SOURCES": cfg.relay_source,
     }
+    # El broker rootless de phpMyAdmin corre en el plan-agent host y necesita
+    # el mismo URL de BD que el API desechable para resolver el relay.
+    runtime_env = cfg.stage / "app.env"
+    if runtime_env.exists():
+        for raw in runtime_env.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if line.startswith("SYSTUTOR_DATABASE_URL="):
+                env["SYSTUTOR_DATABASE_URL"] = line.split("=", 1)[1].strip()
+            elif line.startswith("SYSTUTOR_REDIS_URL="):
+                env["SYSTUTOR_REDIS_URL"] = line.split("=", 1)[1].strip()
+    return env
 
 
 def start_process(
