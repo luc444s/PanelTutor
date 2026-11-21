@@ -1174,6 +1174,9 @@ def agent_env(cfg: Config) -> dict[str, str]:
         "SPANEL_EDGE_RELAY_SOURCES": cfg.relay_source,
         "SPANEL_DB_BROKER_SOURCES": cfg.pma_source_ip,
         "SPANEL_DB_BROKER_BIND": cfg.pma_source_ip,
+        # El runtime rootless del lab no permite remontar el rootfs como
+        # readonly (AppArmor); el connector sigue sin privilegios y efímero.
+        "SPANEL_PMA_CONNECTOR_READ_ONLY": "false",
         "SPANEL_PMA_CONNECTOR_IMAGE": (
             "alpine/socat@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e"
         ),
