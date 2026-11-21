@@ -228,6 +228,19 @@ class Journal:
         phases = self.data.get("phases", {})
         return bool(isinstance(phases, dict) and phases.get(phase, {}).get("done"))
 
+    def last_completed_counts(self, order: Iterable[str]) -> tuple[int, int]:
+        """Check/gap counts at the last successfully completed phase."""
+        checks = gaps = 0
+        phases = self.data.get("phases", {})
+        if not isinstance(phases, dict):
+            return checks, gaps
+        for name in order:
+            info = phases.get(name)
+            if isinstance(info, dict) and info.get("done"):
+                checks = int(info.get("check_count", checks))
+                gaps = int(info.get("gap_count", gaps))
+        return checks, gaps
+
     def validate_identity(self, identity: dict[str, Any]) -> None:
         recorded = self.data.get("identity")
         if recorded is None:
@@ -3480,6 +3493,7 @@ def main(argv: list[str] | None = None) -> int:
         json_output=args.json,
     )
     _install_signal_handlers()
+    phase_order = ("preflight", "setup", "seed", "exercise", "attest", "cleanup")
     redactor = Redactor()
     ev = Evidence(cfg, redactor)
     journal = Journal(cfg.stage / "state.json")
@@ -3493,7 +3507,13 @@ def main(argv: list[str] | None = None) -> int:
             journal.validate_identity(cfg.ownership)
             if isinstance(journal.data.get("evidence"), dict):
                 ev.data = journal.data["evidence"]
-            log("resuming journal")
+            check_count, gap_count = journal.last_completed_counts(phase_order)
+            ev.data["checks"] = list(ev.data.get("checks", []))[:check_count]
+            ev.data["gaps"] = list(ev.data.get("gaps", []))[:gap_count]
+            log(
+                "resuming journal from "
+                f"{check_count} checks / {gap_count} gaps of completed phases"
+            )
         else:
             if (
                 cfg.stage.exists()
@@ -3535,7 +3555,13 @@ def main(argv: list[str] | None = None) -> int:
                 api = _safe_api(cfg, redactor)
                 cleanup(cfg, ev, journal, api=api)
                 cleanup_done = True
-            journal.mark(phase)
+            journal.mark(
+                phase,
+                {
+                    "check_count": len(ev.data.get("checks", [])),
+                    "gap_count": len(ev.data.get("gaps", [])),
+                },
+            )
             journal.data["evidence"] = ev.data
             journal.save()
     except Precondition as exc:
