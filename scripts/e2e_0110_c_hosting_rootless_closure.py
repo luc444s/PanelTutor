@@ -1625,12 +1625,22 @@ def fm_list(api: Api, site_id: str, path: str = "") -> dict[str, Any]:
 
 
 def fm_mkdir(api: Api, site_id: str, path: str) -> dict[str, Any]:
-    try:
-        return api.request("POST", f"{fm_base(site_id)}/directories", {"path": path})
-    except ApiError as exc:
-        if exc.status == 409:
-            return {"exists": True}
-        raise
+    last: ApiError | None = None
+    for attempt in range(2):
+        try:
+            return api.request(
+                "POST", f"{fm_base(site_id)}/directories", {"path": path}
+            )
+        except ApiError as exc:
+            last = exc
+            if exc.status == 409:
+                return {"exists": True}
+            if exc.status != 502:
+                raise
+            if attempt == 0:
+                time.sleep(2)
+    assert last is not None
+    raise last
 
 
 def fm_upload(
