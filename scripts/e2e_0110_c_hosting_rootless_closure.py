@@ -1564,10 +1564,17 @@ def wp_request(
     data: bytes | None = None,
     timeout: int = 30,
 ) -> tuple[int, bytes, dict[str, str]]:
+    # Usar el dominio publicado (no un origin de prueba con Host falso) para
+    # que las cookies de WordPress queden ligadas al Host real y los redirects
+    # absolutos funcionen.
     request = urllib.request.Request(
-        f"{cfg.external_base.rstrip('/')}{path}",
+        f"http://{domain}{path}",
         data=data,
-        headers={"Host": domain, "Content-Type": "application/x-www-form-urlencoded"},
+        headers={
+            "Host": domain,
+            "Content-Type": "application/x-www-form-urlencoded",
+            "Referer": f"http://{domain}/wp-login.php",
+        },
     )
     try:
         with opener.open(request, timeout=timeout) as response:
@@ -2552,7 +2559,7 @@ def check_wordpress(
     patched = api.request(
         "PATCH",
         f"/plugins/hosting/sites/{site_id}/config",
-        {"env": {"WP_DEBUG": "false", "TZ": "UTC"}},
+        {"env": {"WP_DEBUG": "false", "TZ": "Europe/Madrid"}},
     )
     rejected_status, _rejected_body, _ = api.request(
         "PATCH",
@@ -2722,7 +2729,7 @@ def invalidate_cookie(cfg: Config, domain: str, cookie: str) -> dict[str, Any]:
         jar.set_cookie(
             http.cookiejar.Cookie(
                 version=0, name=name, value=value, port=None, port_specified=False,
-                domain="127.0.0.1", domain_specified=False, domain_initial_dot=False,
+                domain=domain, domain_specified=False, domain_initial_dot=False,
                 path="/", path_specified=True, secure=False, expires=None,
                 discard=True, comment=None, comment_url=None, rest={"HttpOnly": None},
             )
