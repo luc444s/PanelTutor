@@ -49,7 +49,13 @@ def export_archive(
     work = destination / ".build"
     work.mkdir(mode=0o700)
     try:
-        payload = runtime.command(("cp", f"{site.container_name}:{root}", "-"))
+        # ``docker cp`` needs a pivot_root that rootless daemons with a strict
+        # AppArmor profile reject ("Error making old root private after
+        # pivot"). ``docker exec ... tar`` uses the same opaque runtime handle
+        # and works in both rootful and rootless cells.
+        payload = runtime.command(
+            ("exec", site.container_name, "tar", "-cf", "-", "-C", root, ".")
+        )
         _safe_extract(payload, work / "site")
         sql_path: Path | None = None
         env = env_of(info)
