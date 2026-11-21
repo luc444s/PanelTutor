@@ -389,6 +389,9 @@ class Config:
     pg_host: str = field(
         default_factory=lambda: os.getenv("SPANEL_E2E_PG_HOST", "192.168.32.2")
     )
+    pma_network: str = field(
+        default_factory=lambda: os.getenv("SPANEL_E2E_PMA_NETWORK", "mariadb_internal")
+    )
     dynamic_dir: Path = field(
         default_factory=lambda: Path(
             os.getenv(
@@ -1473,6 +1476,9 @@ def start_stack(cfg: Config, runtime_env: Path, *, rootless: bool) -> None:
     # laboratorio; sin esta red el contenedor desechable no alcanza ese bridge.
     for name in (cfg.app, cfg.worker):
         docker(cfg, "network", "connect", cfg.proxy_network, name, check=False)
+        # El phpMyAdmin del laboratorio vive en otra red; el API debe poder
+        # alcanzar su URL interna para iniciar sesiones rootless.
+        docker(cfg, "network", "connect", cfg.pma_network, name, check=False)
     deadline = time.monotonic() + 240
     while time.monotonic() < deadline:
         probe = run(
