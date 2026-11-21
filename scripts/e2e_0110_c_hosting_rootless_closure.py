@@ -1347,6 +1347,7 @@ def write_runtime_env(cfg: Config) -> tuple[Path, dict[str, str]]:
     values["SPANEL_HOSTING_BACKUP_SCRIPTS_DIR"] = "/app/scripts"
     values["SPANEL_HOSTING_TRAEFIK"] = values.get("SPANEL_HOSTING_TRAEFIK", "true")
     values["SPANEL_HOSTING_NETWORK"] = cfg.hosting_network
+    values["SPANEL_PHPMYADMIN_ARBITRARY"] = "true"
     values.setdefault("SPANEL_HOSTING_WP_IMAGE", "wordpress:latest")
     values.setdefault("SPANEL_HOSTING_DB_IMAGE", "mariadb:11")
     values.setdefault("SPANEL_HOSTING_STATIC_IMAGE", "nginx:alpine")
@@ -1417,6 +1418,8 @@ def start_stack(cfg: Config, runtime_env: Path, *, rootless: bool) -> None:
             if rootless
             else f"SPANEL_HOSTING_NETWORK={cfg.hosting_network}"
         ),
+        "-e",
+        f"SPANEL_PHPMYADMIN_ARBITRARY={'true' if rootless else 'false'}",
         *_mounts(cfg),
     ]
     docker(
@@ -1594,12 +1597,12 @@ def wp_request(
 def wp_login(cfg: Config, domain: str, user: str, password: str) -> dict[str, Any]:
     jar, opener = wp_opener(cfg)
     status, body, _headers = 0, b"", {}
-    for _attempt in range(4):
+    for _attempt in range(6):
         status, body, _headers = wp_request(cfg, opener, domain, "/wp-login.php")
         if status == 200:
             break
         # El file-provider de Traefik puede recargar tarde tras un lifecycle.
-        time.sleep(2)
+        time.sleep(3)
     if status != 200:
         return {"ok": False, "stage": "form", "status": status}
     text = body.decode(errors="replace")
