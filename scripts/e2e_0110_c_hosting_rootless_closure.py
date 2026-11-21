@@ -975,7 +975,9 @@ def stage_tree(cfg: Config) -> None:
         marker.write_text(now(), encoding="utf-8")
     pylibs = stage / "pylibs"
     pylibs.mkdir(exist_ok=True)
-    probe = run([sys.executable, "-c", "import typer"], timeout=30)
+    probe = run(
+        [sys.executable, "-c", "import typer, sqlalchemy"], timeout=30
+    )
     if probe.returncode:
         run(
             [
@@ -987,6 +989,7 @@ def stage_tree(cfg: Config) -> None:
                 "--target",
                 str(pylibs),
                 "typer>=0.12",
+                "sqlalchemy>=2.0",
             ],
             timeout=900,
             check=True,
