@@ -386,6 +386,9 @@ class Config:
     pma_source_ip: str = field(
         default_factory=lambda: os.getenv("SPANEL_E2E_PMA_SOURCE_IP", "172.25.0.1")
     )
+    pg_host: str = field(
+        default_factory=lambda: os.getenv("SPANEL_E2E_PG_HOST", "192.168.32.2")
+    )
     dynamic_dir: Path = field(
         default_factory=lambda: Path(
             os.getenv(
@@ -990,6 +993,7 @@ def stage_tree(cfg: Config) -> None:
                 str(pylibs),
                 "typer>=0.12",
                 "sqlalchemy>=2.0",
+                "psycopg[binary]>=3.1",
             ],
             timeout=900,
             check=True,
@@ -1179,6 +1183,11 @@ def agent_env(cfg: Config) -> dict[str, str]:
                 env["SYSTUTOR_DATABASE_URL"] = line.split("=", 1)[1].strip()
             elif line.startswith("SYSTUTOR_REDIS_URL="):
                 env["SYSTUTOR_REDIS_URL"] = line.split("=", 1)[1].strip()
+    url = env.get("SYSTUTOR_DATABASE_URL", "")
+    if url and cfg.pg_host:
+        env["SYSTUTOR_DATABASE_URL"] = url.replace(
+            "@spanel-postgres-1:", f"@{cfg.pg_host}:"
+        )
     return env
 
 
