@@ -318,6 +318,10 @@ class RawAdapter:
         owner = self.provisioner.command(
             "exec", site.container_name, "stat", "-c", "%u", "/var/www/html"
         ).strip()
+        # En celdas rootless el volumen está dentro del user namespace del
+        # tenant: uid 0 del helper es el dueño real de los ficheros del sitio.
+        if self.runtime is not None and self.runtime.runtime == "rootless":
+            owner = "0"
         self.provisioner.command(
             "run",
             "--rm",
