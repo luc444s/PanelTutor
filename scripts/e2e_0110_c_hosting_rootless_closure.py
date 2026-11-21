@@ -380,6 +380,9 @@ class Config:
             "SPANEL_E2E_PROXY_NETWORK", "spanel-traefik-lab"
         )
     )
+    hosting_network: str = field(
+        default_factory=lambda: os.getenv("SPANEL_E2E_HOSTING_NETWORK", "proxy")
+    )
     dynamic_dir: Path = field(
         default_factory=lambda: Path(
             os.getenv(
@@ -1343,7 +1346,7 @@ def write_runtime_env(cfg: Config) -> tuple[Path, dict[str, str]]:
     values["SPANEL_HOSTING_BACKUPS_DIR"] = str(cfg.stage / "backups")
     values["SPANEL_HOSTING_BACKUP_SCRIPTS_DIR"] = "/app/scripts"
     values["SPANEL_HOSTING_TRAEFIK"] = values.get("SPANEL_HOSTING_TRAEFIK", "true")
-    values.setdefault("SPANEL_HOSTING_NETWORK", "proxy")
+    values["SPANEL_HOSTING_NETWORK"] = cfg.hosting_network
     values.setdefault("SPANEL_HOSTING_WP_IMAGE", "wordpress:latest")
     values.setdefault("SPANEL_HOSTING_DB_IMAGE", "mariadb:11")
     values.setdefault("SPANEL_HOSTING_STATIC_IMAGE", "nginx:alpine")
@@ -1409,6 +1412,11 @@ def start_stack(cfg: Config, runtime_env: Path, *, rootless: bool) -> None:
         "-e", "PYTHONPATH=/app/vendor/systutor-core/src:/app/vendor/systutor-core:/app",
         "-e", f"SPANEL_TENANTS_ROOTLESS={mode}",
         "-e", f"SPANEL_APPS_PROBE_BASELINE={baseline}",
+        "-e", (
+            "SPANEL_HOSTING_NETWORK=spanel-hosting"
+            if rootless
+            else f"SPANEL_HOSTING_NETWORK={cfg.hosting_network}"
+        ),
         *_mounts(cfg),
     ]
     docker(

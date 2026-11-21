@@ -629,6 +629,15 @@ class HostingService:
             self._provisioner_for(site).command(action, site.container_name)
         except Fallo as exc:
             raise AppError(str(exc), status_code=409, code="hosting_site_unavailable") from exc
+        runtime = self._runtime_for(site)
+        if (
+            runtime is not None
+            and runtime.runtime == "rootless"
+            and action in {"start", "restart"}
+        ):
+            # Un recreate del contenedor puede perder la red del ingress de la
+            # celda; reconciliar restaura el enlace y recarga nginx.
+            RootlessIngress(self._db, runtime).reconcile(site.tenant_id)
         self._audit_site(site, tenant_context, action)
         return HostingSiteSummary(
             id=site.id,
