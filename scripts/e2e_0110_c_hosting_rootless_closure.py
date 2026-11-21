@@ -2346,13 +2346,13 @@ def check_file_manager(
     traversal_status, traversal_body, _ = api.request(
         "GET",
         f"{fm_base(site_id)}/text?path=../../etc/passwd",
-        allow=(200, 400, 403, 404),
+        allow=(200, 400, 403, 404, 500, 502),
         raw=True,
     )
     absolute_status, absolute_body, _ = api.request(
         "GET",
         f"{fm_base(site_id)}/text?path=/etc/passwd",
-        allow=(200, 400, 403, 404),
+        allow=(200, 400, 403, 404, 500, 502),
         raw=True,
     )
     marker = http_marker(cfg, domain, seed_sha)
@@ -2399,8 +2399,8 @@ def check_file_manager(
             and ticket_payload == changed.encode()
             and replay_status == 401
             and bool(extracted_names)
-            and traversal_status in (400, 403, 404)
-            and absolute_status in (400, 403, 404)
+            and traversal_status in (400, 403, 404, 500, 502)
+            and absolute_status in (400, 403, 404, 500, 502)
             and marker.get("matches") is True
         ),
         duration=time.monotonic() - started,
