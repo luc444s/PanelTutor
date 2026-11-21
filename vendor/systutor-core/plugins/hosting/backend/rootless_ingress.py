@@ -154,6 +154,21 @@ class RootlessIngress:
         if extra is not None:
             self._validate(extra)
             routes.append(extra)
+        # Un contenedor detenido no resuelve en el DNS embebido de la red;
+        # nginx -t fallaría y dejaría el ingress sin recargar durante un
+        # lifecycle de otro sitio del mismo tenant.
+        active_routes = []
+        for route in routes:
+            info = self.runtime.inspect("container", route.target)
+            if not isinstance(info, dict) or not (info.get("State") or {}).get(
+                "Running"
+            ):
+                continue
+            networks = (info.get("NetworkSettings") or {}).get("Networks") or {}
+            if NETWORK not in networks:
+                self.runtime.command(("network", "connect", NETWORK, route.target))
+            active_routes.append(route)
+        routes = active_routes
         content = self.render(routes)
         self._network()
         candidate = self.runtime.write_private("ingress/routes.candidate.conf", content)
