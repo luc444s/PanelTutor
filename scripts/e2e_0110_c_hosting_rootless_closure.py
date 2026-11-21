@@ -1173,6 +1173,10 @@ def agent_env(cfg: Config) -> dict[str, str]:
         "SPANEL_EDGE_RELAY_BIND": cfg.relay_bind,
         "SPANEL_EDGE_RELAY_SOURCES": cfg.relay_source,
         "SPANEL_DB_BROKER_SOURCES": cfg.pma_source_ip,
+        "SPANEL_DB_BROKER_BIND": cfg.pma_source_ip,
+        "SPANEL_PMA_CONNECTOR_IMAGE": (
+            "alpine/socat@sha256:beb4a68d9e4fe6b0f21ea774a0fde6c31f580dde6368939ed70100c5385b015e"
+        ),
     }
     # El broker rootless de phpMyAdmin corre en el plan-agent host y necesita
     # el mismo URL de BD que el API desechable para resolver el relay.
