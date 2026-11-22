@@ -59,14 +59,37 @@ systemctl restart spanel-plan-agent
 systemctl is-active spanel-plan-agent
 ```
 
-Verifica el op `capacity` directamente contra el socket (solo lee):
+Verifica el op `capacity` directamente contra el socket (solo lee). Lo más
+fiable es hacerlo desde el propio contenedor, porque valida a la vez los
+montajes, el token y el agente:
+
+```bash
+cd /opt/spanel
+docker compose exec -T app python - <<'PY'
+import os
+from plugins.apps.backend.plans_client import HostPlanMaterializerClient
+
+print("socket:", os.path.exists("/run/spanel/plan-agent.sock"))
+print("token:", os.path.exists("/run/secrets/plan_agent_token"))
+client = HostPlanMaterializerClient(
+    "/run/spanel/plan-agent.sock", "/run/secrets/plan_agent_token"
+)
+print(client.capacity())
+PY
+```
+
+Alternativa desde el host (registrando el módulo antes de ejecutarlo, porque
+`plans_client` usa `dataclass`):
 
 ```bash
 python3 - <<'PY'
 import importlib.util
+import sys
+
 path = "/opt/spanel/vendor/systutor-core/plugins/apps/backend/plans_client.py"
 spec = importlib.util.spec_from_file_location("plans_client", path)
 module = importlib.util.module_from_spec(spec)
+sys.modules[spec.name] = module
 spec.loader.exec_module(module)
 client = module.HostPlanMaterializerClient(
     "/run/spanel/plan-agent.sock", "/etc/spanel/plan_agent_token"
