@@ -20,6 +20,12 @@ class FileTarget:
     # mounts this container's volumes in a disposable helper image instead.
     runtime: Literal["php", "volume"] = "php"
     execution_runtime: Literal["rootful", "rootless"] = "rootful"
+    # Optional host path of the volume behind a rootless static site. When set,
+    # the driver uses one rootful helper for every tenant (the image lives once
+    # in the rootful daemon) and the script chowns new files to owner_uid/gid.
+    volume_source: str | None = None
+    owner_uid: int | None = None
+    owner_gid: int | None = None
 
 
 FileTargetResolver = Callable[[Session, str, str, bool, tuple[str, ...]], FileTarget | None]

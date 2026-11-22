@@ -248,6 +248,48 @@ La última orden debe devolver el ID del dockerd de la celda, no un error de
 conexión. Si falla, revisa `journalctl -u user@60000` y que el socket exista en
 el host.
 
+## 8. Helper universal del file manager
+
+Para sitios estáticos el filemanager usa un helper PHP. Antes se ejecutaba en
+el dockerd de cada celda (`--volumes-from`), lo que descargaba una copia de
+`wordpress:cli` por tenant y cargaba sus capas contra el plan de RAM del tenant.
+
+Ahora, si el volumen de la celda es visible desde la app (lo es, porque
+`/var/lib/spanel/cells` está montado), el helper se ejecuta **una sola vez en el
+dockerd rootful** con el volumen montado por ruta del host:
+
+```text
+docker run --rm --network none --user 0:0 \
+  -v /var/lib/spanel/cells/<slug>/volumes/<volumen>/_data:/data \
+  --entrypoint php wordpress:cli -r <script> <payload>
+```
+
+Una imagen para todos los tenants; la caché de sus capas queda en el cgroup del
+host. Los ficheros nuevos se `chown` al uid de la celda (60000), para que dentro
+del namespace sigan apareciendo como root. Si la ruta no fuera accesible, el
+código cae automáticamente al helper por celda.
+
+Precarga única en rootful:
+
+```bash
+docker pull wordpress:cli
+```
+
+Y puedes liberar la copia antigua de la celda (ya no se usa):
+
+```bash
+docker -H unix:///var/lib/spanel/cells/<slug>/docker.sock rmi wordpress:cli
+```
+
+Verificación: sube un fichero y comprueba el propietario en el host:
+
+```bash
+ls -ln /var/lib/spanel/cells/miltonarquez/volumes/*/_data | head
+```
+
+Debe aparecer `60000 60000`, y el `memory.current` del user manager debe dejar
+de crecer por capas de imagen.
+
 ## Rollback
 
 1. Métricas: `systemctl disable --now spanel-cell-metrics`, retira el token y

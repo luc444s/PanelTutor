@@ -12,6 +12,15 @@ $root = realpath($args['root'] ?? '');
 if ($root === false || !is_dir($root)) fail_op('404', 'File root unavailable');
 $root = rtrim($root, '/');
 $max = (int)($args['limit'] ?? 52428800);
+$ownerUid = isset($args['owner_uid']) ? (int)$args['owner_uid'] : null;
+$ownerGid = isset($args['owner_gid']) ? (int)$args['owner_gid'] : null;
+// Rootful universal helper: new files must look like the cell's root inside
+// its user namespace, otherwise the site sees them as unmapped (nobody).
+function own(string $path): void {
+    global $ownerUid, $ownerGid;
+    if ($ownerUid !== null) @chown($path, $ownerUid);
+    if ($ownerGid !== null) @chgrp($path, $ownerGid);
+}
 function name_ok(string $name): void {
     if ($name === '' || $name === '.' || $name === '..' || str_contains($name, '/') ||
         str_contains($name, '\\') || str_contains($name, "\0")) fail_op('400', 'Invalid name');
@@ -68,6 +77,7 @@ function atomic_input(string $dest, bool $replace, ?string $expected = null): ar
         if (file_exists($dest)) chmod($temp, fileperms($dest) & 0777);
         else chmod($temp, 0644);
         if (!rename($temp, $dest)) fail_op('403', 'Cannot save file');
+        own($dest);
         return ['size' => $bytes, 'version' => hash_file('sha256', $dest)];
     } finally { if (file_exists($temp)) unlink($temp); }
 }
@@ -134,6 +144,7 @@ try {
             parent_dir($relative);
             if (file_exists($path)) fail_op('409', 'Name already exists');
             if (!mkdir($path, 0755)) fail_op('403', 'Cannot create directory');
+            own($path);
             break;
         case 'rename':
             nonroot($relative);
@@ -142,6 +153,7 @@ try {
             $dest = parent_dir($relative) . '/' . $newName;
             if (file_exists($dest) || is_link($dest)) fail_op('409', 'Name already exists');
             if (!rename($path, $dest)) fail_op('403', 'Cannot rename');
+            own($dest);
             break;
         case 'delete':
             nonroot($relative);
@@ -197,6 +209,7 @@ try {
                 }
                 if (!$zip->close()) fail_op('400', 'ZIP failed');
                 if (!rename($temp, $dest)) fail_op('403', 'Cannot save ZIP');
+                own($dest);
             } finally { if (is_file($temp)) unlink($temp); }
             $result = entry($dest);
             break;
@@ -232,7 +245,7 @@ try {
                     foreach (array_slice($pieces, 0, $directory ? null : -1) as $part) {
                         $cursor .= '/' . $part;
                         if (is_link($cursor) || (file_exists($cursor) && !is_dir($cursor))) fail_op('409', 'Path conflict');
-                        if (!is_dir($cursor)) { if (!mkdir($cursor, 0755)) fail_op('403', 'Cannot create directory'); $created[] = $cursor; }
+                        if (!is_dir($cursor)) { if (!mkdir($cursor, 0755)) fail_op('403', 'Cannot create directory'); own($cursor); $created[] = $cursor; }
                     }
                     if ($directory) continue;
                     if (file_exists($dest)) continue; // Default policy: skip existing files.
@@ -245,6 +258,7 @@ try {
                         if ($bytes === false || $bytes > $max) fail_op('413', 'Entry too large');
                         chmod($temp, 0644);
                         if (!rename($temp, $dest)) fail_op('403', 'Cannot extract file');
+                        own($dest);
                         $created[] = $dest;
                     } finally { if (is_file($temp)) unlink($temp); }
                 }

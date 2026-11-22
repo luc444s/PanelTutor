@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import io
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+from pathlib import Path
 from typing import Annotated
 from urllib.parse import quote
 
@@ -116,16 +117,74 @@ def _authorize_target(
         )
         if target is None:
             raise HTTPException(404, "File target not found")
-        runtime = (
-            resolve_container_runtime(
-                request.app, db, context.current_tenant_id, target.execution_runtime
-            )
-            if target.execution_runtime == "rootless"
-            else None
+        return _access_for(
+            request.app,
+            db,
+            target,
+            context.current_tenant_id,
+            context.current_branch_id,
+            user.id,
         )
-        return Access(
-            target, context.current_tenant_id, context.current_branch_id, user.id, runtime
+
+
+def _access_for(
+    app,
+    db,
+    target: FileTarget,
+    tenant_id: str,
+    branch_id: str | None,
+    user_id: str,
+) -> Access:
+    if target.execution_runtime != "rootless":
+        return Access(target, tenant_id, branch_id, user_id)
+    runtime = resolve_container_runtime(app, db, tenant_id, target.execution_runtime)
+    universal = _universal_volume_target(target, runtime) if target.runtime == "volume" else None
+    if universal is not None:
+        # One rootful helper serves every tenant; no image is pulled into the
+        # cell and its pages are not charged to the tenant cgroup.
+        return Access(universal, tenant_id, branch_id, user_id)
+    return Access(target, tenant_id, branch_id, user_id, runtime)
+
+
+def _universal_volume_target(
+    target: FileTarget, runtime: ContainerRuntimeHandle
+) -> FileTarget | None:
+    """Map a rootless static site to its host volume, when it is reachable.
+
+    The app already mounts ``/var/lib/spanel/cells``; using that path lets a
+    single rootful helper image serve every tenant. If anything is unexpected
+    the caller falls back to the per-cell helper, never to a broken path.
+    """
+    try:
+        info = runtime.inspect("container", target.container)
+        health = runtime.health()
+    except Exception:  # noqa: BLE001 - fallback must never break the listing
+        return None
+    if not isinstance(info, dict) or health.cell_uid is None:
+        return None
+    root = target.root.rstrip("/") or "/"
+    for mount in info.get("Mounts") or []:
+        if not isinstance(mount, dict) or mount.get("Type") != "volume":
+            continue
+        source = str(mount.get("Source") or "")
+        destination = str(mount.get("Destination") or "").rstrip("/") or "/"
+        if not source or not Path(source).is_dir():
+            continue
+        if root == destination:
+            relative = ""
+        elif root.startswith(destination + "/"):
+            relative = root[len(destination) + 1 :]
+        else:
+            continue
+        helper_root = "/data" + (f"/{relative}" if relative else "")
+        return replace(
+            target,
+            root=helper_root,
+            volume_source=source,
+            owner_uid=health.cell_uid,
+            owner_gid=health.cell_uid,
         )
+    return None
 
 
 def docker_environment() -> dict[str, str]:
@@ -191,15 +250,13 @@ def ticket_access(
         )
         if target is None:
             raise HTTPException(404, "File target not found")
-        runtime = (
-            resolve_container_runtime(
-                request.app, db, context.current_tenant_id, target.execution_runtime
-            )
-            if target.execution_runtime == "rootless"
-            else None
-        )
-        return Access(
-            target, context.current_tenant_id, context.current_branch_id, user.id, runtime
+        return _access_for(
+            request.app,
+            db,
+            target,
+            context.current_tenant_id,
+            context.current_branch_id,
+            user.id,
         ), record["path"]
 
 

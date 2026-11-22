@@ -46,6 +46,17 @@ def _runtime_command(
 
 def _docker_command(target: FileTarget, env: dict[str, str], encoded: str) -> str:
     # All user-supplied fields are encoded into a single quoted argv element.
+    if target.volume_source:
+        # One rootful helper for every tenant. The image lives once in the
+        # rootful daemon and the cell's host volume is bind-mounted, so no
+        # layers are pulled into (or charged to) the tenant cgroup.
+        helper = env.get("SPANEL_FILEMANAGER_HELPER_IMAGE", "").strip() or "wordpress:cli"
+        return (
+            f"docker run --rm -i --network none --user 0:0 "
+            f"-v {shlex.quote(target.volume_source + ':/data')} "
+            f"--entrypoint php {shlex.quote(helper)} -r "
+            f"{shlex.quote(SCRIPT)} {shlex.quote(encoded)}"
+        )
     if target.runtime == "volume":
         # Static sites run nginx:alpine, with no PHP and no www-data user. Use
         # the already-required wp-cli image (PHP + ZipArchive) as a disposable
@@ -64,11 +75,26 @@ def _docker_command(target: FileTarget, env: dict[str, str], encoded: str) -> st
     )
 
 
+def _payload(target: FileTarget, op: str, **arguments: object) -> str:
+    payload: dict[str, object] = {
+        "root": target.root,
+        "op": op,
+        "limit": TRANSFER_LIMIT,
+        **arguments,
+    }
+    if target.owner_uid is not None:
+        payload["owner_uid"] = target.owner_uid
+    if target.owner_gid is not None:
+        payload["owner_gid"] = target.owner_gid
+    return base64.b64encode(json.dumps(payload).encode()).decode()
+
+
 def _command(target: FileTarget, op: str, env: dict[str, str], **arguments: object) -> list[str]:
-    encoded = base64.b64encode(
-        json.dumps({"root": target.root, "op": op, "limit": TRANSFER_LIMIT, **arguments}).encode()
-    ).decode()
+    encoded = _payload(target, op, **arguments)
     command = _docker_command(target, env, encoded)
+    if target.volume_source:
+        # The universal helper always runs against the local rootful daemon.
+        return ["sh", "-c", command]
     if env.get("SPANEL_DOCKER_TRANSPORT", "ssh") == "local":
         return ["sh", "-c", command]
     return [
@@ -89,9 +115,7 @@ def _command(target: FileTarget, op: str, env: dict[str, str], **arguments: obje
 def _runtime_args(
     target: FileTarget, op: str, env: dict[str, str], **arguments: object
 ) -> tuple[str, ...]:
-    encoded = base64.b64encode(
-        json.dumps({"root": target.root, "op": op, "limit": TRANSFER_LIMIT, **arguments}).encode()
-    ).decode()
+    encoded = _payload(target, op, **arguments)
     if target.runtime == "volume":
         helper = env.get("SPANEL_FILEMANAGER_HELPER_IMAGE", "").strip() or "wordpress:cli"
         return (

@@ -70,3 +70,26 @@ def test_delete_many_passes_every_path_in_one_container_command() -> None:
     assert command.count("docker exec") == 1
     assert payload["op"] == "delete_many"
     assert payload["paths"] == ["folder/a.txt", "folder/b.txt"]
+
+
+def test_universal_volume_uses_one_rootful_helper(tmp_path) -> None:
+    source = tmp_path / "vol"
+    target = FileTarget(
+        "spanel-demo-web",
+        "/data",
+        "site-2",
+        runtime="volume",
+        execution_runtime="rootless",
+        volume_source=str(source),
+        owner_uid=60000,
+        owner_gid=60000,
+    )
+    command = _shell(_command(target, "upload", {"SPANEL_DOCKER_TRANSPORT": "ssh"}, path="a.txt"))
+
+    assert "--volumes-from" not in command
+    assert "--user 0:0" in command
+    assert f"-v {shlex.quote(str(source) + ':/data')}" in command
+    payload = json.loads(base64.b64decode(shlex.split(command)[-1]))
+    assert payload["root"] == "/data"
+    assert payload["owner_uid"] == 60000
+    assert payload["owner_gid"] == 60000
