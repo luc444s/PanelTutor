@@ -23,6 +23,14 @@ test -f /etc/spanel/plan_agent_token && echo "plan token ok"
 docker compose ps
 ```
 
+El contenedor monta `/var/lib/spanel` en solo lectura y encima los volúmenes
+`apps_state` y `hosting_backups`. Docker exige que esos puntos de montaje
+existan en el host (los volúmenes siguen viviendo en `/var/lib/docker/volumes`):
+
+```bash
+install -d -m 0755 /var/lib/spanel/apps /var/lib/spanel/hosting-backups
+```
+
 Guarda el SHA actual como `<SHA_ANTERIOR>`.
 
 ## 1. Desplegar el commit de la app
