@@ -1,9 +1,10 @@
 """SSE de métricas vivas por tenant (A.SPEC 0113).
 
 Expone un único endpoint de solo lectura que reenvía los samples del daemon
-Unix como Server-Sent Events. No calcula métricas, no escribe cgroups y exige
-ámbito de plataforma: en v1 un tenant admin no puede abrir el stream de otro
-tenant ni el suyo propio a través de esta ruta.
+Unix como Server-Sent Events. No calcula métricas ni escribe cgroups. El
+ámbito se resuelve por tenant: cualquier usuario autenticado puede leer las
+métricas de su propio tenant, y solo el administrador de plataforma puede
+abrir el stream de otro tenant.
 """
 
 from __future__ import annotations
@@ -26,11 +27,7 @@ from plugins.tenant.backend.metrics_client import (
 from plugins.tenant.backend.service import get_tenant_by_id
 from systutor.api.deps import get_db_session
 from systutor.core.errors import AppError
-from systutor.kernel.auth.dependencies import (
-    get_current_tenant_context,
-    require_permission,
-)
-from systutor.kernel.auth.models import User
+from systutor.kernel.auth.dependencies import get_current_tenant_context
 from systutor.kernel.tenants.context import TenantContext
 
 router = APIRouter(prefix="/tenants", tags=["tenant-metrics"])
@@ -88,13 +85,9 @@ def stream_tenant_metrics(
     interval_ms: int = Query(default=1000, ge=250, le=60_000),
     db: Session = Depends(get_db_session),
     context: TenantContext = Depends(get_current_tenant_context),
-    _current_user: User = Depends(
-        require_permission("tenant.tenants.manage", platform_only=True)
-    ),
     client: MetricsClient = Depends(get_metrics_client),
 ) -> StreamingResponse:
-    if not context.is_platform:
-        # Defensa explícita además de `platform_only`.
+    if not context.is_platform and tenant_id != context.current_tenant_id:
         raise HTTPException(status_code=403, detail="Permission denied")
 
     tenant = get_tenant_by_id(db, tenant_id)

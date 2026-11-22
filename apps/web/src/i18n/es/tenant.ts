@@ -54,7 +54,6 @@ const messages: Record<string, string> = {
   "debug.com": "debug.com",
   "Add": "Agregar",
   "Close": "Cerrar",
-  "Users — {name}": "Usuarios — {name}",
   "Profile": "Perfil",
   "Roles": "Roles",
   "Select user": "Seleccionar usuario",

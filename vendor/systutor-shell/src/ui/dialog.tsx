@@ -4,7 +4,7 @@ import { cn } from "./cn";
 
 type DialogProps = {
   open: boolean;
-  title: string;
+  title?: string;
   description?: string;
   children: ReactNode;
   actions?: ReactNode;
@@ -43,10 +43,12 @@ export function Dialog({
         )}
         onClick={(event) => event.stopPropagation()}
       >
-        <div className="space-y-1 border-b border-border p-5">
-          <h2 className="text-lg font-semibold text-card-foreground">{title}</h2>
-          {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
-        </div>
+        {title || description ? (
+          <div className="space-y-1 border-b border-border p-5">
+            {title ? <h2 className="text-lg font-semibold text-card-foreground">{title}</h2> : null}
+            {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
+          </div>
+        ) : null}
         <div className="overflow-y-auto p-5">{children}</div>
         {actions ? <div className="border-t border-border p-5">{actions}</div> : null}
       </div>

@@ -4,6 +4,7 @@ import {
   METRICS_HISTORY,
   cpuLimitCores,
   cpuPercent,
+  formatMemoryBytes,
   isCellMetricsSample,
   memoryPercent,
   parseMetricsEvent,
@@ -161,6 +162,16 @@ describe("percentages", () => {
     const value = sample({ cpu: { ...sample().cpu, quota_usec: null, period_usec: null } });
     expect(cpuLimitCores(value)).toBeNull();
     expect(cpuPercent(value)).toBeNull();
+  });
+});
+
+describe("memory formatting", () => {
+  it("renders MiB/GiB and a dash for unknown values", () => {
+    expect(formatMemoryBytes(null)).toBe("—");
+    expect(formatMemoryBytes(undefined)).toBe("—");
+    expect(formatMemoryBytes(Number.NaN)).toBe("—");
+    expect(formatMemoryBytes(128 * 1024 * 1024)).toBe("128 MiB");
+    expect(formatMemoryBytes(2 * 1024 ** 3)).toBe("2.00 GiB");
   });
 });
 

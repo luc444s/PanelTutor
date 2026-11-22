@@ -194,6 +194,16 @@ export function percentOf(
   return Math.max(0, Math.min(100, (used / limit) * 100));
 }
 
+const MIB = 1024 * 1024;
+const GIB = 1024 ** 3;
+
+/** Compact human-readable size for the sidebar watcher; `—` when unknown. */
+export function formatMemoryBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined || !Number.isFinite(bytes)) return "—";
+  if (bytes >= GIB) return `${(bytes / GIB).toFixed(2)} GiB`;
+  return `${Math.round(bytes / MIB)} MiB`;
+}
+
 export function cpuLimitCores(sample: CellMetricsSample): number | null {
   const { quota_usec: quota, period_usec: period } = sample.cpu;
   if (quota === null || period === null || period <= 0) return null;

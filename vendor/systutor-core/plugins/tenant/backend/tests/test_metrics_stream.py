@@ -232,24 +232,36 @@ def test_stream_returns_503_before_streaming_when_the_daemon_is_missing() -> Non
     assert fake.subscribed is None, "no se debe abrir el stream si el ping falla"
 
 
-def test_stream_requires_a_platform_scope() -> None:
+def test_stream_allows_a_tenant_user_to_read_its_own_tenant() -> None:
+    fake = FakeMetricsClient([SAMPLE])
+
+    with _metrics_app(fake, _context(platform=False, manage=False)) as client:
+        response = client.get(STREAM)
+
+    assert response.status_code == 200
+    assert fake.subscribed == ("demo", 1000)
+
+
+def test_stream_denies_a_tenant_user_reading_another_tenant() -> None:
     fake = FakeMetricsClient([SAMPLE])
 
     with _metrics_app(fake, _context(platform=False)) as client:
-        response = client.get(STREAM)
+        response = client.get(
+            "/api/v1/plugins/tenant/tenants/t2/metrics/stream"
+        )
 
     assert response.status_code == 403
     assert fake.subscribed is None
 
 
-def test_stream_requires_the_manage_permission() -> None:
+def test_stream_does_not_require_the_manage_permission() -> None:
     fake = FakeMetricsClient([SAMPLE])
 
     with _metrics_app(fake, _context(platform=True, manage=False)) as client:
         response = client.get(STREAM)
 
-    assert response.status_code == 403
-    assert fake.subscribed is None
+    assert response.status_code == 200
+    assert fake.subscribed == ("demo", 1000)
 
 
 def test_stream_returns_404_for_an_unknown_tenant() -> None:

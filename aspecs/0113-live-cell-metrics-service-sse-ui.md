@@ -98,8 +98,9 @@ El CLI de 0112 sigue funcionando igual.
     - `SPANEL_CELL_METRICS_TIMEOUT` (defecto 5 s).
 - Nuevo router `metrics_router.py` en el plugin tenant:
   - `GET /api/v1/plugins/tenant/tenants/{tenant_id}/metrics/stream?interval_ms=1000`;
-  - permiso **`tenant.tenants.manage`** y ámbito de plataforma; un tenant admin
-    no puede abrir el stream de otro tenant en v1;
+  - ámbito de tenant: cualquier usuario autenticado puede abrir el stream de
+    su propio tenant; solo el administrador de plataforma puede abrir el de
+    otro tenant;
   - resuelve el `slug` del tenant en PostgreSQL;
   - responde `503 tenant.metrics_unavailable` si el daemon no está disponible
     antes de abrir el stream;
@@ -220,7 +221,7 @@ invariants:
   - "Token + SO_PEERCRED + allowlist se validan antes de abrir cgroups."
   - "Slug, interval_ms y uid se validan; nunca se interpolan rutas sin validar."
   - "El JSON de cada sample conserva el contrato de 0112."
-  - "La API SSE exige tenant.tenants.manage y ámbito de plataforma."
+  - "La API SSE permite el tenant propio a cualquier usuario autenticado y reserva el resto al ámbito de plataforma."
   - "La UI se conecta con Authorization; no se usa EventSource sin cabeceras."
   - "La UI cancela el stream al desmontar y reconecta con backoff acotado."
   - "No se mide almacenamiento ni se introducen cuotas."

@@ -186,7 +186,7 @@ export function TenantUsersDialog({ tenant, onClose }: {
   }
 
   return <>
-    <Dialog open={Boolean(tenant)} title={t("Users — {name}", { name: tenant?.name ?? "" })} onClose={onClose} maxWidthClassName="max-w-2xl">
+    <Dialog open={Boolean(tenant)} onClose={onClose} maxWidthClassName="max-w-2xl">
       <Tabs value={tab} onChange={setTab} tabs={tabs} />
     </Dialog>
     <RolePermissionsDialog role={roleEditor} permissions={permissionsQuery.data?.permissions ?? []} saving={roleMutation.isPending} error={roleError} onClose={() => setRoleEditor(null)} onSave={(names) => roleMutation.mutateAsync(names)} />
