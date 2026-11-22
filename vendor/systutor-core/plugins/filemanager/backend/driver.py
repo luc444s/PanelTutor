@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import inspect
 import json
 import os
 import shlex
@@ -19,6 +20,28 @@ from systutor.contracts.file_targets import FileTarget
 SCRIPT = Path(__file__).with_name("container.php").read_text(encoding="utf-8").removeprefix("<?php")
 TRANSFER_LIMIT = 50 * 1024 * 1024
 EDIT_LIMIT = 1024 * 1024
+RUNTIME_TIMEOUT = 60.0
+
+
+def _runtime_command(
+    runtime: ContainerRuntimeHandle,
+    args: tuple[str, ...],
+    *,
+    input: bytes | None = None,
+) -> bytes:
+    """Call the runtime handle with a bound when it supports one.
+
+    The rootless handle can block on a first-time ``docker run`` (image pull),
+    so the HTTP request must not hang forever. Handles that do not accept the
+    keyword keep their original unbounded call.
+    """
+    try:
+        parameters = inspect.signature(runtime.command).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    if "timeout" in parameters:
+        return runtime.command(args, input=input, timeout=RUNTIME_TIMEOUT)
+    return runtime.command(args, input=input)
 
 
 def _docker_command(target: FileTarget, env: dict[str, str], encoded: str) -> str:
@@ -128,7 +151,7 @@ def operation(
 ) -> dict:
     if runtime is not None:
         try:
-            stdout = runtime.command(_runtime_args(target, op, env, **arguments))
+            stdout = _runtime_command(runtime, _runtime_args(target, op, env, **arguments))
             return json.loads(stdout)
         except ContainerRuntimeError as exc:
             raise HTTPException(502, "Could not access the container files") from exc
@@ -164,7 +187,9 @@ def upload(
             raise HTTPException(413, "File too large")
         try:
             return json.loads(
-                runtime.command(_runtime_args(target, op, env, **arguments), input=payload)
+                _runtime_command(
+                    runtime, _runtime_args(target, op, env, **arguments), input=payload
+                )
             )
         except ContainerRuntimeError as exc:
             raise HTTPException(502, "Could not access the container files") from exc
@@ -211,7 +236,7 @@ def download(
 ) -> tuple[subprocess.Popen[bytes], Iterator[bytes]]:
     if runtime is not None:
         try:
-            payload = runtime.command(_runtime_args(target, "download", env, path=path))
+            payload = _runtime_command(runtime, _runtime_args(target, "download", env, path=path))
         except ContainerRuntimeError as exc:
             raise HTTPException(502, "Could not access the container files") from exc
 

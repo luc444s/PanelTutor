@@ -32,10 +32,24 @@ class RootlessCellHandle:
     def _env(self) -> dict[str, str]:
         return {**os.environ, "DOCKER_HOST": f"unix://{self._socket}"}
 
-    def command(self, args: tuple[str, ...], *, input: bytes | None = None) -> bytes:
-        result = subprocess.run(
-            ["docker", *args], input=input, capture_output=True, env=self._env(), check=False
-        )
+    def command(
+        self,
+        args: tuple[str, ...],
+        *,
+        input: bytes | None = None,
+        timeout: float | None = None,
+    ) -> bytes:
+        try:
+            result = subprocess.run(
+                ["docker", *args],
+                input=input,
+                capture_output=True,
+                env=self._env(),
+                check=False,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            raise ContainerRuntimeError("cell docker command timed out") from exc
         if result.returncode:
             raise ContainerRuntimeError(
                 (result.stderr or result.stdout)[:400].decode(errors="replace")
