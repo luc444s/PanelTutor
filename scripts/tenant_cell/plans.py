@@ -177,6 +177,52 @@ def expected_probe_limits(plan: dict[str, Any]) -> dict[str, str]:
     }
 
 
+def probe_mismatches(
+    uid: int,
+    state: dict[str, Any],
+    evidence: dict[str, Any],
+) -> list[str]:
+    """Explain every kernel-evidence check that did not match the plan.
+
+    ``verify`` used to return ``ok: False`` without a reason, which the backend
+    stored as the opaque ``kernel evidence differs``.  Keeping the concrete
+    differences here makes the plan row actionable (A.SPEC 0111 keeps the
+    cgroup-only contract; this only reports the cause).
+    """
+    expected = evidence.get("expected", {})
+    problems: list[str] = []
+
+    expected_slice = user_slice(uid)
+    observed_slice = str(state.get("slice") or "")
+    if observed_slice != expected_slice:
+        problems.append(
+            f"slice differs: expected {expected_slice}, observed "
+            f"{observed_slice or '<empty>'} (legacy reparenting?)"
+        )
+
+    observed_owner = str(state.get("owner_uid") or "")
+    if observed_owner != str(uid):
+        problems.append(
+            f"OwnerUID differs: expected {uid}, observed "
+            f"{observed_owner or '<empty>'}"
+        )
+
+    for key in ("memory_max", "cpu_max", "pids_max"):
+        observed = str(evidence.get(key) or "")
+        wanted = str(expected.get(key) or "")
+        if observed != wanted:
+            problems.append(
+                f"{key} differs: expected {wanted}, observed "
+                f"{observed or '<empty>'}"
+            )
+
+    if int(evidence.get("cpu_delta_usec") or 0) <= 0:
+        problems.append("cpu accounting shows no usage under load")
+    if evidence.get("eperm"):
+        problems.append("container logs contain EPERM")
+    return problems
+
+
 def set_property_args(uid: int, plan: dict[str, Any]) -> list[str]:
     """Build the bounded systemd mutation for an existing user manager."""
     checked = validate_plan(plan["memory"], plan["cpus"], plan["pids"])
@@ -448,16 +494,10 @@ class PlanExecutorMixin:
                 for line in events.splitlines()
             )
 
-            expected = evidence["expected"]
-            evidence["ok"] = (
-                state["slice"] == user_slice(uid)
-                and state["owner_uid"] == str(uid)
-                and evidence["memory_max"] == expected["memory_max"]
-                and evidence["cpu_max"] == expected["cpu_max"]
-                and evidence["pids_max"] == expected["pids_max"]
-                and evidence["cpu_delta_usec"] > 0
-                and not evidence["eperm"]
-            )
+            problems = probe_mismatches(uid, state, evidence)
+            evidence["ok"] = not problems
+            if problems:
+                evidence["error"] = "; ".join(problems)[:400]
             return evidence
         finally:
             docker(["rm", "-f", container])

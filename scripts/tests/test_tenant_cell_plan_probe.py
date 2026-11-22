@@ -98,3 +98,55 @@ def test_probe_cli_exits_one_on_failed_evidence(monkeypatch) -> None:
     ])
     assert result.exit_code == 1
     assert json.loads(result.output)["ok"] is False
+
+
+def _probe_state(**overrides):
+    state = {"slice": plans.user_slice(60000), "owner_uid": "60000"}
+    state.update(overrides)
+    return state
+
+
+def _probe_evidence(**overrides):
+    evidence = {
+        "expected": plans.expected_probe_limits(
+            {"memory": "256M", "cpus": 0.5, "pids": 128}
+        ),
+        "memory_max": "268435456",
+        "cpu_max": "50000 100000",
+        "pids_max": "128",
+        "cpu_delta_usec": 1_000_000,
+        "eperm": False,
+    }
+    evidence.update(overrides)
+    return evidence
+
+
+def test_probe_mismatches_is_empty_when_every_check_matches() -> None:
+    assert plans.probe_mismatches(
+        60000, _probe_state(), _probe_evidence()
+    ) == []
+
+
+def test_probe_mismatches_names_the_legacy_slice_and_values() -> None:
+    problems = plans.probe_mismatches(
+        60000,
+        _probe_state(slice="tenant-demo.slice"),
+        _probe_evidence(memory_max="536870912", cpu_delta_usec=0),
+    )
+    joined = "; ".join(problems)
+    assert "slice differs" in joined
+    assert "tenant-demo.slice" in joined
+    assert "memory_max differs" in joined
+    assert "cpu accounting" in joined
+
+
+def test_probe_mismatches_reports_owner_and_eperm() -> None:
+    problems = plans.probe_mismatches(
+        60000,
+        _probe_state(owner_uid=""),
+        _probe_evidence(eperm=True),
+    )
+    joined = "; ".join(problems)
+    assert "OwnerUID differs" in joined
+    assert "EPERM" in joined
+
