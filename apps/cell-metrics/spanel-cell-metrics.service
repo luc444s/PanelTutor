@@ -1,7 +1,8 @@
 # Reference systemd unit for the Spanel cell metrics daemon (A.SPEC 0113).
 #
 # Install the binary at /usr/local/bin/spanel-cell-metrics, keep the token in a
-# root-only file and adjust --allowed-uids to the uid of the app runtime.
+# persistent root-only file and adjust --allowed-uids to the uid of the app
+# runtime. The repository installer renders this unit automatically.
 [Unit]
 Description=Spanel read-only cell metrics daemon (AF_UNIX)
 Documentation=https://github.com/systutor/spanel
@@ -17,7 +18,7 @@ RuntimeDirectoryMode=0755
 UMask=0077
 ExecStart=/usr/local/bin/spanel-cell-metrics --serve \
   --socket /run/spanel/cell-metrics.sock \
-  --token-file /run/secrets/cell_metrics_token \
+  --token-file /etc/spanel/cell_metrics_token \
   --allowed-uids 0
 Restart=on-failure
 RestartSec=2
@@ -49,7 +50,7 @@ SystemCallFilter=@system-service
 SystemCallErrorNumber=EPERM
 ReadOnlyPaths=/sys/fs/cgroup
 ReadOnlyPaths=/etc/passwd
-ReadOnlyPaths=/run/secrets/cell_metrics_token
+ReadOnlyPaths=/etc/spanel/cell_metrics_token
 
 # Hard resource bounds: a few hundred KiB per sample and one sample/second
 # per connected client.

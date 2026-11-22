@@ -36,12 +36,22 @@ cargo build --release
 El script `scripts/cell_metrics_cli.py` resuelve el uid desde
 `/var/lib/spanel/registry.json`, localiza este binario y dibuja la tabla.
 
+En el host, `scripts/install_cell_metrics.py` automatiza la compilación, el
+token persistente en `/etc/spanel/cell_metrics_token`, la unidad systemd y la
+verificación `PING`/`SNAPSHOT`:
+
+```bash
+python3 scripts/install_cell_metrics.py --check
+python3 scripts/install_cell_metrics.py --slug demo
+```
+
 ## Modo daemon (`--serve`)
 
 ```bash
 sudo install -m 0750 target/release/spanel-cell-metrics /usr/local/bin/spanel-cell-metrics
 sudo install -d -m 0755 /run/spanel
-sudo install -m 0600 /dev/null /run/secrets/cell_metrics_token
+sudo install -d -m 0755 /etc/spanel
+sudo install -m 0600 /dev/null /etc/spanel/cell_metrics_token
 # escribe un token de una sola palabra, sin espacios ni saltos internos
 sudo systemctl enable --now spanel-cell-metrics.service
 ```
@@ -49,7 +59,7 @@ sudo systemctl enable --now spanel-cell-metrics.service
 ```bash
 spanel-cell-metrics --serve \
   --socket /run/spanel/cell-metrics.sock \
-  --token-file /run/secrets/cell_metrics_token \
+  --token-file /etc/spanel/cell_metrics_token \
   --allowed-uids 0 \
   [--cgroup-root /sys/fs/cgroup] \
   [--passwd /etc/passwd]
@@ -89,7 +99,7 @@ PING\n
 El JSON es exactamente el de la sección siguiente. Ejemplo con `socat`:
 
 ```bash
-printf 'SNAPSHOT demo %s\n' "$(sudo cat /run/secrets/cell_metrics_token)" \
+printf 'SNAPSHOT demo %s\n' "$(sudo cat /etc/spanel/cell_metrics_token)" \
   | socat - UNIX-CONNECT:/run/spanel/cell-metrics.sock
 ```
 

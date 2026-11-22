@@ -11,6 +11,13 @@ services:
       - .env.docker
     environment:
       WORKERS: ${WORKERS:-1}
+      # A.SPEC 0102/0111/0113: the app never runs host code. It only speaks to
+      # two root-owned Unix sockets mounted read-only below. Keep these paths
+      # identical to the values in the tenant settings and systemd units.
+      SPANEL_PLAN_AGENT_SOCKET: /run/spanel/plan-agent.sock
+      SPANEL_PLAN_AGENT_TOKEN_FILE: /run/secrets/plan_agent_token
+      SPANEL_CELL_METRICS_SOCKET: /run/spanel/cell-metrics.sock
+      SPANEL_CELL_METRICS_TOKEN_FILE: /run/secrets/cell_metrics_token
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - apps_state:/var/lib/spanel/apps
@@ -19,6 +26,24 @@ services:
       # Estado del agente de certificados de correo (A.SPEC 0035/0036).
       # La app solo lee state/jobs y escribe requests; nunca claves privadas.
       - /var/lib/spanel/cert-manager:/var/lib/spanel/cert-manager
+      # Host sockets (read-only). The agent/daemon must exist before `up`:
+      # missing token files fail closed instead of creating host directories.
+      - type: bind
+        source: ${SPANEL_AGENT_RUNTIME_DIR:-/run/spanel}
+        target: /run/spanel
+        read_only: true
+      - type: bind
+        source: ${SPANEL_PLAN_AGENT_TOKEN_PATH:-/etc/spanel/plan_agent_token}
+        target: /run/secrets/plan_agent_token
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SPANEL_CELL_METRICS_TOKEN_PATH:-/etc/spanel/cell_metrics_token}
+        target: /run/secrets/cell_metrics_token
+        read_only: true
+        bind:
+          create_host_path: false
     networks:
       - default
       - proxy
