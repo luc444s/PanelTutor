@@ -1,10 +1,15 @@
-# spanel-cell-metrics (A.SPEC 0112)
+# spanel-cell-metrics (A.SPEC 0112 / 0113)
 
 Colector de solo lectura de métricas de una celda desde **cgroups v2**. Lee los
 dos árboles de la celda, suma sus contadores de uso (RAM, CPU, PIDs, eventos e
 I/O) y toma el límite más restrictivo para `memory.max`, `cpu.max` y
 `pids.max`. Emite un snapshot JSON por línea. No escribe cgroups, no abre red y
 no ejecuta comandos externos.
+
+Desde A.SPEC 0113 el mismo binario tiene un modo **daemon** (`--serve`) que
+escucha en un socket Unix (`AF_UNIX`, nunca TCP), autentica por token y
+`SO_PEERCRED`, y sirve el mismo JSON por petición. El CLI de 0112 sigue igual.
+
 
 ## Build
 
@@ -30,6 +35,68 @@ cargo build --release
 
 El script `scripts/cell_metrics_cli.py` resuelve el uid desde
 `/var/lib/spanel/registry.json`, localiza este binario y dibuja la tabla.
+
+## Modo daemon (`--serve`)
+
+```bash
+sudo install -m 0750 target/release/spanel-cell-metrics /usr/local/bin/spanel-cell-metrics
+sudo install -d -m 0755 /run/spanel
+sudo install -m 0600 /dev/null /run/secrets/cell_metrics_token
+# escribe un token de una sola palabra, sin espacios ni saltos internos
+sudo systemctl enable --now spanel-cell-metrics.service
+```
+
+```bash
+spanel-cell-metrics --serve \
+  --socket /run/spanel/cell-metrics.sock \
+  --token-file /run/secrets/cell_metrics_token \
+  --allowed-uids 0 \
+  [--cgroup-root /sys/fs/cgroup] \
+  [--passwd /etc/passwd]
+```
+
+Garantías del daemon:
+
+- escucha **solo** en `AF_UNIX`; no hay ningún puerto TCP;
+- crea el socket con modo `0600` y elimina un socket huérfano al arrancar (un
+  fichero normal con esa ruta nunca se borra);
+- `--allowed-uids` es una lista separada por comas de uids de peer permitidos
+  vía `SO_PEERCRED` (defecto `0`);
+- `--token-file` es un fichero de solo lectura con un token de una palabra; se
+  lee al arrancar y se compara en tiempo constante;
+- el uid de la celda se resuelve leyendo `<passwd>` y buscando
+  `spanel-<slug>`; no se parsea `registry.json`;
+- `slug`, `interval_ms` (250–60000), token y uid se validan **antes** de abrir
+  cualquier cgroup;
+- cada conexión tiene su propio `Sampler`; no se comparte estado;
+- solo lectura: no escribe cgroups, no abre red y no ejecuta comandos.
+
+### Protocolo por líneas
+
+```text
+SUBSCRIBE <slug> <interval_ms> <token>\n
+SNAPSHOT <slug> <token>\n
+PING\n
+```
+
+- `SUBSCRIBE`: una línea JSON por intervalo hasta que el cliente cierre.
+- `SNAPSHOT`: un warmup de 250 ms, una línea JSON y cierre.
+- `PING`: `{"ok":true,"pong":true}\n`.
+- Error: `ERROR <code> <message>\n` y cierre. Códigos: `unauthorized`,
+  `peer_denied`, `invalid_slug`, `invalid_interval`, `unknown_user`,
+  `unavailable`, `sampling_failed`, `invalid_request`.
+
+El JSON es exactamente el de la sección siguiente. Ejemplo con `socat`:
+
+```bash
+printf 'SNAPSHOT demo %s\n' "$(sudo cat /run/secrets/cell_metrics_token)" \
+  | socat - UNIX-CONNECT:/run/spanel/cell-metrics.sock
+```
+
+La unidad de referencia `spanel-cell-metrics.service` aplica
+`ProtectSystem=strict`, `ProtectControlGroups=yes`,
+`RestrictAddressFamilies=AF_UNIX`, `MemoryMax=64M` y `CPUQuota=10%`.
+
 
 ## JSON por línea
 

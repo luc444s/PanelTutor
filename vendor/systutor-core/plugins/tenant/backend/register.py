@@ -5,6 +5,7 @@ import os
 from sqlalchemy.orm import Session
 
 from plugins.tenant.backend.container_runtime import RootlessCellProvider
+from plugins.tenant.backend.metrics_router import router as metrics_router
 from plugins.tenant.backend.models import TenantResourceRuntime
 from plugins.tenant.backend.rbac_router import router as rbac_router
 from plugins.tenant.backend.router import inventory_router, router
@@ -59,6 +60,7 @@ def domain_release_provider_factory(app: object | None):
 def register(context: PluginContext) -> None:
     context.register_router(router)
     context.register_router(rbac_router)
+    context.register_router(metrics_router)
     if os.environ.get("SPANEL_TENANT_RESOURCE_INVENTORY", "").strip().lower() in {
         "1",
         "true",

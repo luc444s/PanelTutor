@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
@@ -7,6 +7,17 @@ import { useT } from "@/i18n/use-i18n";
 import { Alert } from "@systutor/shell/ui/alert";
 import { Button } from "@systutor/shell/ui/button";
 import { Input } from "@systutor/shell/ui/input";
+import {
+  cpuLimitCores,
+  cpuPercent,
+  memoryPercent,
+  parseMetricsEvent,
+  parseSseChunk,
+  pushSample,
+  reconnectDelay,
+  sparklinePath,
+  type CellMetricsSample,
+} from "@/plugins/tenant-metrics.logic";
 
 import {
   deleteTenantPlan,
@@ -14,6 +25,7 @@ import {
   getTenantPlanCapacity,
   setTenantPlan,
   tenantKeys,
+  tenantMetricsStreamUrl,
   verifyTenantPlan,
   type TenantPlan,
   type TenantResponse,
@@ -63,11 +75,272 @@ function statusLabel(t: (key: string) => string, status: TenantPlan["status"]): 
   return t("Failed");
 }
 
+type LiveStatus = "live" | "reconnecting" | "offline";
+
+function formatBytes(bytes: number | null | undefined): string {
+  if (bytes === null || bytes === undefined) return "—";
+  if (bytes >= BYTES_PER_GIB) return `${formatNumber(bytes / BYTES_PER_GIB, 2)} GiB`;
+  return `${formatNumber(bytes / (1024 * 1024), 0)} MiB`;
+}
+
+function formatRate(bytesPerSecond: number | null | undefined): string {
+  if (bytesPerSecond === null || bytesPerSecond === undefined) return "—";
+  if (bytesPerSecond >= 1024 * 1024) {
+    return `${formatNumber(bytesPerSecond / (1024 * 1024), 1)} MB/s`;
+  }
+  if (bytesPerSecond >= 1024) {
+    return `${formatNumber(bytesPerSecond / 1024, 1)} kB/s`;
+  }
+  return `${formatNumber(bytesPerSecond, 0)} B/s`;
+}
+
+function formatPercentValue(value: number | null): string {
+  return value === null ? "—" : `${formatNumber(value, 0)} %`;
+}
+
+function readSseErrorMessage(data: string): string {
+  try {
+    const payload = JSON.parse(data) as { message?: unknown };
+    return typeof payload.message === "string" ? payload.message : "Metrics stream error";
+  } catch {
+    return "Metrics stream error";
+  }
+}
+
+/**
+ * SSE consumer for the live metrics section.
+ *
+ * `EventSource` cannot send an `Authorization` header, so this reads the
+ * response body with `fetch` + `ReadableStream`, keeps a 60-sample ring buffer
+ * and reconnects with bounded backoff until unmount or tenant change.
+ */
+function useCellMetrics(tenantId: string, enabled: boolean) {
+  const token = useAuthStore((state) => state.token);
+  const [samples, setSamples] = useState<CellMetricsSample[]>([]);
+  const [status, setStatus] = useState<LiveStatus>("offline");
+  const [message, setMessage] = useState<string | null>(null);
+  const mounted = useRef(true);
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!enabled || !tenantId || !token) {
+      setSamples([]);
+      setStatus("offline");
+      setMessage(null);
+      return;
+    }
+
+    let cancelled = false;
+    let controller: AbortController | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    let attempt = 0;
+    let received = false;
+
+    setSamples([]);
+    setMessage(null);
+    setStatus("reconnecting");
+
+    const connect = async () => {
+      if (cancelled) return;
+      controller = new AbortController();
+      try {
+        const response = await fetch(tenantMetricsStreamUrl(tenantId), {
+          headers: {
+            Accept: "text/event-stream",
+            Authorization: `Bearer ${token}`,
+          },
+          signal: controller.signal,
+        });
+        if (!response.ok || response.body === null) {
+          throw new Error(`HTTP ${response.status}`);
+        }
+
+        attempt = 0;
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (!cancelled) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          const parsed = parseSseChunk(buffer, decoder.decode(value, { stream: true }));
+          buffer = parsed.buffer;
+          for (const event of parsed.events) {
+            if (event.event === "error") {
+              const detail = readSseErrorMessage(event.data);
+              setMessage(detail);
+              throw new Error(detail);
+            }
+            const sample = parseMetricsEvent(event);
+            if (sample) {
+              received = true;
+              setSamples((current) => pushSample(current, sample));
+              setStatus("live");
+            }
+          }
+        }
+        throw new Error("metrics stream closed");
+      } catch (error) {
+        if (cancelled || (error instanceof DOMException && error.name === "AbortError")) return;
+        if (mounted.current) setStatus(received ? "reconnecting" : "offline");
+        const delay = reconnectDelay(attempt);
+        attempt += 1;
+        if (!cancelled) timer = setTimeout(() => { void connect(); }, delay);
+      }
+    };
+
+    void connect();
+
+    return () => {
+      cancelled = true;
+      controller?.abort();
+      if (timer !== null) clearTimeout(timer);
+    };
+  }, [enabled, tenantId, token]);
+
+  return { samples, status, message };
+}
+
+function Sparkline({ label, values }: { label: string; values: number[] }) {
+  return (
+    <div className="rounded-md border border-border px-3 py-2">
+      <p className="text-xs uppercase text-muted-foreground">{label}</p>
+      <svg
+        viewBox="0 0 120 32"
+        width="100%"
+        height="32"
+        role="img"
+        aria-label={label}
+        preserveAspectRatio="none"
+      >
+        <path
+          d={sparklinePath(values, 120, 32)}
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.5"
+          vectorEffect="non-scaling-stroke"
+        />
+      </svg>
+    </div>
+  );
+}
+
+function LiveMetricsSection({ tenantId, enabled }: { tenantId: string; enabled: boolean }) {
+  const t = useT();
+  const { samples, status, message } = useCellMetrics(tenantId, enabled);
+  if (!enabled) return null;
+
+  const latest = samples[samples.length - 1];
+  const cpuValues = samples.map((sample) => cpuPercent(sample) ?? 0);
+  const ramValues = samples.map((sample) => memoryPercent(sample) ?? 0);
+  const cpuLimit = latest ? cpuLimitCores(latest) : null;
+  const statusLabelText =
+    status === "live" ? t("Live") : status === "reconnecting" ? t("Reconnecting…") : t("No connection");
+
+  return (
+    <section className="space-y-2 border-t border-border pt-3" aria-label={t("Live metrics")}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h3 className="text-xs font-semibold uppercase text-muted-foreground">
+          {t("Live metrics")}
+        </h3>
+        <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
+          <span
+            aria-hidden="true"
+            className={`h-2 w-2 rounded-full ${
+              status === "live"
+                ? "bg-success"
+                : status === "reconnecting"
+                  ? "bg-warning"
+                  : "bg-destructive"
+            }`}
+          />
+          {statusLabelText}
+        </span>
+      </div>
+
+      {!latest ? (
+        <p className="text-sm text-muted-foreground">
+          {message ?? t("Waiting for the first sample…")}
+        </p>
+      ) : (
+        <>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            <div className="rounded-md border border-border px-3 py-2">
+              <p className="text-xs uppercase text-muted-foreground">{t("Current RAM")}</p>
+              <p className="text-sm font-medium text-foreground">
+                {formatBytes(latest.memory.current_bytes)} / {formatBytes(latest.memory.max_bytes)}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {formatPercentValue(memoryPercent(latest))}
+              </p>
+            </div>
+            <div className="rounded-md border border-border px-3 py-2">
+              <p className="text-xs uppercase text-muted-foreground">{t("Current CPU")}</p>
+              <p className="text-sm font-medium text-foreground">
+                {formatNumber(latest.cpu.cores, 2)} /{" "}
+                {cpuLimit === null ? "—" : `${formatNumber(cpuLimit, 2)} cores`}
+              </p>
+              <p className="text-xs text-muted-foreground">
+                {formatPercentValue(cpuPercent(latest))}
+              </p>
+            </div>
+            <div className="rounded-md border border-border px-3 py-2">
+              <p className="text-xs uppercase text-muted-foreground">{t("PIDs")}</p>
+              <p className="text-sm font-medium text-foreground">
+                {latest.pids.current} / {latest.pids.max ?? "—"}
+              </p>
+            </div>
+            <div className="rounded-md border border-border px-3 py-2">
+              <p className="text-xs uppercase text-muted-foreground">{t("Pressure")}</p>
+              <p className="text-xs text-muted-foreground">
+                CPU {formatNumber(latest.pressure.cpu.some_avg10, 1)} % · RAM{" "}
+                {formatNumber(latest.pressure.memory.some_avg10, 1)} % · IO{" "}
+                {formatNumber(latest.pressure.io.some_avg10, 1)} %
+              </p>
+            </div>
+            <div className="rounded-md border border-border px-3 py-2">
+              <p className="text-xs uppercase text-muted-foreground">{t("I/O")}</p>
+              <p className="text-xs text-muted-foreground">
+                {t("Read")} {formatRate(latest.io.read_bytes_per_s)} · {t("Write")}{" "}
+                {formatRate(latest.io.write_bytes_per_s)}
+              </p>
+            </div>
+            <div className="rounded-md border border-border px-3 py-2">
+              <p className="text-xs uppercase text-muted-foreground">{t("Last sample")}</p>
+              <p className="text-sm font-medium text-foreground">
+                {new Date(latest.ts_ms).toLocaleTimeString("es-ES")}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <Sparkline label={t("CPU %")} values={cpuValues} />
+            <Sparkline label={t("RAM %")} values={ramValues} />
+          </div>
+        </>
+      )}
+
+      {message && latest ? (
+        <p className="text-xs text-muted-foreground">
+          {t("Live metrics are not available right now.")} {message}
+        </p>
+      ) : null}
+    </section>
+  );
+}
+
 export function TenantResourcePlanPanel({ tenant }: { tenant: TenantResponse }) {
   const t = useT();
   const queryClient = useQueryClient();
   const permissions = useAuthStore((state) => state.permissions ?? []);
   const canManage = permissions.includes("apps.plans.manage");
+  const canViewMetrics = permissions.includes("tenant.tenants.manage");
   const tenantId = tenant.id;
 
   const planQuery = useQuery({
@@ -308,6 +581,8 @@ export function TenantResourcePlanPanel({ tenant }: { tenant: TenantResponse }) 
           </label>
         </div>
       </section>
+
+      <LiveMetricsSection tenantId={tenantId} enabled={canViewMetrics} />
 
       {formError ? (
         <Alert title={t("Error")}>

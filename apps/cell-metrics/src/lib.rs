@@ -12,8 +12,14 @@
 use std::fmt;
 use std::fmt::Write as _;
 use std::fs;
+use std::io::{self, BufRead, BufReader, Write};
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const MAX_SLUG_LEN: usize = 63;
 
@@ -678,6 +684,467 @@ impl Snapshot {
 }
 
 // ---------------------------------------------------------------------------
+// Daemon (A.SPEC 0113): AF_UNIX socket, token + SO_PEERCRED, line protocol
+// ---------------------------------------------------------------------------
+
+pub const DEFAULT_SOCKET_PATH: &str = "/run/spanel/cell-metrics.sock";
+pub const DEFAULT_TOKEN_FILE: &str = "/run/secrets/cell_metrics_token";
+pub const DEFAULT_PASSWD_PATH: &str = "/etc/passwd";
+pub const DEFAULT_READ_TIMEOUT_SECS: u64 = 5;
+const MAX_COMMAND_BYTES: usize = 4096;
+const ACCEPT_POLL_INTERVAL_MS: u64 = 20;
+
+#[derive(Debug, Clone)]
+pub struct DaemonConfig {
+    pub socket_path: PathBuf,
+    pub token_file: PathBuf,
+    pub allowed_uids: Vec<u64>,
+    pub cgroup_root: PathBuf,
+    pub passwd_path: PathBuf,
+}
+
+impl DaemonConfig {
+    pub fn new(
+        socket_path: impl Into<PathBuf>,
+        token_file: impl Into<PathBuf>,
+        allowed_uids: Vec<u64>,
+        cgroup_root: impl Into<PathBuf>,
+        passwd_path: impl Into<PathBuf>,
+    ) -> Self {
+        Self {
+            socket_path: socket_path.into(),
+            token_file: token_file.into(),
+            allowed_uids,
+            cgroup_root: cgroup_root.into(),
+            passwd_path: passwd_path.into(),
+        }
+    }
+}
+
+/// Parse a comma-separated `--allowed-uids` value (`0`, `0,1000`).
+pub fn parse_allowed_uids(text: &str) -> Result<Vec<u64>> {
+    let mut uids = Vec::new();
+    for part in text.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            return Err(invalid("--allowed-uids contiene un valor vacío"));
+        }
+        let uid = part
+            .parse::<u64>()
+            .map_err(|_| invalid(format!("uid inválido en --allowed-uids: {part:?}")))?;
+        if !uids.contains(&uid) {
+            uids.push(uid);
+        }
+    }
+    if uids.is_empty() {
+        return Err(invalid("--allowed-uids no puede estar vacío"));
+    }
+    Ok(uids)
+}
+
+/// Read the shared token once at startup. It must be non-empty and one word,
+/// because the line protocol separates fields with whitespace.
+pub fn read_token(path: &Path) -> Result<String> {
+    let raw = fs::read_to_string(path).map_err(|error| {
+        invalid(format!(
+            "no se pudo leer el token {}: {error}",
+            path.display()
+        ))
+    })?;
+    let token = raw.trim_end_matches(['\n', '\r']).to_string();
+    if token.is_empty() {
+        return Err(invalid(format!("el token {} está vacío", path.display())));
+    }
+    if token.chars().any(char::is_whitespace) {
+        return Err(invalid(format!(
+            "el token {} contiene espacios",
+            path.display()
+        )));
+    }
+    Ok(token)
+}
+
+/// Constant-time comparison: never short-circuits on the first difference.
+pub fn constant_time_eq(left: &str, right: &str) -> bool {
+    let left = left.as_bytes();
+    let right = right.as_bytes();
+    let mut difference = left.len() ^ right.len();
+    let length = left.len().max(right.len());
+    for index in 0..length {
+        let a = left.get(index).copied().unwrap_or(0);
+        let b = right.get(index).copied().unwrap_or(0);
+        difference |= usize::from(a ^ b);
+    }
+    difference == 0
+}
+
+/// Resolve the cell uid from `<passwd>` (`spanel-<slug>`), never from the registry.
+pub fn resolve_uid_from_passwd(passwd: &Path, slug: &str) -> Result<u64> {
+    validate_slug(slug)?;
+    let wanted = format!("spanel-{slug}");
+    let text = fs::read_to_string(passwd)
+        .map_err(|error| invalid(format!("no se pudo leer {}: {error}", passwd.display())))?;
+    for line in text.lines() {
+        let mut fields = line.split(':');
+        if fields.next() != Some(wanted.as_str()) {
+            continue;
+        }
+        let _password = fields.next();
+        let raw_uid = fields
+            .next()
+            .ok_or_else(|| invalid(format!("el usuario {wanted} no tiene uid")))?;
+        return raw_uid
+            .parse::<u64>()
+            .map_err(|_| invalid(format!("uid inválido para {wanted}: {raw_uid:?}")));
+    }
+    Err(invalid(format!(
+        "no existe el usuario {wanted} en {}",
+        passwd.display()
+    )))
+}
+
+/// Line protocol commands. Syntax only: slug and interval are validated by the
+/// connection handler so it can answer with a precise `ERROR <code>`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProtocolCommand {
+    Subscribe {
+        slug: String,
+        interval_ms: u64,
+        token: String,
+    },
+    Snapshot {
+        slug: String,
+        token: String,
+    },
+    Ping,
+}
+
+pub fn parse_protocol_line(line: &str) -> Result<ProtocolCommand> {
+    let parts: Vec<&str> = line.split_whitespace().collect();
+    match parts.as_slice() {
+        ["PING"] => Ok(ProtocolCommand::Ping),
+        ["SUBSCRIBE", slug, interval_ms, token] => {
+            let interval_ms = parse_u64(interval_ms)?;
+            Ok(ProtocolCommand::Subscribe {
+                slug: (*slug).to_string(),
+                interval_ms,
+                token: (*token).to_string(),
+            })
+        }
+        ["SNAPSHOT", slug, token] => Ok(ProtocolCommand::Snapshot {
+            slug: (*slug).to_string(),
+            token: (*token).to_string(),
+        }),
+        [] => Err(invalid("comando vacío")),
+        _ => Err(invalid("comando desconocido o con argumentos incorrectos")),
+    }
+}
+
+#[repr(C)]
+struct PeerCredentials {
+    pid: i32,
+    uid: u32,
+    gid: u32,
+}
+
+const SOL_SOCKET: i32 = 1;
+const SO_PEERCRED: i32 = 17;
+
+extern "C" {
+    fn getsockopt(
+        socket: i32,
+        level: i32,
+        option_name: i32,
+        option_value: *mut std::ffi::c_void,
+        option_len: *mut u32,
+    ) -> i32;
+}
+
+/// Peer uid from `SO_PEERCRED` (Linux/Android). std has no stable wrapper, so
+/// this declares the libc symbol that std already links; no Cargo dependency.
+pub fn peer_uid(stream: &UnixStream) -> Result<u64> {
+    use std::os::unix::io::AsRawFd;
+
+    let mut credentials = PeerCredentials {
+        pid: 0,
+        uid: 0,
+        gid: 0,
+    };
+    let mut length = std::mem::size_of::<PeerCredentials>() as u32;
+    // SAFETY: `credentials` is a valid writable `ucred` buffer and `length`
+    // describes its size; the fd belongs to a live `UnixStream`.
+    let result = unsafe {
+        getsockopt(
+            stream.as_raw_fd(),
+            SOL_SOCKET,
+            SO_PEERCRED,
+            (&mut credentials as *mut PeerCredentials).cast(),
+            &mut length,
+        )
+    };
+    if result != 0 {
+        return Err(invalid(format!(
+            "no se pudo leer SO_PEERCRED: {}",
+            io::Error::last_os_error()
+        )));
+    }
+    Ok(u64::from(credentials.uid))
+}
+
+fn write_protocol_error(mut stream: &UnixStream, code: &str, message: &str) {
+    let message = message.replace(['\n', '\r'], " ");
+    let _ = writeln!(stream, "ERROR {code} {message}");
+    let _ = stream.flush();
+}
+
+fn write_json_line(stream: &mut UnixStream, json: &str) -> bool {
+    writeln!(stream, "{json}")
+        .and_then(|()| stream.flush())
+        .is_ok()
+}
+
+fn sample_once(sampler: &mut Sampler) -> Result<Snapshot> {
+    // A single snapshot needs two reads to report real CPU and I/O rates, like
+    // the 0112 `--once` mode.
+    sampler.sample()?;
+    thread::sleep(Duration::from_millis(250));
+    sampler.sample()
+}
+
+fn handle_subscribe(
+    mut stream: UnixStream,
+    config: &DaemonConfig,
+    token: &str,
+    slug: &str,
+    interval_ms: u64,
+    received_token: &str,
+) -> Result<()> {
+    if !constant_time_eq(token, received_token) {
+        write_protocol_error(&stream, "unauthorized", "token inválido");
+        return Ok(());
+    }
+    if let Err(error) = validate_slug(slug) {
+        write_protocol_error(&stream, "invalid_slug", &error.to_string());
+        return Ok(());
+    }
+    if let Err(error) = validate_interval_ms(interval_ms) {
+        write_protocol_error(&stream, "invalid_interval", &error.to_string());
+        return Ok(());
+    }
+    let uid = match resolve_uid_from_passwd(&config.passwd_path, slug) {
+        Ok(uid) => uid,
+        Err(error) => {
+            write_protocol_error(&stream, "unknown_user", &error.to_string());
+            return Ok(());
+        }
+    };
+    let mut sampler = match Sampler::new(&config.cgroup_root, slug, uid, interval_ms) {
+        Ok(sampler) => sampler,
+        Err(error) => {
+            write_protocol_error(&stream, "unavailable", &error.to_string());
+            return Ok(());
+        }
+    };
+
+    loop {
+        let snapshot = match sampler.sample() {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                write_protocol_error(&stream, "sampling_failed", &error.to_string());
+                return Ok(());
+            }
+        };
+        if !write_json_line(&mut stream, &snapshot.to_json()) {
+            // The client closed: end this connection and its sampler.
+            return Ok(());
+        }
+        thread::sleep(Duration::from_millis(interval_ms));
+    }
+}
+
+fn handle_snapshot(
+    mut stream: UnixStream,
+    config: &DaemonConfig,
+    token: &str,
+    slug: &str,
+    received_token: &str,
+) -> Result<()> {
+    if !constant_time_eq(token, received_token) {
+        write_protocol_error(&stream, "unauthorized", "token inválido");
+        return Ok(());
+    }
+    if let Err(error) = validate_slug(slug) {
+        write_protocol_error(&stream, "invalid_slug", &error.to_string());
+        return Ok(());
+    }
+    let uid = match resolve_uid_from_passwd(&config.passwd_path, slug) {
+        Ok(uid) => uid,
+        Err(error) => {
+            write_protocol_error(&stream, "unknown_user", &error.to_string());
+            return Ok(());
+        }
+    };
+    let mut sampler = match Sampler::new(&config.cgroup_root, slug, uid, 1000) {
+        Ok(sampler) => sampler,
+        Err(error) => {
+            write_protocol_error(&stream, "unavailable", &error.to_string());
+            return Ok(());
+        }
+    };
+    match sample_once(&mut sampler) {
+        Ok(snapshot) => {
+            write_json_line(&mut stream, &snapshot.to_json());
+        }
+        Err(error) => write_protocol_error(&stream, "sampling_failed", &error.to_string()),
+    }
+    Ok(())
+}
+
+/// Handle one accepted connection. Every connection owns its `Sampler`; there
+/// is no shared state between clients. Validation happens before any cgroup
+/// is opened.
+pub fn handle_connection(mut stream: UnixStream, config: &DaemonConfig, token: &str) -> Result<()> {
+    let uid = peer_uid(&stream)?;
+    if !config.allowed_uids.contains(&uid) {
+        write_protocol_error(&stream, "peer_denied", "uid de peer no permitido");
+        return Ok(());
+    }
+    stream
+        .set_read_timeout(Some(Duration::from_secs(DEFAULT_READ_TIMEOUT_SECS)))
+        .map_err(|error| invalid(format!("no se pudo fijar el timeout: {error}")))?;
+
+    let mut line = String::new();
+    let mut reader = BufReader::new(
+        stream
+            .try_clone()
+            .map_err(|error| invalid(format!("no se pudo clonar el socket: {error}")))?,
+    );
+    match reader.read_line(&mut line) {
+        Ok(0) => return Ok(()),
+        Ok(_) => {}
+        Err(error) => return Err(invalid(format!("no se pudo leer el comando: {error}"))),
+    }
+    if line.len() > MAX_COMMAND_BYTES {
+        write_protocol_error(&stream, "invalid_request", "comando demasiado largo");
+        return Ok(());
+    }
+
+    let command = match parse_protocol_line(&line) {
+        Ok(command) => command,
+        Err(error) => {
+            write_protocol_error(&stream, "invalid_request", &error.to_string());
+            return Ok(());
+        }
+    };
+
+    match command {
+        ProtocolCommand::Ping => {
+            write_json_line(&mut stream, "{\"ok\":true,\"pong\":true}");
+            Ok(())
+        }
+        ProtocolCommand::Subscribe {
+            slug,
+            interval_ms,
+            token: received_token,
+        } => handle_subscribe(stream, config, token, &slug, interval_ms, &received_token),
+        ProtocolCommand::Snapshot {
+            slug,
+            token: received_token,
+        } => handle_snapshot(stream, config, token, &slug, &received_token),
+    }
+}
+
+/// Bind the AF_UNIX socket, removing only a stale socket at that path, and set
+/// it to `0600`. A non-socket file is never deleted.
+pub fn bind_unix_socket(path: &Path) -> Result<UnixListener> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => {
+            use std::os::unix::fs::FileTypeExt;
+            if !metadata.file_type().is_socket() {
+                return Err(invalid(format!(
+                    "{} existe y no es un socket; no se elimina",
+                    path.display()
+                )));
+            }
+            fs::remove_file(path).map_err(|error| {
+                invalid(format!(
+                    "no se pudo eliminar el socket huérfano {}: {error}",
+                    path.display()
+                ))
+            })?;
+        }
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+        Err(error) => {
+            return Err(invalid(format!(
+                "no se pudo inspeccionar {}: {error}",
+                path.display()
+            )));
+        }
+    }
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)
+            .map_err(|error| invalid(format!("no se pudo crear {}: {error}", parent.display())))?;
+    }
+    let listener = UnixListener::bind(path).map_err(|error| {
+        invalid(format!(
+            "no se pudo escuchar en {}: {error}",
+            path.display()
+        ))
+    })?;
+    fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|error| {
+        invalid(format!(
+            "no se pudieron fijar los permisos de {}: {error}",
+            path.display()
+        ))
+    })?;
+    Ok(listener)
+}
+
+/// Accept loop. Non-blocking accept plus a stop flag keeps tests deterministic;
+/// every connection runs in its own thread.
+pub fn serve_listener(
+    listener: UnixListener,
+    config: &DaemonConfig,
+    token: &str,
+    stop: &Arc<AtomicBool>,
+) -> Result<()> {
+    listener
+        .set_nonblocking(true)
+        .map_err(|error| invalid(format!("no se pudo configurar el listener: {error}")))?;
+    while !stop.load(Ordering::Relaxed) {
+        match listener.accept() {
+            Ok((stream, _address)) => {
+                stream.set_nonblocking(false).map_err(|error| {
+                    invalid(format!("no se pudo configurar el socket: {error}"))
+                })?;
+                let config = config.clone();
+                let token = token.to_string();
+                thread::spawn(move || {
+                    let _ = handle_connection(stream, &config, &token);
+                });
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(ACCEPT_POLL_INTERVAL_MS));
+            }
+            Err(error) => return Err(invalid(format!("fallo al aceptar conexiones: {error}"))),
+        }
+    }
+    Ok(())
+}
+
+pub fn run_daemon(config: &DaemonConfig) -> Result<()> {
+    if config.allowed_uids.is_empty() {
+        return Err(invalid("--allowed-uids no puede estar vacío"));
+    }
+    let token = read_token(&config.token_file)?;
+    let listener = bind_unix_socket(&config.socket_path)?;
+    let stop = Arc::new(AtomicBool::new(false));
+    let result = serve_listener(listener, config, &token, &stop);
+    let _ = fs::remove_file(&config.socket_path);
+    result
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
 
@@ -970,5 +1437,366 @@ mod tests {
         assert!(json.contains("\"some_avg10\":1"));
         assert!(json.contains("\"read_bytes_per_s\":null"));
         assert!(json.ends_with('}'));
+    }
+}
+
+#[cfg(test)]
+mod daemon_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Read, Write};
+    use std::os::unix::fs::MetadataExt;
+
+    struct TempRoot(PathBuf);
+
+    impl TempRoot {
+        fn new() -> Self {
+            use std::sync::atomic::AtomicU64;
+            static COUNTER: AtomicU64 = AtomicU64::new(0);
+            let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+            let nanos = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|value| value.as_nanos())
+                .unwrap_or(0);
+            let path = std::env::temp_dir().join(format!(
+                "cell-metrics-daemon-{}-{nanos}-{id}",
+                std::process::id()
+            ));
+            fs::create_dir_all(&path).expect("temp root");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+
+        fn write(&self, name: &str, contents: &str) -> PathBuf {
+            let path = self.0.join(name);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).expect("parents");
+            }
+            fs::write(&path, contents).expect("fixture");
+            path
+        }
+    }
+
+    impl Drop for TempRoot {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn current_uid() -> u64 {
+        fs::metadata("/proc/self")
+            .map(|metadata| u64::from(metadata.uid()))
+            .unwrap_or(0)
+    }
+
+    fn populate_cgroups(root: &TempRoot, slug: &str) {
+        let tree = format!("cgroup/system.slice/spanel-cell-{slug}.service");
+        root.write(&format!("{tree}/memory.current"), "1024\n");
+        root.write(&format!("{tree}/memory.max"), "4096\n");
+        root.write(
+            &format!("{tree}/cpu.stat"),
+            "usage_usec 1000\nnr_throttled 1\n",
+        );
+        root.write(&format!("{tree}/cpu.max"), "50000 100000\n");
+        root.write(&format!("{tree}/pids.current"), "4\n");
+        root.write(&format!("{tree}/pids.max"), "64\n");
+        root.write(
+            &format!("{tree}/cpu.pressure"),
+            "some avg10=1.00 avg60=0.00 avg300=0.00 total=1\nfull avg10=0.00\n",
+        );
+        root.write(
+            &format!("{tree}/io.stat"),
+            "8:0 rbytes=10 wbytes=20 rios=1 wios=1\n",
+        );
+    }
+
+    struct Harness {
+        root: TempRoot,
+        config: DaemonConfig,
+        stop: Arc<AtomicBool>,
+        handle: Option<thread::JoinHandle<()>>,
+        token: String,
+    }
+
+    impl Harness {
+        fn new(allowed_uids: Vec<u64>) -> Self {
+            Self::with_croups(allowed_uids, true)
+        }
+
+        fn with_croups(allowed_uids: Vec<u64>, populate: bool) -> Self {
+            let root = TempRoot::new();
+            if populate {
+                populate_cgroups(&root, "demo");
+            }
+            let passwd = root.write(
+                "passwd",
+                "root:x:0:0:root:/root:/bin/sh\nspanel-demo:x:60070:60070::/home/spanel-demo:/bin/sh\n",
+            );
+            let token = "secret-token".to_string();
+            let token_file = root.write("token", "secret-token\n");
+            let socket_path = root.path().join("run/cell-metrics.sock");
+            let config = DaemonConfig::new(
+                &socket_path,
+                &token_file,
+                allowed_uids,
+                root.path().join("cgroup"),
+                &passwd,
+            );
+            let listener = bind_unix_socket(&config.socket_path).expect("bind");
+            let stop = Arc::new(AtomicBool::new(false));
+            let thread_stop = Arc::clone(&stop);
+            let thread_config = config.clone();
+            let thread_token = token.clone();
+            let handle = thread::spawn(move || {
+                serve_listener(listener, &thread_config, &thread_token, &thread_stop)
+                    .expect("serve");
+            });
+            Self {
+                root,
+                config,
+                stop,
+                handle: Some(handle),
+                token,
+            }
+        }
+
+        fn socket(&self) -> &Path {
+            &self.config.socket_path
+        }
+
+        fn connect(&self) -> UnixStream {
+            let stream = UnixStream::connect(self.socket()).expect("connect");
+            stream
+                .set_read_timeout(Some(Duration::from_secs(5)))
+                .expect("timeout");
+            stream
+        }
+    }
+
+    impl Drop for Harness {
+        fn drop(&mut self) {
+            self.stop.store(true, Ordering::Relaxed);
+            if let Some(handle) = self.handle.take() {
+                let _ = handle.join();
+            }
+        }
+    }
+
+    fn read_all(stream: UnixStream) -> String {
+        let mut text = String::new();
+        BufReader::new(stream)
+            .read_to_string(&mut text)
+            .expect("read all");
+        text
+    }
+
+    fn first_line(mut stream: UnixStream) -> String {
+        let mut line = String::new();
+        BufReader::new(&mut stream)
+            .read_line(&mut line)
+            .expect("read line");
+        line.trim_end().to_string()
+    }
+
+    #[test]
+    fn parses_protocol_lines() {
+        assert_eq!(
+            parse_protocol_line("PING\n").unwrap(),
+            ProtocolCommand::Ping
+        );
+        assert_eq!(
+            parse_protocol_line("SNAPSHOT demo abc").unwrap(),
+            ProtocolCommand::Snapshot {
+                slug: "demo".to_string(),
+                token: "abc".to_string(),
+            }
+        );
+        assert_eq!(
+            parse_protocol_line("SUBSCRIBE demo 1000 abc").unwrap(),
+            ProtocolCommand::Subscribe {
+                slug: "demo".to_string(),
+                interval_ms: 1000,
+                token: "abc".to_string(),
+            }
+        );
+        assert!(parse_protocol_line("").is_err());
+        assert!(parse_protocol_line("SUBSCRIBE demo 1000").is_err());
+        assert!(parse_protocol_line("SUBSCRIBE demo nope abc").is_err());
+        assert!(parse_protocol_line("DROP demo").is_err());
+    }
+
+    #[test]
+    fn compares_tokens_in_constant_time_shape() {
+        assert!(constant_time_eq("abcdef", "abcdef"));
+        assert!(!constant_time_eq("abcdef", "abcdeg"));
+        assert!(!constant_time_eq("abc", "abcdef"));
+        assert!(!constant_time_eq("", "a"));
+        assert!(constant_time_eq("", ""));
+    }
+
+    #[test]
+    fn parses_allowed_uids() {
+        assert_eq!(parse_allowed_uids("0").unwrap(), vec![0]);
+        assert_eq!(parse_allowed_uids("0, 1000,0").unwrap(), vec![0, 1000]);
+        assert!(parse_allowed_uids("").is_err());
+        assert!(parse_allowed_uids("0,,1").is_err());
+        assert!(parse_allowed_uids("root").is_err());
+    }
+
+    #[test]
+    fn reads_token_and_rejects_empty_or_missing_files() {
+        let root = TempRoot::new();
+        let good = root.write("token", "secret\n");
+        assert_eq!(read_token(&good).unwrap(), "secret");
+        let empty = root.write("empty", "\n\n");
+        assert!(read_token(&empty).is_err());
+        let spaced = root.write("spaced", "two words\n");
+        assert!(read_token(&spaced).is_err());
+        assert!(read_token(&root.path().join("missing")).is_err());
+    }
+
+    #[test]
+    fn resolves_uid_from_passwd_and_rejects_unknown_users() {
+        let root = TempRoot::new();
+        let passwd = root.write(
+            "passwd",
+            "root:x:0:0:root:/root:/bin/sh\nspanel-demo:x:60070:60070::/home/demo:/bin/sh\n",
+        );
+        assert_eq!(resolve_uid_from_passwd(&passwd, "demo").unwrap(), 60070);
+        assert!(resolve_uid_from_passwd(&passwd, "otra").is_err());
+        assert!(resolve_uid_from_passwd(&passwd, "Demo").is_err());
+    }
+
+    #[test]
+    fn answers_ping() {
+        let harness = Harness::new(vec![current_uid()]);
+        let mut stream = harness.connect();
+        stream.write_all(b"PING\n").unwrap();
+        let response = first_line(stream);
+        assert_eq!(response, "{\"ok\":true,\"pong\":true}");
+    }
+
+    #[test]
+    fn snapshot_returns_one_0112_json_line_and_closes() {
+        let harness = Harness::new(vec![current_uid()]);
+        let mut stream = harness.connect();
+        writeln!(stream, "SNAPSHOT demo {}", harness.token).unwrap();
+        let body = read_all(stream);
+        let lines: Vec<&str> = body.lines().collect();
+        assert_eq!(lines.len(), 1, "snapshot must close after one line: {body}");
+        assert!(lines[0].starts_with("{\"ts_ms\":"));
+        assert!(lines[0].contains("\"slug\":\"demo\""));
+        assert!(lines[0].contains("\"warmup\":false"));
+        assert!(lines[0].contains("\"max_bytes\":4096"));
+    }
+
+    #[test]
+    fn subscribe_streams_one_line_per_sample_until_client_closes() {
+        let harness = Harness::new(vec![current_uid()]);
+        let mut stream = harness.connect();
+        writeln!(stream, "SUBSCRIBE demo 250 {}", harness.token).unwrap();
+        let mut reader = BufReader::new(stream.try_clone().unwrap());
+        let mut first = String::new();
+        reader.read_line(&mut first).unwrap();
+        let mut second = String::new();
+        reader.read_line(&mut second).unwrap();
+        assert!(first.contains("\"warmup\":true"), "{first}");
+        assert!(second.contains("\"warmup\":false"), "{second}");
+        assert!(second.contains("\"cores\":"));
+        drop(reader);
+        drop(stream);
+    }
+
+    #[test]
+    fn rejects_a_bad_token_before_touching_cgroups() {
+        let harness = Harness::new(vec![current_uid()]);
+        let mut stream = harness.connect();
+        writeln!(stream, "SUBSCRIBE demo 1000 wrong").unwrap();
+        assert_eq!(first_line(stream), "ERROR unauthorized token inválido");
+    }
+
+    #[test]
+    fn rejects_a_peer_outside_the_allowlist() {
+        let uid = current_uid();
+        let other = if uid == 0 { 1 } else { 0 };
+        let harness = Harness::new(vec![other]);
+        let mut stream = harness.connect();
+        writeln!(stream, "SNAPSHOT demo {}", harness.token).unwrap();
+        assert_eq!(
+            first_line(stream),
+            "ERROR peer_denied uid de peer no permitido"
+        );
+    }
+
+    #[test]
+    fn rejects_invalid_slugs_and_intervals() {
+        let harness = Harness::new(vec![current_uid()]);
+
+        let mut stream = harness.connect();
+        writeln!(stream, "SUBSCRIBE Demo 1000 {}", harness.token).unwrap();
+        assert!(first_line(stream).starts_with("ERROR invalid_slug"));
+
+        let mut stream = harness.connect();
+        writeln!(stream, "SUBSCRIBE demo 100 {}", harness.token).unwrap();
+        assert!(first_line(stream).starts_with("ERROR invalid_interval"));
+    }
+
+    #[test]
+    fn reports_a_missing_spanel_user() {
+        let harness = Harness::new(vec![current_uid()]);
+        let mut stream = harness.connect();
+        writeln!(stream, "SNAPSHOT otra {}", harness.token).unwrap();
+        assert!(first_line(stream).starts_with("ERROR unknown_user"));
+    }
+
+    #[test]
+    fn reports_unavailable_when_no_cgroup_exists() {
+        let harness = Harness::with_croups(vec![current_uid()], false);
+        let mut stream = harness.connect();
+        writeln!(stream, "SNAPSHOT demo {}", harness.token).unwrap();
+        assert!(first_line(stream).starts_with("ERROR unavailable"));
+    }
+
+    #[test]
+    fn sampling_never_writes_cgroup_files() {
+        let harness = Harness::new(vec![current_uid()]);
+        let tree = harness
+            .root
+            .path()
+            .join("cgroup/system.slice/spanel-cell-demo.service");
+        let before: Vec<(PathBuf, Vec<u8>)> = ["memory.current", "cpu.stat", "io.stat"]
+            .iter()
+            .map(|name| {
+                let path = tree.join(name);
+                (path.clone(), fs::read(&path).expect("read fixture"))
+            })
+            .collect();
+
+        let mut stream = harness.connect();
+        writeln!(stream, "SNAPSHOT demo {}", harness.token).unwrap();
+        let _ = read_all(stream);
+
+        for (path, contents) in before {
+            assert_eq!(fs::read(&path).expect("read fixture"), contents);
+        }
+    }
+
+    #[test]
+    fn socket_is_private_and_stale_sockets_are_replaced() {
+        let root = TempRoot::new();
+        let path = root.path().join("run/metrics.sock");
+        let first = bind_unix_socket(&path).expect("first bind");
+        drop(first);
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+        // Rebinding the same path removes the stale socket.
+        let second = bind_unix_socket(&path).expect("rebind");
+        drop(second);
+        // A regular file is never deleted.
+        let regular = root.write("run/not-a-socket", "data");
+        assert!(bind_unix_socket(&regular).is_err());
+        assert_eq!(fs::read_to_string(&regular).unwrap(), "data");
     }
 }

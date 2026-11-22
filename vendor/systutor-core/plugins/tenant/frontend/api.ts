@@ -1,4 +1,4 @@
-import { apiRequest } from "@systutor/shell/api/client";
+import { apiRequest, getApiBaseUrl } from "@systutor/shell/api/client";
 
 export type TenantResponse = {
   id: string;
@@ -281,6 +281,17 @@ export function getTenantPlanCapacity(tenantId: string) {
   return apiRequest<TenantPlanCapacity>(
     `/api/v1/plugins/apps/plan/capacity${planQuery(tenantId)}`,
   );
+}
+
+/**
+ * Absolute SSE URL for the live metrics stream. `EventSource` cannot send an
+ * `Authorization` header, so the panel uses `fetch` with this URL and the
+ * bearer token from the auth store.
+ */
+export function tenantMetricsStreamUrl(tenantId: string, intervalMs = 1000) {
+  const path = `/api/v1/plugins/tenant/tenants/${encodeURIComponent(tenantId)}/metrics/stream?interval_ms=${intervalMs}`;
+  const baseUrl = getApiBaseUrl();
+  return baseUrl.endsWith("/api") ? `${baseUrl}${path.slice(4)}` : `${baseUrl}${path}`;
 }
 
 export function assignUserToTenant(tenantId: string, payload: AssignUserPayload) {

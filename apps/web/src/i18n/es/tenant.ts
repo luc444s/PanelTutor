@@ -114,6 +114,23 @@ const messages: Record<string, string> = {
   "CPU must be greater than zero": "La CPU debe ser mayor que cero",
   "PIDs must be greater than zero": "Los PIDs deben ser mayores que cero",
   "Storage must be greater than zero": "El almacenamiento debe ser mayor que cero",
+  "Live metrics": "Métricas en vivo",
+  "Live": "En vivo",
+  "Reconnecting…": "Reconectando…",
+  "No connection": "Sin conexión",
+  "Current RAM": "RAM actual",
+  "Current CPU": "CPU actual",
+  "PIDs": "PIDs",
+  "Pressure": "Presión",
+  "I/O": "I/O",
+  "Read": "Lectura",
+  "Write": "Escritura",
+  "Last sample": "Último sample",
+  "CPU %": "CPU %",
+  "RAM %": "RAM %",
+  "Waiting for the first sample…": "Esperando la primera muestra…",
+  "Live metrics are not available right now.":
+    "Las métricas en vivo no están disponibles ahora mismo.",
 };
 
 export default messages;
