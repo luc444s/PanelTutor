@@ -37,6 +37,7 @@ import socket
 import stat
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +84,22 @@ def _run_optional(command: list[str]) -> str:
     return result.stdout.strip() if result.returncode == 0 else ""
 
 
+def _journal_tail(lines: int = 20) -> str:
+    output = _run_optional(
+        ["journalctl", "-u", UNIT_NAME, "-n", str(lines), "--no-pager"]
+    )
+    return " | ".join(output.splitlines()[-lines:]) or "journal unavailable"
+
+
+def _wait_for_socket(path: Path, timeout: float = 8.0) -> bool:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if path.is_socket():
+            return True
+        time.sleep(0.25)
+    return path.is_socket()
+
+
 def ensure_token(path: Path, *, dry_run: bool) -> str:
     """Create the shared token once; never overwrite an existing secret."""
     if path.is_file() and path.read_text(encoding="utf-8").strip():
@@ -121,7 +138,7 @@ def render_unit(
         raise InstallError(f"invalid --allowed-uids: {allowed_uids!r}")
     rendered = template
     rendered = re.sub(
-        r"^ExecStart=.*$",
+        r"^ExecStart=(?:[^\n]*\\\n)*[^\n]*$",
         f"ExecStart={binary} --serve \\\n"
         f"  --socket {socket_path} \\\n"
         f"  --token-file {token_path} \\\n"
@@ -387,7 +404,14 @@ def main(argv: list[str] | None = None) -> int:
             socket_path.parent.mkdir(parents=True, exist_ok=True)
             socket_path.parent.chmod(0o755)
         _run(["systemctl", "daemon-reload"], dry_run=args.dry_run)
-        _run(["systemctl", "enable", "--now", UNIT_NAME], dry_run=args.dry_run)
+        try:
+            _run(["systemctl", "enable", "--now", UNIT_NAME], dry_run=args.dry_run)
+        except InstallError as exc:
+            raise InstallError(f"{exc}; journal: {_journal_tail()}") from exc
+        if not args.dry_run and not _wait_for_socket(socket_path):
+            raise InstallError(
+                f"daemon did not create {socket_path}; journal: {_journal_tail()}"
+            )
         result: dict[str, Any] = {
             "binary": str(BINARY_TARGET),
             "token": str(token_path),
