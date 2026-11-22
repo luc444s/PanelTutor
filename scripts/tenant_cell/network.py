@@ -17,7 +17,15 @@ from .alloc import validate_slug
 _TRAEFIK_UID_ENV = "SPANEL_TRAEFIK_UID"
 _DEFAULT_TRAEFIK_UID = 1000  # host uid of the single central Traefik service
 _CELL_DNS_ENV = "SPANEL_TENANT_CELL_DNS"
-_DEFAULT_CELL_DNS = "10.0.2.3"  # slirp4netns DNS reachable inside the rootless netns
+_CELL_NET_ENV = "SPANEL_TENANT_CELL_NET"
+_DEFAULT_CELL_NET = "gvisor-tap-vsock"
+# Each rootlesskit network driver has its own gateway/DNS. Passing slirp's
+# 10.0.2.3 to a gvisor-tap-vsock cell leaves every container without DNS
+# (`EAI_AGAIN`), which broke apt/npm inside the cell.
+_CELL_NET_DNS = {
+    "gvisor-tap-vsock": "10.0.2.1",
+    "slirp4netns": "10.0.2.3",
+}
 # A.SPEC 0109-R3: the default bridge of each rootless cell.  The NAT rule that
 # gives containers egress lives *inside* the cell netns; --iptables=false on the
 # daemon is preserved and no host iptables rule is ever installed.
@@ -43,9 +51,24 @@ def traefik_uid() -> int:
     return value
 
 
+def cell_network_driver() -> str:
+    """RootlessKit network driver used by every cell (env-overridable)."""
+    raw = os.environ.get(_CELL_NET_ENV, _DEFAULT_CELL_NET).strip().lower()
+    if raw not in _CELL_NET_DNS:
+        allowed = ", ".join(sorted(_CELL_NET_DNS))
+        raise ValueError(f"{_CELL_NET_ENV} must be one of: {allowed}")
+    return raw
+
+
 def cell_dns_resolver() -> str:
-    """Return the validated resolver passed to each cell's rootless dockerd."""
-    raw = os.environ.get(_CELL_DNS_ENV, _DEFAULT_CELL_DNS).strip()
+    """Validated resolver for the configured rootlesskit network driver.
+
+    ``SPANEL_TENANT_CELL_DNS`` always wins. Otherwise the default follows the
+    driver: gvisor-tap-vsock serves DNS on its gateway 10.0.2.1, while
+    slirp4netns serves it on 10.0.2.3.
+    """
+    default = _CELL_NET_DNS[cell_network_driver()]
+    raw = os.environ.get(_CELL_DNS_ENV, default).strip()
     try:
         resolver = IPv4Address(raw)
     except ValueError:

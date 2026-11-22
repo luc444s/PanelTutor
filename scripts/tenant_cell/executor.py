@@ -20,6 +20,7 @@ from typing import Any
 from .alloc import DEFAULT_CGROUP_DRIVER, LEGACY_CGROUP_DRIVER
 from .network import (
     cell_dns_resolver,
+    cell_network_driver,
     netns_masquerade_argv,
     rootlesskit_port_driver_env,
 )
@@ -44,10 +45,15 @@ PROBE_PIDS_LIMIT = 64
 
 
 def rootlesskit_env_lines() -> str:
-    """RootlessKit port-driver settings that open 127.x.y.z:20000+ (0109-R3)."""
+    """RootlessKit network + port-driver settings for a cell (0109-R3).
+
+    The network driver is pinned explicitly so the resolver passed to dockerd
+    always matches the driver that rootlesskit actually starts.
+    """
+    env = dict(rootlesskit_port_driver_env(0))
+    env["DOCKERD_ROOTLESS_ROOTLESSKIT_NET"] = cell_network_driver()
     return "".join(
-        f"Environment={key}={value}\n"
-        for key, value in sorted(rootlesskit_port_driver_env(0).items())
+        f"Environment={key}={value}\n" for key, value in sorted(env.items())
     )
 
 
