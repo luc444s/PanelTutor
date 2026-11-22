@@ -181,14 +181,16 @@ def run_psql(
     command = psql_command(compose_file, database)
     for key, value in variables.items():
         command.extend(["-v", f"{key}={value}"])
-    command.extend(["-c", sql])
+    command.extend(["-f", "-"])
     try:
-        result = runner(command, capture_output=True, text=True, check=False)
+        result = runner(command, input=sql, capture_output=True, text=True, check=False)
     except OSError as exc:
         raise RepairError(f"cannot run docker compose: {exc}") from exc
     if result.returncode != 0:
-        detail = (result.stderr or "").strip().splitlines()[-1:] or ["psql failed"]
-        raise RepairError(f"psql failed: {detail[0]}")
+        detail = (result.stderr or result.stdout or "").strip()
+        if len(detail) > 2000:
+            detail = detail[-2000:]
+        raise RepairError(f"psql failed:\n{detail or 'no output'}")
     rows: list[list[str]] = []
     for line in (result.stdout or "").splitlines():
         if line.strip():

@@ -86,8 +86,13 @@ def test_run_psql_passes_variables_and_parses_rows() -> None:
     command = captured["command"]
     assert isinstance(command, list)
     assert "tenant=miltonarquez" in command
-    assert command[-1] == "SELECT 1"
-    assert captured["kwargs"] == {"capture_output": True, "text": True, "check": False}
+    assert command[-2:] == ["-f", "-"]
+    assert captured["kwargs"] == {
+        "input": "SELECT 1",
+        "capture_output": True,
+        "text": True,
+        "check": False,
+    }
     assert rows[0][0] == "miltonarquez"
 
 
