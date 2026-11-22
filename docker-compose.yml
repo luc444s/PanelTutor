@@ -18,6 +18,10 @@ services:
       SPANEL_PLAN_AGENT_TOKEN_FILE: /run/secrets/plan_agent_token
       SPANEL_CELL_METRICS_SOCKET: /run/spanel/cell-metrics.sock
       SPANEL_CELL_METRICS_TOKEN_FILE: /run/secrets/cell_metrics_token
+      # A.SPEC 0110: hosting resolves each site's registered runtime from the
+      # host registry and, for rootless cells, its own dockerd socket.
+      SPANEL_TENANTS_ROOTLESS: ${SPANEL_TENANTS_ROOTLESS:-true}
+      SPANEL_TENANTS_DATA_ROOT: /var/lib/spanel
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - apps_state:/var/lib/spanel/apps
@@ -44,6 +48,17 @@ services:
         read_only: true
         bind:
           create_host_path: false
+      # A.SPEC 0110: registry.json is read-only; /var/lib/spanel/cells must be
+      # writable because hosting stores private state owned by each cell uid.
+      - type: bind
+        source: ${SPANEL_TENANTS_REGISTRY:-/var/lib/spanel/registry.json}
+        target: /var/lib/spanel/registry.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SPANEL_TENANTS_CELLS_DIR:-/var/lib/spanel/cells}
+        target: /var/lib/spanel/cells
     networks:
       - default
       - proxy
@@ -72,10 +87,35 @@ services:
     command: ["dramatiq", "plugins.apps.backend.tasks", "--processes", "1", "--threads", "1", "--queues", "apps"]
     env_file:
       - .env.docker
+    environment:
+      # The worker also resolves rootless runtimes and publishes relay routes.
+      SPANEL_PLAN_AGENT_SOCKET: /run/spanel/plan-agent.sock
+      SPANEL_PLAN_AGENT_TOKEN_FILE: /run/secrets/plan_agent_token
+      SPANEL_TENANTS_ROOTLESS: ${SPANEL_TENANTS_ROOTLESS:-true}
+      SPANEL_TENANTS_DATA_ROOT: /var/lib/spanel
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - apps_state:/var/lib/spanel/apps
       - ${SPANEL_APPS_ENCRYPTION_KEY_PATH:-./secrets/apps_key}:/run/secrets/apps_key:ro
+      - type: bind
+        source: ${SPANEL_AGENT_RUNTIME_DIR:-/run/spanel}
+        target: /run/spanel
+        read_only: true
+      - type: bind
+        source: ${SPANEL_PLAN_AGENT_TOKEN_PATH:-/etc/spanel/plan_agent_token}
+        target: /run/secrets/plan_agent_token
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SPANEL_TENANTS_REGISTRY:-/var/lib/spanel/registry.json}
+        target: /var/lib/spanel/registry.json
+        read_only: true
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${SPANEL_TENANTS_CELLS_DIR:-/var/lib/spanel/cells}
+        target: /var/lib/spanel/cells
     depends_on:
       postgres:
         condition: service_healthy

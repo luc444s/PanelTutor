@@ -213,6 +213,32 @@ curl -sN -H "Authorization: Bearer <jwt>" \
 
 Cada línea debe ser un `event: metrics` con `ts_ms`, `memory`, `cpu` y `pids`.
 
+## 7. Hosting ("Could not load sites")
+
+Si el listado de Hosting falla, normalmente es que el contenedor no ve el
+registro de celdas o el dockerd de una celda rootless. El compose nuevo monta:
+
+- `/var/lib/spanel/registry.json` en solo lectura;
+- `/var/lib/spanel/cells` con escritura (estado privado por uid de celda);
+- `SPANEL_TENANTS_ROOTLESS=true` y `SPANEL_TENANTS_DATA_ROOT=/var/lib/spanel`.
+
+Verificación tras recrear la app:
+
+```bash
+docker exec spanel-app-1 python - <<'PY'
+import json
+registry = json.load(open("/var/lib/spanel/registry.json"))
+print(sorted(registry.get("allocations", {})))
+PY
+
+ls -l /var/lib/spanel/cells/miltonarquez/docker.sock
+docker exec spanel-app-1 docker -H unix:///var/lib/spanel/cells/miltonarquez/docker.sock info --format '{{.ID}}'
+```
+
+La última orden debe devolver el ID del dockerd de la celda, no un error de
+conexión. Si falla, revisa `journalctl -u user@60000` y que el socket exista en
+el host.
+
 ## Rollback
 
 1. Métricas: `systemctl disable --now spanel-cell-metrics`, retira el token y
