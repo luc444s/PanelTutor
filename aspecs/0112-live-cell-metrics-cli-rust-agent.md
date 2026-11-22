@@ -85,6 +85,11 @@ Una celda rootless tiene dos árboles separados:
   claro.
 - Si una ruta es prefijo de la otra, solo se cuenta la ruta padre para no
   duplicar.
+- Los **contadores de uso** se suman entre árboles; los **límites**
+  (`memory.max`, `cpu.max`, `pids.max`) se toman del árbol más restrictivo. El
+  slice del sistema suele estar en `max`; el plan vive en el user manager.
+- La presión (`*.pressure`) se reporta como el máximo de los árboles, no como
+  una suma (sumar porcentajes no tiene sentido).
 - No se usan `docker stats`, `ps`, `systemd-cgtop` ni `du`.
 
 #### Métricas
@@ -282,7 +287,7 @@ invariants:
   - "No se usan dependencias externas de Cargo ni de Python."
   - "No se usan docker stats, ps, systemd-cgtop, du ni comandos externos."
   - "Solo se leen rutas bajo el cgroup root; --cgroup-root es exclusivo de tests."
-  - "Se suman los dos árboles de la celda sin duplicar prefijos."
+  - "Se suman los contadores de uso de los dos árboles sin duplicar prefijos; los límites se toman del árbol más restrictivo y la presión es el máximo."
   - "CPU e I/O se calculan con deltas y reloj monótono; --once precalienta 250 ms y --watch emite la primera línea como warmup."
   - "Un slug inválido no se interpola en rutas."
   - "El plan agent y la API de planes no cambian."

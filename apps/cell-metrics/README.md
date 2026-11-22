@@ -1,8 +1,10 @@
 # spanel-cell-metrics (A.SPEC 0112)
 
 Colector de solo lectura de métricas de una celda desde **cgroups v2**. Lee los
-dos árboles de la celda, suma sus contadores y emite un snapshot JSON por línea.
-No escribe cgroups, no abre red y no ejecuta comandos externos.
+dos árboles de la celda, suma sus contadores de uso (RAM, CPU, PIDs, eventos e
+I/O) y toma el límite más restrictivo para `memory.max`, `cpu.max` y
+`pids.max`. Emite un snapshot JSON por línea. No escribe cgroups, no abre red y
+no ejecuta comandos externos.
 
 ## Build
 

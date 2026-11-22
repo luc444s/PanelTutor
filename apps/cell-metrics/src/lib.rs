@@ -350,20 +350,34 @@ fn sum_u64(roots: &[PathBuf], file: &str) -> Result<u64> {
     Ok(total)
 }
 
-/// Sum integer limits; if any tree is unlimited (`max`) the aggregate is null.
-fn sum_limit(roots: &[PathBuf], file: &str) -> Result<Option<u64>> {
-    let mut total = 0u64;
-    let mut present = false;
+/// Most restrictive integer limit across the cell trees.
+///
+/// Usage counters are additive, but limits are not: the plan lives in the
+/// user-manager tree while the cell's system slice is usually unlimited. The
+/// visible limit is the smallest non-`max` value.
+fn min_limit(roots: &[PathBuf], file: &str) -> Result<Option<u64>> {
+    let mut best: Option<u64> = None;
     for root in roots {
         if let Some(text) = read_optional(root, file) {
-            present = true;
-            match parse_limit(&text)? {
-                Some(value) => total = total.saturating_add(value),
-                None => return Ok(None),
+            if let Some(value) = parse_limit(&text)? {
+                best = Some(best.map_or(value, |current| current.min(value)));
             }
         }
     }
-    Ok(if present { Some(total) } else { None })
+    Ok(best)
+}
+
+/// Highest value across the cell trees (used only for `memory.peak`).
+fn max_limit(roots: &[PathBuf], file: &str) -> Result<Option<u64>> {
+    let mut best: Option<u64> = None;
+    for root in roots {
+        if let Some(text) = read_optional(root, file) {
+            if let Some(value) = parse_limit(&text)? {
+                best = Some(best.map_or(value, |current| current.max(value)));
+            }
+        }
+    }
+    Ok(best)
 }
 
 fn sum_cpu_stat(roots: &[PathBuf]) -> Result<CpuStat> {
@@ -378,38 +392,32 @@ fn sum_cpu_stat(roots: &[PathBuf]) -> Result<CpuStat> {
     Ok(total)
 }
 
-fn sum_cpu_max(roots: &[PathBuf]) -> Result<CpuMax> {
-    let mut quota_total = 0u64;
-    let mut unlimited = false;
-    let mut has_quota = false;
-    let mut period = 0u64;
-    let mut present = false;
+fn most_restrictive_cpu_max(roots: &[PathBuf]) -> Result<CpuMax> {
+    let mut best: Option<(f64, u64, u64)> = None;
     for root in roots {
         if let Some(text) = read_optional(root, "cpu.max") {
-            present = true;
             let cpu_max = parse_cpu_max(&text)?;
-            match cpu_max.quota_usec {
-                Some(quota) => {
-                    quota_total = quota_total.saturating_add(quota);
-                    has_quota = true;
+            if let (Some(quota), Some(period)) = (cpu_max.quota_usec, cpu_max.period_usec) {
+                if period == 0 {
+                    continue;
                 }
-                None => unlimited = true,
-            }
-            if let Some(value) = cpu_max.period_usec {
-                period = period.max(value);
+                let ratio = quota as f64 / period as f64;
+                let better = match best {
+                    Some((current, _, _)) => ratio < current,
+                    None => true,
+                };
+                if better {
+                    best = Some((ratio, quota, period));
+                }
             }
         }
     }
-    if !present {
-        return Ok(CpuMax::default());
-    }
-    Ok(CpuMax {
-        quota_usec: if unlimited || !has_quota {
-            None
-        } else {
-            Some(quota_total)
+    Ok(match best {
+        Some((_, quota, period)) => CpuMax {
+            quota_usec: Some(quota),
+            period_usec: Some(period),
         },
-        period_usec: if period == 0 { None } else { Some(period) },
+        None => CpuMax::default(),
     })
 }
 
@@ -423,16 +431,16 @@ fn sum_memory_events(roots: &[PathBuf]) -> Result<u64> {
     Ok(total)
 }
 
-fn sum_pressure(roots: &[PathBuf], file: &str) -> Result<PressureValue> {
-    let mut total = PressureValue::default();
+fn max_pressure(roots: &[PathBuf], file: &str) -> Result<PressureValue> {
+    let mut best = PressureValue::default();
     for root in roots {
         if let Some(text) = read_optional(root, file) {
             let value = parse_pressure(&text)?;
-            total.some_avg10 += value.some_avg10;
-            total.full_avg10 += value.full_avg10;
+            best.some_avg10 = best.some_avg10.max(value.some_avg10);
+            best.full_avg10 = best.full_avg10.max(value.full_avg10);
         }
     }
-    Ok(total)
+    Ok(best)
 }
 
 fn sum_io_stat(roots: &[PathBuf]) -> Result<IoCounters> {
@@ -504,7 +512,7 @@ impl Sampler {
         let ts_ms = now_ms()?;
 
         let cpu_stat = sum_cpu_stat(&self.roots)?;
-        let cpu_max = sum_cpu_max(&self.roots)?;
+        let cpu_max = most_restrictive_cpu_max(&self.roots)?;
         let io = sum_io_stat(&self.roots)?;
         let counters = Counters {
             usage_usec: cpu_stat.usage_usec,
@@ -541,8 +549,8 @@ impl Sampler {
             warmup,
             memory: Memory {
                 current_bytes: sum_u64(&self.roots, "memory.current")?,
-                peak_bytes: sum_limit(&self.roots, "memory.peak")?,
-                max_bytes: sum_limit(&self.roots, "memory.max")?,
+                peak_bytes: max_limit(&self.roots, "memory.peak")?,
+                max_bytes: min_limit(&self.roots, "memory.max")?,
                 oom_kill: sum_memory_events(&self.roots)?,
             },
             cpu: Cpu {
@@ -554,12 +562,12 @@ impl Sampler {
             },
             pids: Pids {
                 current: sum_u64(&self.roots, "pids.current")?,
-                max: sum_limit(&self.roots, "pids.max")?,
+                max: min_limit(&self.roots, "pids.max")?,
             },
             pressure: Pressure {
-                cpu: sum_pressure(&self.roots, "cpu.pressure")?,
-                memory: sum_pressure(&self.roots, "memory.pressure")?,
-                io: sum_pressure(&self.roots, "io.pressure")?,
+                cpu: max_pressure(&self.roots, "cpu.pressure")?,
+                memory: max_pressure(&self.roots, "memory.pressure")?,
+                io: max_pressure(&self.roots, "io.pressure")?,
             },
             io: Io {
                 read_bytes: io.read_bytes,
@@ -848,7 +856,7 @@ mod tests {
         assert!(snapshot.warmup);
         assert_eq!(snapshot.memory.current_bytes, 1500);
         assert_eq!(snapshot.memory.peak_bytes, Some(1500));
-        assert_eq!(snapshot.memory.max_bytes, Some(6144));
+        assert_eq!(snapshot.memory.max_bytes, Some(2048));
         assert_eq!(snapshot.memory.oom_kill, 2);
         assert_eq!(snapshot.cpu.usage_usec, 3000);
         assert_eq!(snapshot.cpu.cores, 0.0);
@@ -856,13 +864,51 @@ mod tests {
         assert_eq!(snapshot.cpu.period_usec, Some(100_000));
         assert_eq!(snapshot.cpu.nr_throttled, 4);
         assert_eq!(snapshot.pids.current, 15);
-        assert_eq!(snapshot.pids.max, Some(120));
-        assert!((snapshot.pressure.cpu.some_avg10 - 1.50).abs() < 1e-9);
+        assert_eq!(snapshot.pids.max, Some(20));
+        assert!((snapshot.pressure.cpu.some_avg10 - 1.00).abs() < 1e-9);
         assert!((snapshot.pressure.memory.some_avg10 - 0.40).abs() < 1e-9);
         assert_eq!(snapshot.io.read_bytes, 160);
         assert_eq!(snapshot.io.write_bytes, 280);
         assert_eq!(snapshot.io.read_bytes_per_s, None);
         assert_eq!(snapshot.io.write_bytes_per_s, None);
+    }
+
+    #[test]
+    fn limits_use_the_most_restrictive_tree_not_a_sum() {
+        let root = TempDir::new();
+        root.write(&format!("{SYSTEM_TREE}/memory.current"), "100\n");
+        root.write(&format!("{SYSTEM_TREE}/memory.max"), "max\n");
+        root.write(&format!("{SYSTEM_TREE}/memory.peak"), "150\n");
+        root.write(&format!("{SYSTEM_TREE}/cpu.stat"), "usage_usec 10\n");
+        root.write(&format!("{SYSTEM_TREE}/cpu.max"), "max 100000\n");
+        root.write(&format!("{SYSTEM_TREE}/pids.current"), "5\n");
+        root.write(&format!("{SYSTEM_TREE}/pids.max"), "12299\n");
+        root.write(
+            &format!("{SYSTEM_TREE}/cpu.pressure"),
+            "some avg10=0.00\nfull avg10=0.00\n",
+        );
+
+        root.write(&format!("{USER_TREE}/memory.current"), "50\n");
+        root.write(&format!("{USER_TREE}/memory.max"), "2048\n");
+        root.write(&format!("{USER_TREE}/memory.peak"), "80\n");
+        root.write(&format!("{USER_TREE}/cpu.stat"), "usage_usec 20\n");
+        root.write(&format!("{USER_TREE}/cpu.max"), "100000 100000\n");
+        root.write(&format!("{USER_TREE}/pids.current"), "3\n");
+        root.write(&format!("{USER_TREE}/pids.max"), "256\n");
+        root.write(
+            &format!("{USER_TREE}/cpu.pressure"),
+            "some avg10=2.50\nfull avg10=0.50\n",
+        );
+
+        let mut sampler = Sampler::new(root.path(), "demo", 60070, 1000).expect("sampler");
+        let snapshot = sampler.sample().expect("sample");
+        assert_eq!(snapshot.memory.current_bytes, 150);
+        assert_eq!(snapshot.memory.max_bytes, Some(2048));
+        assert_eq!(snapshot.memory.peak_bytes, Some(150));
+        assert_eq!(snapshot.cpu.quota_usec, Some(100_000));
+        assert_eq!(snapshot.cpu.period_usec, Some(100_000));
+        assert_eq!(snapshot.pids.max, Some(256));
+        assert!((snapshot.pressure.cpu.some_avg10 - 2.50).abs() < 1e-9);
     }
 
     #[test]
@@ -919,9 +965,9 @@ mod tests {
         assert!(json.contains("\"warmup\":true"));
         assert!(json.contains("\"memory\":{\"current_bytes\":1500"));
         assert!(json.contains("\"peak_bytes\":1500"));
-        assert!(json.contains("\"max_bytes\":6144"));
+        assert!(json.contains("\"max_bytes\":2048"));
         assert!(json.contains("\"cores\":0,"));
-        assert!(json.contains("\"some_avg10\":1.5"));
+        assert!(json.contains("\"some_avg10\":1"));
         assert!(json.contains("\"read_bytes_per_s\":null"));
         assert!(json.ends_with('}'));
     }
