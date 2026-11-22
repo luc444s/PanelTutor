@@ -268,7 +268,7 @@ export default function TenantsPage() {
                       </Button>
                       {inventoryQuery.isSuccess && (
                         <Button size="sm" variant="secondary" onClick={() => setShowResources(tenant)}>
-                          {t("Resources")}
+                          {t("Inventory")}
                         </Button>
                       )}
                     </div>

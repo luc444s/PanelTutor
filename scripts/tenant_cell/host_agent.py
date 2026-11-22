@@ -20,12 +20,14 @@ import base64
 import hashlib
 import hmac
 import json
+import os
 import socket
 import struct
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -38,7 +40,7 @@ ALLOWED_OPS = (
 )
 # A.SPEC 0104/0110-B: read-only host facts stay out of the mutation allowlist
 # so existing callers keep the same gate.
-READ_OPS = ("endpoint", "nat_status", "db_relay_status")
+READ_OPS = ("endpoint", "nat_status", "db_relay_status", "capacity")
 ALL_OPS = ALLOWED_OPS + READ_OPS
 RECONCILE_SUBJECT = "*"
 REQUEST_KEYS = {
@@ -161,6 +163,43 @@ def write_frame(sock: Any, payload: dict[str, Any]) -> None:
     sock.sendall(struct.pack("!I", len(raw)) + raw)
 
 
+def read_capacity(data_root: str | Path) -> dict[str, Any]:
+    """Read real host totals; fail closed if any fact cannot be observed.
+
+    This is deliberately not a measurement of tenant usage: it only reports the
+    host's RAM/CPU/disk and never runs ``du`` or a worker (A.SPEC 0111).
+    """
+    memory_bytes = 0
+    try:
+        for line in Path("/proc/meminfo").read_text(encoding="utf-8").splitlines():
+            if line.startswith("MemTotal:"):
+                memory_bytes = int(line.split()[1]) * 1024
+                break
+    except (OSError, ValueError, IndexError) as exc:
+        raise RuntimeError("cannot read MemTotal from /proc/meminfo") from exc
+    if memory_bytes <= 0:
+        raise RuntimeError("MemTotal is missing from /proc/meminfo")
+    cpus = os.cpu_count() or 0
+    if cpus <= 0:
+        raise RuntimeError("cannot determine the host CPU count")
+    try:
+        stats = os.statvfs(str(data_root))
+    except OSError as exc:
+        raise RuntimeError(f"cannot stat the data root {data_root}") from exc
+    storage_bytes = int(stats.f_blocks) * int(stats.f_frsize)
+    if storage_bytes <= 0:
+        raise RuntimeError("the data root reports no storage")
+    return {
+        "memory_bytes": memory_bytes,
+        "cpus": float(cpus),
+        "storage_bytes": storage_bytes,
+        "storage_available_bytes": int(stats.f_bavail) * int(stats.f_frsize),
+        "read_at": datetime.now(UTC).isoformat(),
+        "source": "host",
+        "data_root": str(data_root),
+    }
+
+
 def resolve_endpoint(slug: str, data_root: str | Path) -> dict[str, Any]:
     """Read-only cell endpoint derived from the registry and network.py."""
     allocation = alloc.load_registry(data_root)["allocations"].get(slug)
@@ -186,6 +225,7 @@ class PlanAgent:
         clock: Callable[[], float] | None = None,
         peer_resolver: Callable[[Any], Peer] | None = None,
         endpoint_resolver: Callable[[str, str | Path], dict[str, Any]] | None = None,
+        capacity_reader: Callable[[str | Path], dict[str, Any]] | None = None,
         migration_handler: Callable[..., dict[str, Any]] | None = None,
         nat_handler: Callable[[str, str], dict[str, Any]] | None = None,
         db_relay_handler: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
@@ -202,6 +242,7 @@ class PlanAgent:
         self.clock = clock or time.time
         self.peer_resolver = peer_resolver or peer_credential
         self.endpoint_resolver = endpoint_resolver or resolve_endpoint
+        self.capacity_reader = capacity_reader or read_capacity
         self.migration_handler = migration_handler
         self.nat_handler = nat_handler
         self.db_relay_handler = db_relay_handler
@@ -244,7 +285,7 @@ class PlanAgent:
             self.secret, request.get("token"), op=op,
             tenant=str(tenant), slug=str(slug), now=self.clock(),
         )
-        if op in ("reconcile", "migrate_all", "db_relay_reconcile"):
+        if op in ("reconcile", "migrate_all", "db_relay_reconcile", "capacity"):
             if tenant != RECONCILE_SUBJECT or slug != RECONCILE_SUBJECT:
                 raise AuthorizationError(ERR_FORBIDDEN, f"{op} has no tenant subject")
             if op == "reconcile":
@@ -303,6 +344,8 @@ class PlanAgent:
             elif op == "endpoint":
                 slug = plans.validate_slug(str(request["slug"]))
                 result = self.endpoint_resolver(slug, self.data_root)
+            elif op == "capacity":
+                result = self.capacity_reader(self.data_root)
             elif op in ("nat_status", "nat_apply", "nat_remove"):
                 if self.nat_handler is None:
                     raise RuntimeError("cell NAT handler is not configured")

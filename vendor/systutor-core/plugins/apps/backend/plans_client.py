@@ -32,7 +32,7 @@ DEFAULT_TIMEOUT = 5.0
 TOKEN_TTL_SECONDS = 60
 MAX_FRAME = 1 << 20  # plans are small; the protocol never carries files.
 
-OPS = ("apply", "remove", "verify", "reconcile", "endpoint")
+OPS = ("apply", "remove", "verify", "reconcile", "endpoint", "capacity")
 RECONCILE_SUBJECT = "*"
 
 
@@ -296,6 +296,14 @@ class HostPlanMaterializerClient:
             tenant=RECONCILE_SUBJECT,
             slug=RECONCILE_SUBJECT,
             desired=desired,
+        )
+
+    def capacity(self) -> dict[str, Any]:
+        """Read the real host totals; never mutates or measures tenant usage."""
+        return self._call(
+            "capacity",
+            tenant=RECONCILE_SUBJECT,
+            slug=RECONCILE_SUBJECT,
         )
 
     def endpoint(self, tenant_slug: str) -> CellEndpoint:

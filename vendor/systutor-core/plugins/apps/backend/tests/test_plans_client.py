@@ -178,6 +178,26 @@ def test_remove_verify_and_reconcile_use_the_right_operations(tmp_path: Path) ->
     assert request["tenant"] == plans_client.RECONCILE_SUBJECT
 
 
+def test_capacity_is_a_global_read_only_operation(tmp_path: Path) -> None:
+    host = {
+        "memory_bytes": 8 * 1024**3,
+        "cpus": 4.0,
+        "storage_bytes": 160 * 1024**3,
+    }
+    client, sock = _with_client(tmp_path, {"ok": True, "result": host})
+    assert client.capacity() == host
+    request = _request(sock)
+    assert request["op"] == "capacity"
+    assert request["tenant"] == plans_client.RECONCILE_SUBJECT
+    assert request["slug"] == plans_client.RECONCILE_SUBJECT
+    assert "plan" not in request and "desired" not in request
+    host_agent.verify_capability(
+        SECRET, request["token"], op="capacity",
+        tenant=plans_client.RECONCILE_SUBJECT,
+        slug=plans_client.RECONCILE_SUBJECT,
+    )
+
+
 @pytest.mark.parametrize(
     "code,error_type",
     [

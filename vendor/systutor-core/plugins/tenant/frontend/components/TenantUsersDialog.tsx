@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 
+import { useAuthStore } from "@/features/auth/store";
 import { RolePermissionsDialog } from "@/features/settings/RolePermissionsDialog";
 import { useT } from "@/i18n/use-i18n";
 import { Alert } from "@systutor/shell/ui/alert";
@@ -23,6 +24,7 @@ import {
   type TenantResponse,
   type TenantRoleResponse,
 } from "../api";
+import { TenantResourcePlanPanel } from "./TenantResourcePlanPanel";
 
 export function TenantUsersDialog({ tenant, onClose }: {
   tenant: TenantResponse | null;
@@ -30,6 +32,7 @@ export function TenantUsersDialog({ tenant, onClose }: {
 }) {
   const t = useT();
   const queryClient = useQueryClient();
+  const permissions = useAuthStore((state) => state.permissions ?? []);
   const tenantId = tenant?.id ?? "";
   const [tab, setTab] = useState("profile");
   const [email, setEmail] = useState("");
@@ -170,9 +173,21 @@ export function TenantUsersDialog({ tenant, onClose }: {
     <div className="flex justify-end"><Button disabled={!selectedUserId || !selectedRoleId || assignmentMutation.isPending} onClick={() => assignmentMutation.mutate()}>{t("Save assignment")}</Button></div>
   </div>;
 
+  const tabs = [
+    { value: "profile", label: t("Profile"), content: profile },
+    { value: "roles", label: t("Roles"), content: rolePanel },
+  ];
+  if (permissions.includes("apps.plans.manage")) {
+    tabs.push({
+      value: "resources",
+      label: t("Resources"),
+      content: tenant ? <TenantResourcePlanPanel tenant={tenant} /> : null,
+    });
+  }
+
   return <>
     <Dialog open={Boolean(tenant)} title={t("Users — {name}", { name: tenant?.name ?? "" })} onClose={onClose} maxWidthClassName="max-w-2xl">
-      <Tabs value={tab} onChange={setTab} tabs={[{ value: "profile", label: t("Profile"), content: profile }, { value: "roles", label: t("Roles"), content: rolePanel }]} />
+      <Tabs value={tab} onChange={setTab} tabs={tabs} />
     </Dialog>
     <RolePermissionsDialog role={roleEditor} permissions={permissionsQuery.data?.permissions ?? []} saving={roleMutation.isPending} error={roleError} onClose={() => setRoleEditor(null)} onSave={(names) => roleMutation.mutateAsync(names)} />
     <Dialog open={Boolean(reassignUserId)} title={t("Reassign user")} onClose={() => setReassignUserId(null)}>

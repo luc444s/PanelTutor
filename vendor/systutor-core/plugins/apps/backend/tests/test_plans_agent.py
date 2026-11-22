@@ -100,7 +100,7 @@ def _agent(
 
 
 def _request(op: str, *, tenant: str | None = None, slug: str | None = None, **extra: Any):
-    if op == "reconcile":
+    if op in ("reconcile", "capacity"):
         tenant = tenant or host_agent.RECONCILE_SUBJECT
         slug = slug or host_agent.RECONCILE_SUBJECT
     else:
@@ -201,8 +201,12 @@ def test_agent_rejects_generic_exec_and_arbitrary_paths(tmp_path: Path) -> None:
         "migrate_all",
         "nat_apply",
         "nat_remove",
+        "db_relay_open",
+        "db_relay_close",
+        "db_relay_reconcile",
     )
     assert "exec" not in host_agent.ALLOWED_OPS
+    assert "capacity" not in host_agent.ALLOWED_OPS  # read-only op
     exec_request = _request("apply", plan=PLAN)
     exec_request["op"] = "exec"  # a token bound to apply cannot authorize exec
     assert _error(agent.dispatch(exec_request, Peer(4242, 100))) == host_agent.ERR_FORBIDDEN
@@ -308,6 +312,59 @@ def test_reconcile_removes_only_stale_cached_slugs(tmp_path: Path) -> None:
         name == "reset_plan_properties" and kw.get("uid") == beta_uid
         for name, kw in suffix
     )
+
+
+# --- host capacity (read-only, A.SPEC 0111) ---------------------------------
+
+
+def test_capacity_is_read_only_and_returns_real_host_facts(tmp_path: Path) -> None:
+    facts = {
+        "memory_bytes": 8 * 1024**3,
+        "cpus": 4.0,
+        "storage_bytes": 160 * 1024**3,
+        "storage_available_bytes": 100 * 1024**3,
+        "read_at": "2026-11-21T06:45:00+00:00",
+        "source": "host",
+        "data_root": str(tmp_path),
+    }
+    seen: list[str | Path] = []
+
+    def reader(data_root: str | Path) -> dict[str, Any]:
+        seen.append(data_root)
+        return dict(facts)
+
+    executor = FakeExecutor()
+    svc = materializer.PlanMaterializer(executor, tmp_path)
+    agent = PlanAgent(
+        svc, secret=SECRET, allowed_uids={4242}, data_root=tmp_path,
+        peer_resolver=lambda _sock: Peer(4242, 100),
+        capacity_reader=reader,
+    )
+    response = agent.dispatch(_request("capacity"), Peer(4242, 100))
+    assert response == {"ok": True, "result": facts}
+    assert seen == [tmp_path]
+    assert executor.calls == []
+
+
+def test_capacity_rejects_a_tenant_subject_and_fails_closed(tmp_path: Path) -> None:
+    agent, executor = _agent(tmp_path)
+    denied = agent.dispatch(
+        _request("capacity", tenant="acme", slug="acme"), Peer(4242, 100)
+    )
+    assert _error(denied) == host_agent.ERR_FORBIDDEN
+
+    def broken(_data_root: str | Path) -> dict[str, Any]:
+        raise RuntimeError("cannot read MemTotal from /proc/meminfo")
+
+    svc = materializer.PlanMaterializer(executor, tmp_path)
+    failing = PlanAgent(
+        svc, secret=SECRET, allowed_uids={4242}, data_root=tmp_path,
+        peer_resolver=lambda _sock: Peer(4242, 100),
+        capacity_reader=broken,
+    )
+    response = failing.dispatch(_request("capacity"), Peer(4242, 100))
+    assert _error(response) == host_agent.ERR_AGENT
+    assert executor.calls == []
 
 
 # --- deployment boundaries --------------------------------------------------

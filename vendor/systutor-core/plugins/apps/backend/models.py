@@ -171,6 +171,9 @@ class AppsTenantPlan(Base):
     memory_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
     cpus: Mapped[float] = mapped_column(Float, nullable=False)
     pids: Mapped[int] = mapped_column(Integer, nullable=False)
+    # A.SPEC 0111: declared storage limit only. NULL keeps pre-0111 rows
+    # compatible; the value is not applied as a kernel quota nor sent to systemd.
+    storage_bytes: Mapped[int | None] = mapped_column(BigInteger)
     cpuset: Mapped[str | None] = mapped_column(String(255))
     # A.SPEC 0102: explicit lifecycle state. A persisted plan is always
     # recoverable: pending while the agent works, applied only after real

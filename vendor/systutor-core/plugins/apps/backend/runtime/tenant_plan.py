@@ -30,6 +30,8 @@ class TenantPlan:
     pids: int
     tenant_slug: str | None = None
     cpuset: str | None = None
+    # A.SPEC 0111: declared storage limit. It never reaches the host payload.
+    storage_bytes: int | None = None
 
     @property
     def slice(self) -> str:
@@ -41,7 +43,11 @@ class TenantPlan:
         return f"/tenant.slice/{self.slice}"
 
     def as_dict(self) -> dict[str, Any]:
-        """Payload accepted by the host ``PlanMaterializer``."""
+        """Payload accepted by the host ``PlanMaterializer``.
+
+        The payload stays exactly memory/cpus/pids/cpuset: storage is a
+        declared limit and systemd cannot apply it (A.SPEC 0111).
+        """
         return {
             "memory": self.memory_bytes,
             "cpus": self.cpus,
@@ -49,14 +55,20 @@ class TenantPlan:
             "cpuset": self.cpuset,
         }
 
+    def desired_dict(self) -> dict[str, Any]:
+        """Hashable desired state, including the declared storage limit."""
+        return {**self.as_dict(), "storage_bytes": self.storage_bytes}
+
     @classmethod
     def from_row(cls, row: Any, tenant_slug: str) -> TenantPlan:
+        storage = getattr(row, "storage_bytes", None)
         return cls(
             memory_bytes=int(row.memory_bytes),
             cpus=float(row.cpus),
             pids=int(row.pids),
             tenant_slug=tenant_slug,
             cpuset=row.cpuset,
+            storage_bytes=None if storage is None else int(storage),
         )
 
 

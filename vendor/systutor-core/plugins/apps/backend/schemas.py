@@ -378,6 +378,8 @@ class TenantPlanRequest(BaseModel):
     cpus: float = Field(gt=0, le=4096)
     pids: int = Field(gt=0, le=1_000_000, strict=True)
     cpuset: str | None = Field(default=None, max_length=255)
+    # A.SPEC 0111: declared storage only. None keeps the pre-0111 contract.
+    storage_bytes: int | None = Field(default=None, gt=0, le=2**63 - 1)
 
     @field_validator("cpuset")
     @classmethod
@@ -399,6 +401,7 @@ class TenantPlanView(BaseModel):
     cpus: float
     pids: int
     cpuset: str | None = None
+    storage_bytes: int | None = None
     # A.SPEC 0102: lifecycle state of the materialized plan.
     status: str = "applied"
     applied_at: datetime | None = None

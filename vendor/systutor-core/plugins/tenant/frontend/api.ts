@@ -77,6 +77,50 @@ export type TenantResourceActionResponse = {
   result: Record<string, unknown> | null;
 };
 
+export type TenantPlan = {
+  tenant_id: string;
+  tenant_slug: string;
+  memory_bytes: number;
+  cpus: number;
+  pids: number;
+  cpuset: string | null;
+  storage_bytes: number | null;
+  status: "applied" | "pending" | "failed";
+  applied_at: string | null;
+  last_error: string | null;
+  updated_at: string | null;
+  slice: string;
+  cgroup_path: string;
+};
+
+export type TenantPlanPayload = {
+  memory_bytes: number;
+  cpus: number;
+  pids: number;
+  cpuset?: string | null;
+  storage_bytes?: number | null;
+};
+
+export type TenantPlanCapacity = {
+  tenant_id: string;
+  host: {
+    memory_bytes: number;
+    cpus: number;
+    storage_bytes: number;
+    storage_available_bytes: number;
+    read_at: string | null;
+    source: string | null;
+    data_root: string | null;
+  };
+  allocated: {
+    memory_bytes: number;
+    cpus: number;
+    pids: number;
+    storage_bytes: number;
+  };
+  unbounded_storage: number;
+};
+
 export type CreateTenantPayload = {
   name: string;
   slug: string;
@@ -112,6 +156,8 @@ export const tenantKeys = {
   permissions: (tenantId: string) => ["tenant", tenantId, "permissions"] as const,
   domains: (tenantId: string) => ["tenant", tenantId, "domains"] as const,
   resources: (tenantId: string) => ["tenant", tenantId, "resources"] as const,
+  plan: (tenantId: string) => ["tenant", tenantId, "plan"] as const,
+  capacity: (tenantId: string) => ["tenant", tenantId, "capacity"] as const,
 };
 
 export function listTenants() {
@@ -197,6 +243,43 @@ export function actOnTenantResource(
   return apiRequest<TenantResourceActionResponse>(
     `/api/v1/plugins/tenant/tenants/${tenantId}/resources/${kind}/${resourceId}/actions/${action}?dry_run=${dryRun ? 1 : 0}`,
     { method: "POST" },
+  );
+}
+
+function planQuery(tenantId: string) {
+  return `?tenant_id=${encodeURIComponent(tenantId)}`;
+}
+
+export function getTenantPlan(tenantId: string) {
+  return apiRequest<TenantPlan | null>(
+    `/api/v1/plugins/apps/plan${planQuery(tenantId)}`,
+  );
+}
+
+export function setTenantPlan(tenantId: string, payload: TenantPlanPayload) {
+  return apiRequest<TenantPlan>(
+    `/api/v1/plugins/apps/plan${planQuery(tenantId)}`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export function deleteTenantPlan(tenantId: string) {
+  return apiRequest<Record<string, unknown>>(
+    `/api/v1/plugins/apps/plan${planQuery(tenantId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export function verifyTenantPlan(tenantId: string) {
+  return apiRequest<Record<string, unknown>>(
+    `/api/v1/plugins/apps/plan/verify${planQuery(tenantId)}`,
+    { method: "POST" },
+  );
+}
+
+export function getTenantPlanCapacity(tenantId: string) {
+  return apiRequest<TenantPlanCapacity>(
+    `/api/v1/plugins/apps/plan/capacity${planQuery(tenantId)}`,
   );
 }
 

@@ -42,6 +42,8 @@ class PlanMaterializer(Protocol):
 
     def reconcile(self, desired: list[dict[str, Any]]) -> dict[str, Any]: ...
 
+    def capacity(self) -> dict[str, Any]: ...
+
 
 def _now() -> datetime:
     return datetime.now(UTC)
@@ -67,6 +69,9 @@ def plan_view(db: Session, tenant_id: str) -> dict[str, Any] | None:
         "cpus": float(row.cpus),
         "pids": int(row.pids),
         "cpuset": row.cpuset,
+        "storage_bytes": (
+            None if row.storage_bytes is None else int(row.storage_bytes)
+        ),
         "status": row.status,
         "applied_at": row.applied_at,
         "last_error": row.last_error,
@@ -178,12 +183,15 @@ def set_plan(
     row.cpus = body.cpus
     row.pids = body.pids
     row.cpuset = body.cpuset
+    row.storage_bytes = body.storage_bytes
     row.status = "pending"
     row.last_error = None
     row.applied_at = None
     db.flush()
-    payload = TenantPlan.from_row(row, slug).as_dict()
-    row.desired_hash = request_hash(payload)
+    effective = TenantPlan.from_row(row, slug)
+    payload = effective.as_dict()
+    # A storage-only edit changes the auditable hash but never the host payload.
+    row.desired_hash = request_hash(effective.desired_dict())
     try:
         adapter.apply(slug, payload)
     except Exception as exc:  # noqa: BLE001 - host failure must not raise a 500
@@ -197,7 +205,10 @@ def set_plan(
     row.last_error = None
     audit(
         db, "apps.plan.set", tenant_id=tenant_id, actor=actor,
-        entity_id=tenant_id, details={"slice": TenantPlan.from_row(row, slug).slice},
+        entity_id=tenant_id, details={
+            "slice": TenantPlan.from_row(row, slug).slice,
+            "storage_bytes": row.storage_bytes,
+        },
     )
     _complete(operation, ok=True)
     db.commit()
@@ -235,10 +246,11 @@ def remove_plan(
             action="apps.plan.remove", exc=exc,
         )
         raise _host_failure("dematerialization", exc) from exc
+    storage_bytes = row.storage_bytes
     db.delete(row)
     audit(
         db, "apps.plan.remove", tenant_id=tenant_id, actor=actor,
-        entity_id=tenant_id, details=result,
+        entity_id=tenant_id, details={**result, "storage_bytes": storage_bytes},
     )
     _complete(operation, ok=True)
     db.commit()
@@ -289,6 +301,60 @@ def verify_plan(
     _complete(operation, ok=ok)
     db.commit()
     return {"tenant_id": tenant_id, "tenant_slug": slug, **result}
+
+
+def capacity(
+    db: Session,
+    *,
+    tenant_id: str,
+    materializer: PlanMaterializer | None,
+) -> dict[str, Any]:
+    """Read-only host totals plus the sum of every persisted plan.
+
+    Overcommit is intentionally not judged here: the totals are informational
+    and ``set_plan`` never rejects a plan for exceeding them (A.SPEC 0111).
+    """
+    if materializer is None:
+        raise AppError(
+            "Host capacity is unavailable",
+            status_code=503,
+            code="apps.capacity_unavailable",
+        )
+    try:
+        host = materializer.capacity()
+    except Exception as exc:  # noqa: BLE001 - the UI needs one stable 503
+        raise AppError(
+            "Host capacity is unavailable",
+            status_code=503,
+            code="apps.capacity_unavailable",
+        ) from exc
+    rows = list(db.scalars(select(AppsTenantPlan)))
+    allocated_memory = sum(int(row.memory_bytes) for row in rows)
+    allocated_cpus = sum(float(row.cpus) for row in rows)
+    allocated_pids = sum(int(row.pids) for row in rows)
+    allocated_storage = sum(
+        int(row.storage_bytes) for row in rows if row.storage_bytes is not None
+    )
+    unbounded_storage = sum(1 for row in rows if row.storage_bytes is None)
+    return {
+        "tenant_id": tenant_id,
+        "host": {
+            "memory_bytes": int(host["memory_bytes"]),
+            "cpus": float(host["cpus"]),
+            "storage_bytes": int(host["storage_bytes"]),
+            "storage_available_bytes": int(host.get("storage_available_bytes", 0)),
+            "read_at": host.get("read_at"),
+            "source": host.get("source"),
+            "data_root": host.get("data_root"),
+        },
+        "allocated": {
+            "memory_bytes": allocated_memory,
+            "cpus": allocated_cpus,
+            "pids": allocated_pids,
+            "storage_bytes": allocated_storage,
+        },
+        "unbounded_storage": unbounded_storage,
+    }
 
 
 def reconcile(

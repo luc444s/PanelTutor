@@ -34,9 +34,9 @@ export function TenantResourcesDialog({ tenant, onClose }: Props) {
   });
 
   return (
-    <Dialog open={Boolean(tenant)} title={t("Resources — {name}").replace("{name}", tenant?.name ?? "")} onClose={onClose}>
+    <Dialog open={Boolean(tenant)} title={t("Inventory — {name}", { name: tenant?.name ?? "" })} onClose={onClose}>
       <div className="space-y-3">
-        {resourcesQuery.isLoading && <p className="text-sm text-muted-foreground">{t("Loading resources...")}</p>}
+        {resourcesQuery.isLoading && <p className="text-sm text-muted-foreground">{t("Loading inventory...")}</p>}
         {resourcesQuery.error && <Alert title={t("Error")}>{(resourcesQuery.error as Error).message}</Alert>}
         {actionMutation.error && <Alert title={t("Error")}>{(actionMutation.error as Error).message}</Alert>}
         {resourcesQuery.data?.resources.map((resource) => (
@@ -58,7 +58,7 @@ export function TenantResourcesDialog({ tenant, onClose }: Props) {
             </div>
           </div>
         ))}
-        {resourcesQuery.data?.resources.length === 0 && <p className="text-sm text-muted-foreground">{t("No resources")}</p>}
+        {resourcesQuery.data?.resources.length === 0 && <p className="text-sm text-muted-foreground">{t("No inventory")}</p>}
         <div className="flex justify-end"><Button size="sm" variant="secondary" onClick={onClose}>{t("Close")}</Button></div>
       </div>
     </Dialog>

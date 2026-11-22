@@ -76,6 +76,22 @@ def get_plan(
     return plans_service.plan_view(db, _tenant(context, tenant_id))
 
 
+@router.get("/plan/capacity")
+def get_plan_capacity(
+    request: Request,
+    tenant_id: str | None = None,
+    db: Session = Depends(get_db_session),
+    context: TenantContext = Depends(get_current_tenant_context),
+    _user: User = Depends(require_permission("apps.plans.manage")),
+) -> dict:
+    """Return real host totals and the sum of every assigned plan."""
+    return plans_service.capacity(
+        db,
+        tenant_id=_tenant(context, tenant_id),
+        materializer=_resources(request).plan_materializer,
+    )
+
+
 @router.delete("/plan")
 def delete_plan(
     request: Request,

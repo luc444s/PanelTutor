@@ -70,6 +70,20 @@ class FakeMaterializer:
             raise RuntimeError("probe failed")
         return dict(self.evidence)
 
+    def capacity(self) -> dict[str, Any]:
+        self.calls.append(("capacity",))
+        if self.fail == "capacity":
+            raise RuntimeError("agent is down")
+        return {
+            "memory_bytes": 8 * MEM,
+            "cpus": 4.0,
+            "storage_bytes": 160 * MEM,
+            "storage_available_bytes": 100 * MEM,
+            "read_at": "2026-11-21T06:45:00+00:00",
+            "source": "host",
+            "data_root": "/srv/spanel",
+        }
+
     def reconcile(self, desired: list[dict[str, Any]]) -> dict[str, Any]:
         self.calls.append(("reconcile", [dict(item) for item in desired]))
         if self.fail == "reconcile":
@@ -107,9 +121,11 @@ def db(tmp_path: Path):
 
 
 def body(memory: int = MEM, cpus: float = 2.0, pids: int = 100,
-         cpuset: str | None = None) -> TenantPlanRequest:
+         cpuset: str | None = None,
+         storage_bytes: int | None = None) -> TenantPlanRequest:
     return TenantPlanRequest(
-        memory_bytes=memory, cpus=cpus, pids=pids, cpuset=cpuset
+        memory_bytes=memory, cpus=cpus, pids=pids, cpuset=cpuset,
+        storage_bytes=storage_bytes,
     )
 
 
@@ -548,3 +564,168 @@ def test_migration_007_adds_status_columns_and_is_reversible(tmp_path: Path) -> 
         for column in inspect(engine).get_columns("apps_tenant_plans")
     }
     assert not {"status", "applied_at", "last_error", "desired_hash"} & columns
+
+
+# --- A.SPEC 0111: declared storage and informational host capacity ----------
+
+
+def test_migration_008_adds_storage_and_is_reversible(tmp_path: Path) -> None:
+    base = _load_migration("006_add_tenant_resource_plans")
+    status = _load_migration("007_add_tenant_plan_status")
+    storage = _load_migration("008_add_tenant_plan_storage")
+    assert storage.revision == "008_add_tenant_plan_storage"
+
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'm008.db'}")
+    with Session(engine) as db:
+        base.upgrade(db)
+        db.execute(text(
+            "INSERT INTO apps_tenant_plans "
+            "(id, tenant_id, memory_bytes, cpus, pids, updated_at) "
+            "VALUES ('p1', 't1', 1024, 1, 10, '2026-01-01 00:00:00')"
+        ))
+        status.upgrade(db)
+        storage.upgrade(db)
+        storage.upgrade(db)  # idempotent
+        db.commit()
+    columns = {
+        column["name"]
+        for column in inspect(engine).get_columns("apps_tenant_plans")
+    }
+    assert "storage_bytes" in columns
+    with Session(engine) as db:
+        assert db.scalar(text(
+            "SELECT storage_bytes FROM apps_tenant_plans WHERE id = 'p1'"
+        )) is None  # pre-0111 rows keep no declared storage
+        storage.downgrade(db)
+        db.commit()
+    assert "storage_bytes" not in {
+        column["name"]
+        for column in inspect(engine).get_columns("apps_tenant_plans")
+    }
+    storage.upgrade(engine)  # up/down/up
+    assert "storage_bytes" in {
+        column["name"]
+        for column in inspect(engine).get_columns("apps_tenant_plans")
+    }
+
+
+def test_set_plan_persists_storage_but_never_sends_it_to_the_host(
+    db: Session,
+) -> None:
+    fake = FakeMaterializer()
+    view = plans_service.set_plan(
+        db, tenant_id="t1", actor="u1",
+        body=body(storage_bytes=20 * MEM), materializer=fake,
+    )
+    assert view["storage_bytes"] == 20 * MEM
+    assert plans_service.get_plan(db, "t1").storage_bytes == 20 * MEM
+    assert fake.calls == [("apply", "acme", {
+        "memory": MEM, "cpus": 2.0, "pids": 100, "cpuset": None,
+    })]
+    entry = audits(db, "apps.plan.set")[0]
+    assert entry.details["storage_bytes"] == 20 * MEM
+
+
+def test_storage_only_edits_change_the_desired_hash_but_not_the_payload(
+    db: Session,
+) -> None:
+    fake = FakeMaterializer()
+    plans_service.set_plan(
+        db, tenant_id="t1", actor="u1",
+        body=body(storage_bytes=10 * MEM), materializer=fake,
+    )
+    first = plans_service.get_plan(db, "t1")
+    first_hash, first_payload = first.desired_hash, fake.calls[0]
+    plans_service.set_plan(
+        db, tenant_id="t1", actor="u1",
+        body=body(storage_bytes=20 * MEM), materializer=fake,
+    )
+    second = plans_service.get_plan(db, "t1")
+    assert second.desired_hash != first_hash
+    assert fake.calls[1] == first_payload
+    assert fake.calls[1][2].get("storage") is None
+
+
+def test_set_plan_accepts_an_overcommitted_plan_without_warnings(
+    db: Session,
+) -> None:
+    fake = FakeMaterializer()  # host reports only 8 GiB / 4 cores / 160 GiB
+    view = plans_service.set_plan(
+        db, tenant_id="t1", actor="u1",
+        body=body(memory=6 * MEM, cpus=3.0, pids=512, storage_bytes=200 * MEM),
+        materializer=fake,
+    )
+    assert view["status"] == "applied"
+    assert not {
+        "overcommit", "overcommitted", "warning", "capacity", "ratio",
+    } & set(view)
+    assert fake.calls[0][0] == "apply"
+
+
+def test_plan_view_returns_storage(db: Session) -> None:
+    plans_service.set_plan(
+        db, tenant_id="t1", actor="u1", body=body(),
+        materializer=FakeMaterializer(),
+    )
+    assert plans_service.plan_view(db, "t1")["storage_bytes"] is None
+    plans_service.set_plan(
+        db, tenant_id="t1", actor="u1",
+        body=body(storage_bytes=5 * MEM), materializer=FakeMaterializer(),
+    )
+    assert plans_service.plan_view(db, "t1")["storage_bytes"] == 5 * MEM
+
+
+def test_capacity_returns_real_host_totals_and_the_assigned_sum(
+    db: Session,
+) -> None:
+    fake = FakeMaterializer()
+    plans_service.set_plan(
+        db, tenant_id="t1", actor="u1",
+        body=body(memory=2 * MEM, cpus=1.0, pids=100, storage_bytes=20 * MEM),
+        materializer=fake,
+    )
+    plans_service.set_plan(
+        db, tenant_id="t2", actor="u2",
+        body=body(memory=3 * MEM, cpus=2.0, pids=200),
+        materializer=fake,
+    )
+    result = plans_service.capacity(db, tenant_id="t1", materializer=fake)
+    assert result["host"] == {
+        "memory_bytes": 8 * MEM,
+        "cpus": 4.0,
+        "storage_bytes": 160 * MEM,
+        "storage_available_bytes": 100 * MEM,
+        "read_at": "2026-11-21T06:45:00+00:00",
+        "source": "host",
+        "data_root": "/srv/spanel",
+    }
+    assert result["allocated"]["memory_bytes"] == 5 * MEM
+    assert result["allocated"]["cpus"] == 3.0
+    assert result["allocated"]["storage_bytes"] == 20 * MEM
+    assert result["allocated"]["pids"] == 300
+    assert result["unbounded_storage"] == 1
+
+
+def test_capacity_without_the_agent_is_a_503(db: Session) -> None:
+    with pytest.raises(AppError) as raised:
+        plans_service.capacity(db, tenant_id="t1", materializer=None)
+    assert raised.value.status_code == 503
+    assert raised.value.code == "apps.capacity_unavailable"
+
+    with pytest.raises(AppError) as raised:
+        plans_service.capacity(
+            db, tenant_id="t1", materializer=FakeMaterializer(fail="capacity")
+        )
+    assert raised.value.status_code == 503
+    assert raised.value.code == "apps.capacity_unavailable"
+
+
+def test_capacity_route_is_registered() -> None:
+    paths: set[str] = set()
+    for route in router.router.routes:
+        included = getattr(route, "original_router", None)
+        if included is not None:
+            paths |= {
+                item.path for item in included.routes if hasattr(item, "path")
+            }
+    assert "/plan/capacity" in paths
