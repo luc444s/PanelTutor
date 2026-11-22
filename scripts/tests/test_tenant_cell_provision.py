@@ -782,6 +782,10 @@ class PlanAwareExecutor(FakeExecutor):
         self._rec("reset_plan_properties", uid=uid)
         self.effective = {}
 
+    def cleanup_legacy_plan(self, slug, uid):
+        self._rec("cleanup_legacy_plan", slug=slug, uid=uid)
+        return False
+
     def install_tenant_slice(self, slug, plan):
         self._rec("install_tenant_slice", slug=slug, plan=plan)
 
@@ -819,10 +823,10 @@ def test_repair_and_provision_preserve_an_active_tenant_plan(tmp_path, monkeypat
     cell = alloc.load_registry(tmp_path)["allocations"]["acme"]
     assert alloc.cgroup_driver(cell) == "systemd"
     assert plans.active_plan(tmp_path, "acme")["plan"]["pids"] == 128
-    assert {"install_tenant_slice", "install_user_manager_dropin"} <= set(
-        executor.names()
-    )
-    assert "remove_tenant_slice" not in executor.names()
+    assert "cleanup_legacy_plan" in executor.names()
+    assert "install_tenant_slice" not in executor.names()
+    assert "install_user_manager_dropin" not in executor.names()
+    assert "apply_plan_in_place" not in executor.names()
 
     executor.calls.clear()
     svc.provision("acme")
@@ -831,8 +835,28 @@ def test_repair_and_provision_preserve_an_active_tenant_plan(tmp_path, monkeypat
         alloc.load_registry(tmp_path)["allocations"]["acme"]
     ) == "systemd"
     assert plans.active_plan(tmp_path, "acme")["plan"]["memory"] == "512M"
-    assert "install_tenant_slice" in executor.names()
-    assert "remove_tenant_slice" not in executor.names()
+    assert "cleanup_legacy_plan" in executor.names()
+    assert "install_tenant_slice" not in executor.names()
+
+
+def test_repair_reasserts_a_drifted_plan_in_place(tmp_path, monkeypatch) -> None:
+    from scripts.tenant_cell import materializer
+
+    monkeypatch.setenv("SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS", "1")
+    executor = PlanAwareExecutor()
+    svc = CellService(FakeProbe(), executor, tmp_path)
+    svc.provision("acme")
+    materializer.PlanMaterializer(executor, tmp_path).apply(
+        "acme", {"memory": "512M", "cpus": 0.5, "pids": 128}
+    )
+    executor.calls.clear()
+    executor.effective = {}
+
+    svc.repair("acme")
+
+    assert "cleanup_legacy_plan" in executor.names()
+    assert "apply_plan_in_place" in executor.names()
+    assert "install_tenant_slice" not in executor.names()
 
 
 def test_repair_of_a_cell_without_a_plan_installs_no_slice(tmp_path) -> None:
@@ -842,6 +866,7 @@ def test_repair_of_a_cell_without_a_plan_installs_no_slice(tmp_path) -> None:
 
     svc.repair("acme")
 
+    assert "cleanup_legacy_plan" not in executor.names()
     assert "install_tenant_slice" not in executor.names()
     assert "install_user_manager_dropin" not in executor.names()
 

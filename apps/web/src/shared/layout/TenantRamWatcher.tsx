@@ -5,6 +5,8 @@ import { getApiBaseUrl } from "@systutor/shell/api/client";
 import { useAuthStore } from "../../features/auth/store";
 import { useT } from "../../i18n/use-i18n";
 import {
+  cacheMemoryBytes,
+  effectiveMemoryBytes,
   formatMemoryBytes,
   memoryPercent,
   parseMetricsEvent,
@@ -124,7 +126,8 @@ export function TenantRamWatcher() {
 
   const percent = sample ? memoryPercent(sample) : null;
   const roundedPercent = percent === null ? null : Math.round(percent);
-  const used = sample?.memory.current_bytes;
+  const used = sample ? effectiveMemoryBytes(sample) : undefined;
+  const cache = sample ? cacheMemoryBytes(sample) : null;
   const limit = sample?.memory.max_bytes;
   const statusLabel = status === "live" ? t("Live") : status === "reconnecting" ? t("Reconnecting…") : t("No connection");
   const barTone =
@@ -166,8 +169,12 @@ export function TenantRamWatcher() {
           style={{ width: `${percent ?? 0}%` }}
         />
       </div>
-      <p className="text-[11px] text-sidebar-muted">
+      <p
+        className="text-[11px] text-sidebar-muted"
+        title={cache === null ? undefined : `${t("Cache")}: ${formatMemoryBytes(cache)}`}
+      >
         {formatMemoryBytes(used)} / {formatMemoryBytes(limit)}
+        {cache !== null && cache > 0 ? ` · ${formatMemoryBytes(cache)}` : ""}
       </p>
     </div>
   );

@@ -96,10 +96,14 @@ Una celda rootless tiene dos árboles separados:
 
 | Campo | Fuente | Cálculo |
 |---|---|---|
-| `memory.current_bytes` | `memory.current` | instantáneo |
+| `memory.current_bytes` | `memory.current` | instantáneo; incluye page cache |
 | `memory.peak_bytes` | `memory.peak` | opcional; `null` si no existe |
 | `memory.max_bytes` | `memory.max` | `null` si es `max` |
 | `memory.oom_kill` | `memory.events` | contador acumulado |
+| `memory.anon_bytes` | `memory.stat` | memoria anónima, no reclamable |
+| `memory.file_bytes` | `memory.stat` | page cache reclamable |
+| `memory.kernel_bytes` | `memory.stat` | memoria de kernel |
+| `memory.slab_bytes` | `memory.stat` | subconjunto de `kernel_bytes` |
 | `cpu.usage_usec` | `cpu.stat` | acumulado |
 | `cpu.cores` | `usage_usec` | delta / tiempo transcurrido / 1e6 |
 | `cpu.quota_usec` / `cpu.period_usec` | `cpu.max` | `null` si es `max` |
@@ -133,7 +137,11 @@ Una línea por snapshot:
     "current_bytes": 1524629504,
     "peak_bytes": 1729629504,
     "max_bytes": 2147483648,
-    "oom_kill": 0
+    "oom_kill": 0,
+    "anon_bytes": 889192448,
+    "file_bytes": 623820800,
+    "kernel_bytes": 8323072,
+    "slab_bytes": 3796992
   },
   "cpu": {
     "usage_usec": 123456789,
@@ -158,6 +166,10 @@ Una línea por snapshot:
 ```
 
 - `ts_ms` es epoch en milisegundos, del reloj del sistema.
+- `anon_bytes + kernel_bytes` es el consumo no reclamable de la celda;
+  `file_bytes` es page cache y el kernel lo reclama bajo presión. Para
+  capacidad y para el indicador de RAM se usa `anon + kernel`, no
+  `current_bytes`.
 - Los números son JSON válidos; `null` para ausentes.
 - `slug` se valida (minúsculas, dígitos y guiones) antes de construir rutas.
 - El binario no imprime logs en stdout; los errores van a stderr.

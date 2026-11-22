@@ -148,16 +148,33 @@ def render_snapshot(sample: dict[str, Any], interval_ms: int | None = None) -> s
     ]
 
     current = memory.get("current_bytes") or 0
+    anon = memory.get("anon_bytes")
+    file_cache = memory.get("file_bytes")
+    kernel = memory.get("kernel_bytes")
+    effective = (
+        int(anon) + int(kernel)
+        if isinstance(anon, int) and isinstance(kernel, int)
+        else None
+    )
+    used = effective if effective is not None else current
     maximum = memory.get("max_bytes")
-    ram = f"  {'RAM':<10} {human_bytes(current)} / "
+    ram = f"  {'RAM':<10} "
+    if effective is not None:
+        ram += "real "
+    ram += f"{human_bytes(used)} / "
     if maximum is None:
         ram += "sin límite"
     else:
         ram += human_bytes(maximum)
-        ram += f"    {round(int(current) * 100 / int(maximum))} %"
+        ram += f"    {round(int(used) * 100 / int(maximum))} %"
     if memory.get("peak_bytes") is not None:
         ram += f"   pico {human_bytes(memory['peak_bytes'])}"
     lines.append(ram)
+    if effective is not None:
+        lines.append(
+            f"  {'':<10} caché {human_bytes(file_cache)}"
+            f" · cgroup {human_bytes(current)}"
+        )
 
     cores = _as_float(cpu.get("cores"))
     quota = cpu.get("quota_usec")

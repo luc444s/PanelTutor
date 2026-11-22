@@ -136,6 +136,26 @@ pub fn parse_memory_events(text: &str) -> Result<u64> {
     Ok(parse_keyed_u64(text, "oom_kill")?.unwrap_or(0))
 }
 
+/// Breakdown from `memory.stat`. `anon + kernel` is the non-reclaimable
+/// footprint; `file` is page cache (including shared binary text) and is
+/// reclaimed by the kernel under pressure. `slab` is a subset of `kernel`.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MemoryStat {
+    pub anon_bytes: u64,
+    pub file_bytes: u64,
+    pub kernel_bytes: u64,
+    pub slab_bytes: u64,
+}
+
+pub fn parse_memory_stat(text: &str) -> Result<MemoryStat> {
+    Ok(MemoryStat {
+        anon_bytes: parse_keyed_u64(text, "anon")?.unwrap_or(0),
+        file_bytes: parse_keyed_u64(text, "file")?.unwrap_or(0),
+        kernel_bytes: parse_keyed_u64(text, "kernel")?.unwrap_or(0),
+        slab_bytes: parse_keyed_u64(text, "slab")?.unwrap_or(0),
+    })
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct CpuMax {
     pub quota_usec: Option<u64>,
@@ -296,6 +316,10 @@ pub struct Memory {
     pub peak_bytes: Option<u64>,
     pub max_bytes: Option<u64>,
     pub oom_kill: u64,
+    pub anon_bytes: u64,
+    pub file_bytes: u64,
+    pub kernel_bytes: u64,
+    pub slab_bytes: u64,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq)]
@@ -351,6 +375,20 @@ fn sum_u64(roots: &[PathBuf], file: &str) -> Result<u64> {
     for root in roots {
         if let Some(text) = read_optional(root, file) {
             total = total.saturating_add(parse_u64(&text)?);
+        }
+    }
+    Ok(total)
+}
+
+fn sum_memory_stat(roots: &[PathBuf]) -> Result<MemoryStat> {
+    let mut total = MemoryStat::default();
+    for root in roots {
+        if let Some(text) = read_optional(root, "memory.stat") {
+            let stat = parse_memory_stat(&text)?;
+            total.anon_bytes = total.anon_bytes.saturating_add(stat.anon_bytes);
+            total.file_bytes = total.file_bytes.saturating_add(stat.file_bytes);
+            total.kernel_bytes = total.kernel_bytes.saturating_add(stat.kernel_bytes);
+            total.slab_bytes = total.slab_bytes.saturating_add(stat.slab_bytes);
         }
     }
     Ok(total)
@@ -520,6 +558,7 @@ impl Sampler {
         let cpu_stat = sum_cpu_stat(&self.roots)?;
         let cpu_max = most_restrictive_cpu_max(&self.roots)?;
         let io = sum_io_stat(&self.roots)?;
+        let memory_stat = sum_memory_stat(&self.roots)?;
         let counters = Counters {
             usage_usec: cpu_stat.usage_usec,
             read_bytes: io.read_bytes,
@@ -558,6 +597,10 @@ impl Sampler {
                 peak_bytes: max_limit(&self.roots, "memory.peak")?,
                 max_bytes: min_limit(&self.roots, "memory.max")?,
                 oom_kill: sum_memory_events(&self.roots)?,
+                anon_bytes: memory_stat.anon_bytes,
+                file_bytes: memory_stat.file_bytes,
+                kernel_bytes: memory_stat.kernel_bytes,
+                slab_bytes: memory_stat.slab_bytes,
             },
             cpu: Cpu {
                 usage_usec: cpu_stat.usage_usec,
@@ -642,11 +685,15 @@ impl Snapshot {
         );
         let _ = write!(
             out,
-            "\"memory\":{{\"current_bytes\":{},\"peak_bytes\":{},\"max_bytes\":{},\"oom_kill\":{}}},",
+            "\"memory\":{{\"current_bytes\":{},\"peak_bytes\":{},\"max_bytes\":{},\"oom_kill\":{},\"anon_bytes\":{},\"file_bytes\":{},\"kernel_bytes\":{},\"slab_bytes\":{}}},",
             self.memory.current_bytes,
             json_u64(self.memory.peak_bytes),
             json_u64(self.memory.max_bytes),
-            self.memory.oom_kill
+            self.memory.oom_kill,
+            self.memory.anon_bytes,
+            self.memory.file_bytes,
+            self.memory.kernel_bytes,
+            self.memory.slab_bytes
         );
         let _ = write!(
             out,
@@ -1196,6 +1243,10 @@ mod tests {
         root.write(&format!("{SYSTEM_TREE}/memory.peak"), "1500\n");
         root.write(&format!("{SYSTEM_TREE}/memory.max"), "4096\n");
         root.write(
+            &format!("{SYSTEM_TREE}/memory.stat"),
+            "anon 300\nfile 400\nkernel 50\nslab 20\n",
+        );
+        root.write(
             &format!("{SYSTEM_TREE}/memory.events"),
             "low 0\nhigh 0\nmax 0\noom 0\noom_kill 2\n",
         );
@@ -1226,6 +1277,10 @@ mod tests {
         root.write(&format!("{USER_TREE}/memory.current"), "500\n");
         root.write(&format!("{USER_TREE}/memory.max"), "2048\n");
         root.write(
+            &format!("{USER_TREE}/memory.stat"),
+            "anon 200\nfile 100\nkernel 30\nslab 10\n",
+        );
+        root.write(
             &format!("{USER_TREE}/cpu.stat"),
             "usage_usec 2000\nnr_throttled 1\n",
         );
@@ -1250,6 +1305,14 @@ mod tests {
         let cpu_stat = parse_cpu_stat("usage_usec 42\nnr_throttled 7\n").unwrap();
         assert_eq!(cpu_stat.usage_usec, 42);
         assert_eq!(cpu_stat.nr_throttled, 7);
+
+        let memory_stat =
+            parse_memory_stat("anon 100\nfile 200\nkernel 30\nslab 10\nsock 1\nshmem 2\n").unwrap();
+        assert_eq!(memory_stat.anon_bytes, 100);
+        assert_eq!(memory_stat.file_bytes, 200);
+        assert_eq!(memory_stat.kernel_bytes, 30);
+        assert_eq!(memory_stat.slab_bytes, 10);
+        assert_eq!(parse_memory_stat("").unwrap(), MemoryStat::default());
 
         let cpu_max = parse_cpu_max("max 100000\n").unwrap();
         assert_eq!(cpu_max.quota_usec, None);
@@ -1325,6 +1388,10 @@ mod tests {
         assert_eq!(snapshot.memory.peak_bytes, Some(1500));
         assert_eq!(snapshot.memory.max_bytes, Some(2048));
         assert_eq!(snapshot.memory.oom_kill, 2);
+        assert_eq!(snapshot.memory.anon_bytes, 500);
+        assert_eq!(snapshot.memory.file_bytes, 500);
+        assert_eq!(snapshot.memory.kernel_bytes, 80);
+        assert_eq!(snapshot.memory.slab_bytes, 30);
         assert_eq!(snapshot.cpu.usage_usec, 3000);
         assert_eq!(snapshot.cpu.cores, 0.0);
         assert_eq!(snapshot.cpu.quota_usec, Some(50_000));
@@ -1433,6 +1500,10 @@ mod tests {
         assert!(json.contains("\"memory\":{\"current_bytes\":1500"));
         assert!(json.contains("\"peak_bytes\":1500"));
         assert!(json.contains("\"max_bytes\":2048"));
+        assert!(json.contains("\"anon_bytes\":500"));
+        assert!(json.contains("\"file_bytes\":500"));
+        assert!(json.contains("\"kernel_bytes\":80"));
+        assert!(json.contains("\"slab_bytes\":30"));
         assert!(json.contains("\"cores\":0,"));
         assert!(json.contains("\"some_avg10\":1"));
         assert!(json.contains("\"read_bytes_per_s\":null"));

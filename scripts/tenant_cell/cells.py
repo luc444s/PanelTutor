@@ -68,12 +68,12 @@ class CellService:
         return f"/system.slice/spanel-cell-{slug}.scope"
 
     def _keep_plan(self, slug: str) -> None:
-        """A.SPEC 0100: repair/provision must never revert an active plan.
+        """A.SPEC 0108: repair/provision must never revert an in-place plan.
 
-        A plan attaches to the user manager, not to the cell unit, so these
-        flows normally leave it untouched. Re-asserting both artifacts makes
-        that invariant explicit and future-proof, without changing the stored
-        driver or any other tenant.
+        A plan attaches to ``user@<uid>.service`` via ``systemctl set-property``,
+        not to a tenant slice. Remove any legacy reparenting artifacts and
+        re-assert the effective properties only when they drifted; never
+        recreate the old slice/drop-in.
         """
         from . import plans
 
@@ -84,8 +84,11 @@ class CellService:
         if cell is None:
             return
         uid = int(cell["uid"])
-        self.executor.install_tenant_slice(slug, entry["plan"])
-        self.executor.install_user_manager_dropin(slug, uid)
+        self.executor.cleanup_legacy_plan(slug, uid)
+        state = self.executor.read_plan_state(uid)
+        expected = plans.expected_probe_limits(entry["plan"])
+        if state.get("effective") != expected:
+            self.executor.apply_plan_in_place(uid, entry["plan"])
 
     def _main_pid(self, slug: str, cell: dict[str, Any]) -> int:
         driver = cgroup_driver(cell)

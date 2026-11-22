@@ -2,8 +2,10 @@ import { describe, expect, it } from "vitest";
 
 import {
   METRICS_HISTORY,
+  cacheMemoryBytes,
   cpuLimitCores,
   cpuPercent,
+  effectiveMemoryBytes,
   formatMemoryBytes,
   isCellMetricsSample,
   memoryPercent,
@@ -30,6 +32,10 @@ function sample(overrides: Partial<CellMetricsSample> = {}): CellMetricsSample {
       peak_bytes: 2048,
       max_bytes: 4096,
       oom_kill: 0,
+      anon_bytes: 1000,
+      file_bytes: 0,
+      kernel_bytes: 24,
+      slab_bytes: 4,
     },
     cpu: {
       usage_usec: 1000,
@@ -162,6 +168,31 @@ describe("percentages", () => {
     const value = sample({ cpu: { ...sample().cpu, quota_usec: null, period_usec: null } });
     expect(cpuLimitCores(value)).toBeNull();
     expect(cpuPercent(value)).toBeNull();
+  });
+
+  it("uses anon+kernel for RAM and exposes reclaimable cache", () => {
+    const value = sample({
+      memory: {
+        ...sample().memory,
+        current_bytes: 2048,
+        anon_bytes: 512,
+        file_bytes: 1536,
+        kernel_bytes: 0,
+      },
+    });
+    expect(effectiveMemoryBytes(value)).toBe(512);
+    expect(cacheMemoryBytes(value)).toBe(1536);
+    expect(memoryPercent(value)).toBe(12.5);
+  });
+
+  it("falls back to current_bytes when an old sample has no breakdown", () => {
+    const value = sample();
+    delete (value.memory as { anon_bytes?: number }).anon_bytes;
+    delete (value.memory as { kernel_bytes?: number }).kernel_bytes;
+    delete (value.memory as { file_bytes?: number }).file_bytes;
+    expect(effectiveMemoryBytes(value)).toBe(1024);
+    expect(cacheMemoryBytes(value)).toBeNull();
+    expect(memoryPercent(value)).toBe(25);
   });
 });
 

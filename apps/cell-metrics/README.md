@@ -117,7 +117,16 @@ La unidad de referencia `spanel-cell-metrics.service` aplica
   "uid": 60070,
   "interval_ms": 1000,
   "warmup": false,
-  "memory": { "current_bytes": 1524629504, "peak_bytes": 1729629504, "max_bytes": 2147483648, "oom_kill": 0 },
+  "memory": {
+    "current_bytes": 1524629504,
+    "peak_bytes": 1729629504,
+    "max_bytes": 2147483648,
+    "oom_kill": 0,
+    "anon_bytes": 889192448,
+    "file_bytes": 623820800,
+    "kernel_bytes": 8323072,
+    "slab_bytes": 3796992
+  },
   "cpu": { "usage_usec": 123456789, "cores": 0.62, "quota_usec": 100000, "period_usec": 100000, "nr_throttled": 0 },
   "pids": { "current": 118, "max": 256 },
   "pressure": {
@@ -132,3 +141,10 @@ La unidad de referencia `spanel-cell-metrics.service` aplica
 `null` significa ausente o sin límite. Un snapshot `--once` ya hizo warmup, así
 que `warmup` es `false` y `cpu.cores`/rates son reales. En `--watch` la primera
 línea es warmup (`cpu.cores: 0.0`, rates `null`).
+
+El desglose de `memory` sale de `memory.stat`: `anon_bytes + kernel_bytes` es el
+consumo no reclamable de la celda, mientras que `file_bytes` es page cache
+(binarios compartidos, imágenes y ficheros) que el kernel reclama bajo presión.
+`slab_bytes` es un subconjunto de `kernel_bytes`. Para capacidad se debe usar
+`anon_bytes + kernel_bytes`; `current_bytes` incluye la caché y sobreestima el
+consumo real.

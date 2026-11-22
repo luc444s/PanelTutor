@@ -30,6 +30,10 @@ SAMPLE = {
         "peak_bytes": 1729629504,
         "max_bytes": 2147483648,
         "oom_kill": 0,
+        "anon_bytes": 889192448,
+        "file_bytes": 623820800,
+        "kernel_bytes": 8323072,
+        "slab_bytes": 3796992,
     },
     "cpu": {
         "usage_usec": 123456789,
@@ -94,12 +98,22 @@ def test_resolve_uid_rejects_missing_slug(tmp_path: Path) -> None:
 def test_render_snapshot_matches_documented_table() -> None:
     table = cli.render_snapshot(SAMPLE)
     assert "Cell demo · uid 60070 · 2026-11-22 02:30:00Z · intervalo 1.0s" in table
-    assert "1,42 GiB / 2,00 GiB    71 %   pico 1,61 GiB" in table
+    assert "real 855,94 MiB / 2,00 GiB    42 %   pico 1,61 GiB" in table
+    assert "caché 594,92 MiB · cgroup 1,42 GiB" in table
     assert "0,62 cores / 1,00    62,0 %   throttled 0" in table
     assert "118 / 256" in table
     assert "CPU 3,1 % · RAM 0,4 % · IO 0,0 %" in table
     assert "lectura 1,2 kB/s · escritura 3,4 kB/s" in table
     assert "Ctrl-C para salir." in table
+
+
+def test_render_snapshot_falls_back_to_current_without_memory_breakdown() -> None:
+    sample = json.loads(json.dumps(SAMPLE))
+    for key in ("anon_bytes", "file_bytes", "kernel_bytes", "slab_bytes"):
+        sample["memory"].pop(key)
+    table = cli.render_snapshot(sample)
+    assert "1,42 GiB / 2,00 GiB    71 %   pico 1,61 GiB" in table
+    assert "caché" not in table
 
 
 def test_render_snapshot_handles_null_limits_and_warmup() -> None:
@@ -156,7 +170,7 @@ def test_once_table_uses_fake_binary(tmp_path: Path) -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "Cell demo · uid 60070" in result.stdout
-    assert "1,42 GiB / 2,00 GiB" in result.stdout
+    assert "real 855,94 MiB / 2,00 GiB" in result.stdout
 
 
 def test_missing_binary_suggests_build(tmp_path: Path) -> None:

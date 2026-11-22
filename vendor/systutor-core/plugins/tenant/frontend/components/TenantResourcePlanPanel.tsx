@@ -8,8 +8,10 @@ import { Alert } from "@systutor/shell/ui/alert";
 import { Button } from "@systutor/shell/ui/button";
 import { Input } from "@systutor/shell/ui/input";
 import {
+  cacheMemoryBytes,
   cpuLimitCores,
   cpuPercent,
+  effectiveMemoryBytes,
   memoryPercent,
   parseMetricsEvent,
   parseSseChunk,
@@ -240,6 +242,7 @@ function LiveMetricsSection({ tenantId, enabled }: { tenantId: string; enabled: 
   const cpuValues = samples.map((sample) => cpuPercent(sample) ?? 0);
   const ramValues = samples.map((sample) => memoryPercent(sample) ?? 0);
   const cpuLimit = latest ? cpuLimitCores(latest) : null;
+  const cache = latest ? cacheMemoryBytes(latest) : null;
   const statusLabelText =
     status === "live" ? t("Live") : status === "reconnecting" ? t("Reconnecting…") : t("No connection");
 
@@ -274,10 +277,11 @@ function LiveMetricsSection({ tenantId, enabled }: { tenantId: string; enabled: 
             <div className="rounded-md border border-border px-3 py-2">
               <p className="text-xs uppercase text-muted-foreground">{t("Current RAM")}</p>
               <p className="text-sm font-medium text-foreground">
-                {formatBytes(latest.memory.current_bytes)} / {formatBytes(latest.memory.max_bytes)}
+                {formatBytes(effectiveMemoryBytes(latest))} / {formatBytes(latest.memory.max_bytes)}
               </p>
               <p className="text-xs text-muted-foreground">
                 {formatPercentValue(memoryPercent(latest))}
+                {cache !== null ? ` · ${t("Cache")} ${formatBytes(cache)}` : ""}
               </p>
             </div>
             <div className="rounded-md border border-border px-3 py-2">

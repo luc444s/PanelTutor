@@ -21,6 +21,10 @@ export type CellMetricsSample = {
     peak_bytes: number | null;
     max_bytes: number | null;
     oom_kill: number;
+    anon_bytes?: number | null;
+    file_bytes?: number | null;
+    kernel_bytes?: number | null;
+    slab_bytes?: number | null;
   };
   cpu: {
     usage_usec: number;
@@ -120,6 +124,11 @@ function isOptionalNumber(value: unknown): boolean {
   return value === null || isNumber(value);
 }
 
+/** Newer samples include the breakdown; older daemons simply omit it. */
+function isOptionalNumberOrMissing(value: unknown): boolean {
+  return value === undefined || isOptionalNumber(value);
+}
+
 /** Structural guard for one 0112 JSON line. */
 export function isCellMetricsSample(value: unknown): value is CellMetricsSample {
   if (!isRecord(value)) return false;
@@ -131,6 +140,10 @@ export function isCellMetricsSample(value: unknown): value is CellMetricsSample 
   if (!isNumber(memory.current_bytes)) return false;
   if (!isOptionalNumber(memory.peak_bytes) || !isOptionalNumber(memory.max_bytes)) return false;
   if (!isNumber(memory.oom_kill)) return false;
+  if (!isOptionalNumberOrMissing(memory.anon_bytes)) return false;
+  if (!isOptionalNumberOrMissing(memory.file_bytes)) return false;
+  if (!isOptionalNumberOrMissing(memory.kernel_bytes)) return false;
+  if (!isOptionalNumberOrMissing(memory.slab_bytes)) return false;
 
   const cpu = value.cpu;
   if (!isRecord(cpu)) return false;
@@ -216,8 +229,28 @@ export function cpuPercent(sample: CellMetricsSample): number | null {
   return percentOf(sample.cpu.cores, limit);
 }
 
+/**
+ * Non-reclaimable footprint (`anon + kernel`) when the daemon reports the
+ * breakdown; old samples fall back to `current_bytes`. Cache (binaries,
+ * images, files) is intentionally excluded: the kernel reclaims it under
+ * pressure and it made the tenant baseline look ~60 MiB larger.
+ */
+export function effectiveMemoryBytes(sample: CellMetricsSample): number {
+  const { anon_bytes: anon, kernel_bytes: kernel } = sample.memory;
+  if (typeof anon === "number" && typeof kernel === "number") {
+    return anon + kernel;
+  }
+  return sample.memory.current_bytes;
+}
+
+/** Reclaimable page cache reported by the daemon, or null for old samples. */
+export function cacheMemoryBytes(sample: CellMetricsSample): number | null {
+  const { file_bytes: file } = sample.memory;
+  return typeof file === "number" ? file : null;
+}
+
 export function memoryPercent(sample: CellMetricsSample): number | null {
-  return percentOf(sample.memory.current_bytes, sample.memory.max_bytes);
+  return percentOf(effectiveMemoryBytes(sample), sample.memory.max_bytes);
 }
 
 export type SparklinePoint = { x: number; y: number };
