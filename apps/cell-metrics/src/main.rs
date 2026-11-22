@@ -115,6 +115,14 @@ fn run(args: Args) -> std::result::Result<(), String> {
     let mut sampler = Sampler::new(&args.cgroup_root, &args.slug, args.uid, args.interval_ms)
         .map_err(|error| error.to_string())?;
 
+    // A single snapshot needs two samples to report real CPU and I/O rates.
+    // Take a short warmup sample and discard it; `--watch` keeps its first
+    // emitted line as warmup so the terminal shows something immediately.
+    if args.once {
+        sampler.sample().map_err(|error| error.to_string())?;
+        thread::sleep(Duration::from_millis(250));
+    }
+
     let stdout = io::stdout();
     let mut out = stdout.lock();
     loop {

@@ -20,8 +20,9 @@ cargo build --release
 ./target/release/spanel-cell-metrics --slug demo --uid 60070 --watch --interval-ms 1000 --json
 ```
 
-- `--once` emite un snapshot y termina (modo por defecto).
-- `--watch` emite una línea por intervalo hasta `SIGINT`.
+- `--once` hace un warmup corto de 250 ms y emite un snapshot con CPU/I/O reales.
+- `--watch` emite una línea por intervalo hasta `SIGINT`; la primera línea es
+  warmup y las siguientes ya traen CPU/I/O reales.
 - `--interval-ms` acepta 250–60000 (defecto 1000).
 - `--cgroup-root` existe solo para tests con un árbol falso.
 
@@ -49,5 +50,6 @@ El script `scripts/cell_metrics_cli.py` resuelve el uid desde
 }
 ```
 
-`null` significa ausente o sin límite. El primer sample tiene `warmup: true`,
-`cpu.cores: 0.0` y rates de I/O `null`.
+`null` significa ausente o sin límite. Un snapshot `--once` ya hizo warmup, así
+que `warmup` es `false` y `cpu.cores`/rates son reales. En `--watch` la primera
+línea es warmup (`cpu.cores: 0.0`, rates `null`).

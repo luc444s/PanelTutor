@@ -105,8 +105,10 @@ Una celda rootless tiene dos árboles separados:
 | `io.read_bytes` / `io.write_bytes` | `io.stat` | suma de dispositivos, acumulado |
 | `io.read_bytes_per_s` / `write_bytes_per_s` | `io.stat` | delta / tiempo; `null` en el primer sample |
 
-- El primer snapshot tiene `cpu.cores=0.0` y `warmup=true`; los rates de I/O son
-  `null`.
+- En `--watch`, el primer snapshot emitido tiene `cpu.cores=0.0` y
+  `warmup=true`, y los rates de I/O son `null`; los siguientes son reales.
+- En `--once` se toma un warmup interno de 250 ms y se emite directamente el
+  snapshot real (`warmup=false`).
 - Los contadores son acumulados; el consumidor calcula lo que quiera con ellos.
 - No se lee ni se escribe ningún otro fichero del sistema.
 - La memoria no se guarda en disco; el proceso solo mantiene el sample anterior.
@@ -258,8 +260,9 @@ Cell demo · uid 60070 · 2026-11-22 03:30:00Z · intervalo 1.0s
 
 **Postcondiciones**:
 
-1. `spanel-cell-metrics --slug demo --uid 60070 --once --json` emite un JSON
-   con RAM, CPU, PIDs, presión e I/O reales y termina con código 0.
+1. `spanel-cell-metrics --slug demo --uid 60070 --once --json` hace un warmup
+   corto de 250 ms y emite un JSON con RAM, CPU, PIDs, presión e I/O reales, y
+   termina con código 0.
 2. `--watch --interval-ms 1000` emite una línea por segundo, con deltas de CPU
    e I/O correctos y sin crecimiento de memoria.
 3. `scripts/cell_metrics_cli.py --slug demo --once` muestra la tabla con los
@@ -280,7 +283,7 @@ invariants:
   - "No se usan docker stats, ps, systemd-cgtop, du ni comandos externos."
   - "Solo se leen rutas bajo el cgroup root; --cgroup-root es exclusivo de tests."
   - "Se suman los dos árboles de la celda sin duplicar prefijos."
-  - "CPU e I/O se calculan con deltas y reloj monótono; el primer sample es warmup."
+  - "CPU e I/O se calculan con deltas y reloj monótono; --once precalienta 250 ms y --watch emite la primera línea como warmup."
   - "Un slug inválido no se interpola en rutas."
   - "El plan agent y la API de planes no cambian."
   - "No se toca Core ni producción."
