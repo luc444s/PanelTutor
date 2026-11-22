@@ -163,9 +163,12 @@ def render_snapshot(sample: dict[str, Any], interval_ms: int | None = None) -> s
     quota = cpu.get("quota_usec")
     period = cpu.get("period_usec")
     limit = float(quota) / float(period) if quota and period else None
-    cpu_line = f"  {'CPU':<10} {_es(cores, 2)} cores"
+    # Idle cells can burn a few millicores; keep them visible without making
+    # normal values noisy.
+    digits = 3 if 0 < cores < 0.01 else 2
+    cpu_line = f"  {'CPU':<10} {_es(cores, digits)} cores"
     if limit:
-        cpu_line += f" / {_es(limit, 2)}    {round(cores * 100 / limit)} %"
+        cpu_line += f" / {_es(limit, 2)}    {_es(cores * 100 / limit, 1)} %"
     cpu_line += f"   throttled {cpu.get('nr_throttled') or 0}"
     lines.append(cpu_line)
 

@@ -95,7 +95,7 @@ def test_render_snapshot_matches_documented_table() -> None:
     table = cli.render_snapshot(SAMPLE)
     assert "Cell demo · uid 60070 · 2026-11-22 02:30:00Z · intervalo 1.0s" in table
     assert "1,42 GiB / 2,00 GiB    71 %   pico 1,61 GiB" in table
-    assert "0,62 cores / 1,00    62 %   throttled 0" in table
+    assert "0,62 cores / 1,00    62,0 %   throttled 0" in table
     assert "118 / 256" in table
     assert "CPU 3,1 % · RAM 0,4 % · IO 0,0 %" in table
     assert "lectura 1,2 kB/s · escritura 3,4 kB/s" in table
