@@ -148,6 +148,11 @@ def test_rendered_profile_parses_when_apparmor_parser_is_available(
     assert result.returncode == 0, result.stderr
 
 
+def test_render_profile_allows_rootlesskit_tap_netlink() -> None:
+    """RootlessKit's gvisor tap setup uses iproute2 over raw netlink."""
+    assert "network netlink raw," in _profile()
+
+
 def test_render_profile_scopes_writes_to_cell_and_image_trees() -> None:
     profile = _profile()
 

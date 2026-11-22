@@ -230,6 +230,10 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   network inet6 dgram,
   network unix stream,
   network packet dgram,
+  # `ip tuntap add` configures rootlesskit's tap through a raw netlink socket.
+  # Without this narrow family/type grant AppArmor denies SO_SNDBUF before
+  # dockerd starts, so the cell never acquires its network namespace.
+  network netlink raw,
 
   # setns between processes of this same cell only; cross-tenant is denied.
   ptrace (read, readby) peer=spanel-cell-{slug},

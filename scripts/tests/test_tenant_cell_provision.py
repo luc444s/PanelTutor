@@ -417,6 +417,7 @@ def test_apparmor_profile_allows_rootless_build_and_exec() -> None:
     """
     profile = apparmor.render_profile("acme")
     assert "capability net_raw," in profile
+    assert "network netlink raw," in profile
     # Real-image shells (busybox/dash/sh) run via the broad rootfs grant, now
     # unqualified: intra-tenant access is allowed by design (A.SPEC 0109-R2).
     assert "/** rix," in profile

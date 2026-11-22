@@ -349,6 +349,81 @@ def test_audit_log_records_actor_tenant(db_session: Session, seeded_demo: dict[s
     assert any(item.id == audit.id for item in logs)
 
 
+def test_audit_log_rejects_non_platform_cross_tenant_actor(
+    db_session: Session, seeded_demo: dict[str, str]
+) -> None:
+    actor_tenant = db_session.get(Tenant, seeded_demo["tenant_id"])
+    actor_branch = db_session.get(Branch, seeded_demo["branch_id"])
+    assert actor_tenant is not None
+    assert actor_branch is not None
+    actor = create_user(
+        db_session,
+        tenant=actor_tenant,
+        branch=actor_branch,
+        email="audit-tenant-actor@example.com",
+        password="AuditActor123!",
+        full_name="Audit Tenant Actor",
+    )
+    target = create_tenant(db_session, name="Audit Target", slug="audit-target")
+    db_session.commit()
+
+    with pytest.raises(TenantScopeError, match="Actor tenant does not match"):
+        record_audit(
+            db_session,
+            tenant_id=target.id,
+            branch_id=None,
+            actor_user_id=actor.id,
+            actor_type="user",
+            module="core",
+            action="tenant.audit.cross_tenant",
+            entity_type="test",
+            entity_id=target.id,
+            result="success",
+            correlation_id=None,
+            request_id=None,
+            details={},
+        )
+
+
+def test_audit_log_allows_rbac_platform_actor_for_target_tenant(
+    db_session: Session, seeded_demo: dict[str, str]
+) -> None:
+    actor = get_user_by_id(db_session, seeded_demo["user_id"])
+    assert actor is not None
+    actor_tenant = db_session.get(Tenant, actor.tenant_id)
+    assert actor_tenant is not None
+    role = create_role(db_session, tenant=actor_tenant, name="platform-auditor")
+    assign_permission_to_role(
+        db_session,
+        role=role,
+        permission=get_permission(db_session, PLATFORM_PERMISSION),
+    )
+    assign_role_to_user(db_session, user=actor, role=role)
+    target = create_tenant(db_session, name="Platform Audit Target", slug="platform-audit-target")
+    db_session.commit()
+
+    audit = record_audit(
+        db_session,
+        tenant_id=target.id,
+        branch_id=None,
+        actor_user_id=actor.id,
+        actor_type="user",
+        module="core",
+        action="tenant.audit.platform",
+        entity_type="test",
+        entity_id=target.id,
+        result="success",
+        correlation_id=None,
+        request_id=None,
+        details={},
+    )
+    db_session.commit()
+
+    assert audit.tenant_id == target.id
+    assert audit.branch_id is None
+    assert audit.actor_user_id == actor.id
+
+
 def test_event_log_records_actor_tenant(db_session: Session, seeded_demo: dict[str, str]) -> None:
     user_a = get_user_by_id(db_session, seeded_demo["user_id"])
     assert user_a is not None

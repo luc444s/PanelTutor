@@ -188,20 +188,38 @@ def resolve_tenant_scope(
 ) -> tuple[str | None, str | None]:
     effective_tenant_id = tenant_id
     effective_branch_id = branch_id
+    platform_cross_tenant = False
 
     actor = db.get(User, actor_user_id) if actor_user_id is not None else None
     if actor is not None:
         if effective_tenant_id is None:
             effective_tenant_id = actor.tenant_id
         elif effective_tenant_id != actor.tenant_id:
-            raise TenantScopeError("Actor tenant does not match the requested tenant")
+            # Platform operators are explicitly authorized by RBAC to perform
+            # cross-tenant actions. Audit/event scope must preserve both the
+            # real actor and the tenant being changed instead of rejecting the
+            # write after the action has already succeeded.
+            from systutor.kernel.permissions.service import user_has_permission
+
+            platform_cross_tenant = user_has_permission(
+                db,
+                user_id=actor.id,
+                tenant_id=actor.tenant_id,
+                permission_name="core.platform.admin",
+            )
+            if not platform_cross_tenant:
+                raise TenantScopeError("Actor tenant does not match the requested tenant")
 
         if not validate_user_branch_scope(db, actor):
             raise TenantScopeError("Actor branch does not belong to the actor tenant")
 
-        if effective_branch_id is None:
+        if effective_branch_id is None and not platform_cross_tenant:
             effective_branch_id = actor.branch_id
-        elif actor.branch_id is not None and effective_branch_id != actor.branch_id:
+        elif (
+            not platform_cross_tenant
+            and actor.branch_id is not None
+            and effective_branch_id != actor.branch_id
+        ):
             raise TenantScopeError("Actor branch does not match the requested branch")
 
     if effective_branch_id is not None:
