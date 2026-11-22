@@ -1,0 +1,17 @@
+[package]
+name = "spanel-cell-metrics"
+version = "0.1.0"
+edition = "2021"
+description = "Read-only cgroups v2 sampler for a Spanel cell (A.SPEC 0112)"
+license = "MIT"
+publish = false
+
+[dependencies]
+
+[[bin]]
+name = "spanel-cell-metrics"
+path = "src/main.rs"
+
+[lib]
+name = "spanel_cell_metrics"
+path = "src/lib.rs"

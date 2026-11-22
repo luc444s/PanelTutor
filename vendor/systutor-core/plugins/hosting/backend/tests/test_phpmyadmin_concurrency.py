@@ -201,7 +201,10 @@ def test_session_creation_releases_read_transaction_before_upstream(tmp_path) ->
     route_module = importlib.import_module("plugins.hosting.backend.router")
 
     class SlowLogin:
-        def phpmyadmin_login_credentials(self, site, context, client):
+        def phpmyadmin_relay_server(self, site, context, pma_session_id):
+            return None
+
+        def phpmyadmin_login_credentials(self, site, context, client, *, server=None):
             assert site.id == site_id
             assert _checked_out(engine) == 0, "connection held during remote login"
             raise AppError(

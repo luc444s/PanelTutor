@@ -49,9 +49,7 @@ def test_config_update_rechaza_container_name() -> None:
 
 def test_config_update_no_tiene_tenant_id() -> None:
     with pytest.raises(ValidationError, match="tenant_id"):
-        SiteConfigUpdateRequest.model_validate(
-            {"env": {}, "tenant_id": "otro-tenant"}
-        )
+        SiteConfigUpdateRequest.model_validate({"env": {}, "tenant_id": "otro-tenant"})
 
 
 def test_los_contratos_de_mutacion_no_exponen_tenant_id() -> None:

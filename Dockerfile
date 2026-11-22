@@ -35,14 +35,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && docker buildx version \
     && rm -rf /var/lib/apt/lists/*
 
-# Transactional build hardener (A.SPEC 0080/0083) runs inside the worker.
-RUN curl -fsSL https://github.com/aquasecurity/trivy/releases/download/v0.76.2/trivy_0.76.2_Linux-64bit.tar.gz \
-    | tar xz -C /usr/local/bin trivy \
-    && curl -fsSL https://github.com/hadolint/hadolint/releases/download/v2.15.1/hadolint-linux-x86_64 \
-    -o /usr/local/bin/hadolint \
-    && chmod 755 /usr/local/bin/trivy /usr/local/bin/hadolint \
-    && trivy --version && hadolint --version
-
 WORKDIR /app
 
 COPY vendor/systutor-core/pyproject.toml vendor/systutor-core/README.md* ./vendor/systutor-core/
@@ -65,10 +57,6 @@ RUN chmod 755 /app/scripts/site_backup.py /app/scripts/site_backup_link.py \
     /app/scripts/site_restore.py /app/scripts/e2e_apps_software_editores.py \
     /app/scripts/e2e_apps_api.py /app/scripts/migrate_env.py \
     /app/scripts/refresh_routes.py /app/scripts/grant_tenant_permission.py
-
-COPY scripts/dangerous_build /app/scripts/dangerous_build
-COPY scripts/dangerous_build_normalize.py /app/scripts/dangerous_build_normalize.py
-RUN printf '#!/bin/sh\nPYTHONPATH=/app/scripts:/app/plugins:/app/vendor/systutor-core:/app exec python3 /app/scripts/dangerous_build_normalize.py "$@"\n' > /usr/local/bin/dangerous-build-normalize && chmod 755 /usr/local/bin/dangerous-build-normalize
 
 COPY --from=frontend-build /app/apps/web/dist/ ./static/
 

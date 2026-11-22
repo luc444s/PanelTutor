@@ -1,0 +1,382 @@
+{
+  "checks": {
+    "cleanup": {
+      "cell_leftovers": "",
+      "pass": true,
+      "removed_orphan_user": "spanel-e2e0109r4v3",
+      "state_hashes": {
+        "/etc/subgid": "8a0a1343bb0126dbc43686512b3ccb5d2abb0ec1ddbb215957d8a8f1a995940d",
+        "/etc/subuid": "8a0a1343bb0126dbc43686512b3ccb5d2abb0ec1ddbb215957d8a8f1a995940d",
+        "/var/lib/spanel/audit.jsonl": "42660f20de2e3ac590575b0c0992a01d54b54c06fe4825968d427682dba98bfd",
+        "/var/lib/spanel/plans.json": "dc2a7b9b3c39489c74560313c649da499e5a991b368311e052232b687f8f831f",
+        "/var/lib/spanel/registry.json": "a3503ea9dcb53aab65945d2338c7493b90fb3bec539a932f57fe7f53f8dac6e6"
+      },
+      "state_restored": true
+    },
+    "deploy_and_probe": {
+      "active_deployment": "2ebc6753-3848-45f2-8cd9-419a9024f36e",
+      "containers": {
+        "backend": {
+          "absent_from_rootful": true,
+          "container_id": "05d8422fa5bee5eb1233804ce53ce9a7b6a80f290902a3421eedfe3b935a4ba6",
+          "daemon": "/var/lib/spanel/cells/e2e0109r4v3/docker.sock",
+          "health": "healthy",
+          "image_id": "sha256:75bdc35f2f39ad33a25168baf421ae20f34934c46cbc5e6bff735d32b17b3952",
+          "network": "app-8b10e0362844481bb5f3afb0_default",
+          "state": "running"
+        },
+        "database": {
+          "absent_from_rootful": true,
+          "container_id": "db3b9f05e7d0a9d6fd280de5ac914ba55ee45e1202498d804dd7c45755b682b2",
+          "daemon": "/var/lib/spanel/cells/e2e0109r4v3/docker.sock",
+          "health": "healthy",
+          "image_id": "sha256:d433ac5b21293e46e86b92b77a19ad0458178bb37aa24d2e23e7e01758d0bb1a",
+          "network": "app-8b10e0362844481bb5f3afb0_default",
+          "state": "running"
+        },
+        "frontend": {
+          "absent_from_rootful": true,
+          "container_id": "52afb1f177ec40d6d1ae384098b54182a75b32ff4b14f9bb230614c82c2fd098",
+          "daemon": "/var/lib/spanel/cells/e2e0109r4v3/docker.sock",
+          "health": "healthy",
+          "image_id": "sha256:188baaeed7a1f8056c1e610d600e55b8ab8b16a4a8b08ff3a1ba96a07af2af51",
+          "network": "app-8b10e0362844481bb5f3afb0_default",
+          "state": "running"
+        }
+      },
+      "deploy_status": "running",
+      "network": "app-8b10e0362844481bb5f3afb0_default",
+      "pass": true,
+      "probe": {
+        "http_status": "200",
+        "target": "http://frontend:8080/"
+      }
+    },
+    "rollback": {
+      "containers_in_cell": true,
+      "first_deployment": "91748ee3-1838-4b32-b53d-7a20cf1a799f",
+      "operation": {
+        "application_id": "8fafb6fb-a67b-44dc-9a89-1062067945c3",
+        "created_at": "2026-11-19T20:29:09.456457Z",
+        "error_code": null,
+        "finished_at": "2026-11-19T20:29:15.886168Z",
+        "id": "dec4b40b-feb4-4ed1-a56e-b9cfdbeb9083",
+        "kind": "rollback",
+        "phase": "complete",
+        "public_error": null,
+        "report": {
+          "to_deployment_id": "91748ee3-1838-4b32-b53d-7a20cf1a799f"
+        },
+        "result": {
+          "artifact_sha256": "0b24933999c76a0d3ebf0047950d9f579c7ab558a87fd07cfeba4e46f9a91991",
+          "branch": "feature/workflow-diseno",
+          "commit": "ae33f9d10f6263d975bcb1bfdb8650a7021dff23",
+          "compose_sha256": "2d1c62149a0fb09a381b50fc614aaa49167b7c1076bd9a42417f1f5152fb432f",
+          "created_at": "2026-11-19T20:28:12.464760+00:00",
+          "deployment_id": "2ebc6753-3848-45f2-8cd9-419a9024f36e",
+          "expires_at": "2026-11-20T20:28:12.464760+00:00",
+          "gate_sha256": "20ba9ac2fee9e045679b96b99b1ea55c763d941014b34c3f8d8b59d4bd5b6a2f",
+          "hardened_tree_sha256": "b6f6de3d0ef9636a513d041efdfe6f3ba829defd13812b2711e3ca767edb38fd",
+          "key_id": "165a05fc",
+          "policy_sha256": "7db9dd3f165b6a04db7d17070569ae678afb336683597b5bc24999dd60c42994",
+          "release_id": "9e5b0e3e-8593-4730-8324-3e388a558336",
+          "repo": "luc444s/software-de-gestion-para-editores",
+          "rollback": true,
+          "scope": {
+            "effective_services": [],
+            "fallback_reason": null,
+            "requested_scope": "global",
+            "requested_service": null,
+            "strategy": "noop"
+          },
+          "service_fingerprints": {
+            "backend": "bb42d0326f8f33373f6346552ae28c8f4f227c8f1958e46938d6ca2988b5b781",
+            "database": "405675bc4a500f64a50ecdb270de464793d3fdb2c09dbb06c26296345a1fde3c",
+            "frontend": "b731f96ac21aec6b535e5620084b7312acee9f14230d6f7c0be0fba366f5bf5c"
+          },
+          "shared_fingerprint": "5aafd24d71b3252d195d6cd3906c39ea4eaa422d033cbafa48a04bb0d33bc7c4",
+          "status": "running"
+        },
+        "started_at": "2026-11-19T20:29:09.498367Z",
+        "status": "succeeded",
+        "subject_id": "8fafb6fb-a67b-44dc-9a89-1062067945c3",
+        "subject_type": "application"
+      },
+      "pass": true,
+      "restored_commit": "ae33f9d10f6263d975bcb1bfdb8650a7021dff23",
+      "restored_deployment": "2ebc6753-3848-45f2-8cd9-419a9024f36e",
+      "restored_release": "/var/tmp/spanel-e2e-0109r4/state/app-8b10e0362844481bb5f3afb0/releases/9e5b0e3e-8593-4730-8324-3e388a558336",
+      "second_deployment": "fea1662e-52f1-4602-9cf1-32083e113271"
+    }
+  },
+  "date": "2026-11-19T20:29:20.046989+00:00",
+  "environment": {
+    "cell": "e2e0109r4v3",
+    "cell_state": "ready (AppArmor effective, uid_map observed)",
+    "code_under_test": "/var/tmp/spanel-e2e-0109r4",
+    "disposable_db_dropped": true,
+    "fixture": "luc444s/software-de-gestion-para-editores@feature/workflow-diseno/docker-compose.dokploy.yml",
+    "host": "lucas-ThinkPad-E570",
+    "isolation": "cloned DB, disposable API/worker/redis, real rootless cell, real GitHub fixture",
+    "method": "single scripted black-box: cloned DB, disposable API/worker/redis, real rootless cell, real GitHub fixture"
+  },
+  "kind": "scoped black-box deploy E2E (rootless cell)",
+  "raw": {
+    "cleanup": {
+      "cell_leftovers": "",
+      "checks": {},
+      "cleanup_errors": [],
+      "cleanup_verified": true,
+      "deprovision": "{\"data_kept\": false, \"slug\": \"e2e0109r4v3\", \"state\": \"retired\"}",
+      "environment": {
+        "cell": "e2e0109r4v3",
+        "code_under_test": "/var/tmp/spanel-e2e-0109r4",
+        "fixture": "luc444s/software-de-gestion-para-editores@feature/workflow-diseno/docker-compose.dokploy.yml",
+        "host": "lucas-ThinkPad-E570",
+        "method": "single scripted black-box: cloned DB, disposable API/worker/redis, real rootless cell, real GitHub fixture"
+      },
+      "finished_at": "2026-11-19T20:29:48.920547+00:00",
+      "ok": true,
+      "phase": "cleanup",
+      "removed_leftovers": [
+        "/home/spanel-e2e0109r4v3",
+        "/run/user/60070",
+        "/var/lib/spanel/cells/e2e0109r4v3",
+        "/run/user/60071",
+        "/run/user/60072",
+        "/run/user/60073",
+        "/run/user/60074"
+      ],
+      "removed_orphan_user": "spanel-e2e0109r4v3",
+      "spec": "0109-r4-host-nat-and-domains-owned-hosts",
+      "started_at": "2026-11-19T20:29:42.585842+00:00",
+      "state_hashes_after": {
+        "/etc/subgid": "8a0a1343bb0126dbc43686512b3ccb5d2abb0ec1ddbb215957d8a8f1a995940d",
+        "/etc/subuid": "8a0a1343bb0126dbc43686512b3ccb5d2abb0ec1ddbb215957d8a8f1a995940d",
+        "/var/lib/spanel/audit.jsonl": "42660f20de2e3ac590575b0c0992a01d54b54c06fe4825968d427682dba98bfd",
+        "/var/lib/spanel/plans.json": "dc2a7b9b3c39489c74560313c649da499e5a991b368311e052232b687f8f831f",
+        "/var/lib/spanel/registry.json": "a3503ea9dcb53aab65945d2338c7493b90fb3bec539a932f57fe7f53f8dac6e6"
+      },
+      "state_hashes_before": {
+        "/etc/subgid": "8a0a1343bb0126dbc43686512b3ccb5d2abb0ec1ddbb215957d8a8f1a995940d",
+        "/etc/subuid": "8a0a1343bb0126dbc43686512b3ccb5d2abb0ec1ddbb215957d8a8f1a995940d",
+        "/var/lib/spanel/audit.jsonl": "42660f20de2e3ac590575b0c0992a01d54b54c06fe4825968d427682dba98bfd",
+        "/var/lib/spanel/plans.json": "dc2a7b9b3c39489c74560313c649da499e5a991b368311e052232b687f8f831f",
+        "/var/lib/spanel/registry.json": "a3503ea9dcb53aab65945d2338c7493b90fb3bec539a932f57fe7f53f8dac6e6"
+      },
+      "state_restored": true
+    },
+    "run": {
+      "active_deployment": "2ebc6753-3848-45f2-8cd9-419a9024f36e",
+      "application": {
+        "domain": null,
+        "id": "8fafb6fb-a67b-44dc-9a89-1062067945c3",
+        "slug": "e2e-software-editores-2653fc5f",
+        "tenant_id": "658e5ca2-00a4-4672-b5c5-f093db3066fa"
+      },
+      "application_deleted": true,
+      "checks": {
+        "blackbox": {
+          "pass": true
+        }
+      },
+      "containers": {
+        "backend": {
+          "absent_from_rootful": true,
+          "container_id": "05d8422fa5bee5eb1233804ce53ce9a7b6a80f290902a3421eedfe3b935a4ba6",
+          "daemon": "/var/lib/spanel/cells/e2e0109r4v3/docker.sock",
+          "health": "healthy",
+          "image_id": "sha256:75bdc35f2f39ad33a25168baf421ae20f34934c46cbc5e6bff735d32b17b3952",
+          "network": "app-8b10e0362844481bb5f3afb0_default",
+          "state": "running"
+        },
+        "database": {
+          "absent_from_rootful": true,
+          "container_id": "db3b9f05e7d0a9d6fd280de5ac914ba55ee45e1202498d804dd7c45755b682b2",
+          "daemon": "/var/lib/spanel/cells/e2e0109r4v3/docker.sock",
+          "health": "healthy",
+          "image_id": "sha256:d433ac5b21293e46e86b92b77a19ad0458178bb37aa24d2e23e7e01758d0bb1a",
+          "network": "app-8b10e0362844481bb5f3afb0_default",
+          "state": "running"
+        },
+        "frontend": {
+          "absent_from_rootful": true,
+          "container_id": "52afb1f177ec40d6d1ae384098b54182a75b32ff4b14f9bb230614c82c2fd098",
+          "daemon": "/var/lib/spanel/cells/e2e0109r4v3/docker.sock",
+          "health": "healthy",
+          "image_id": "sha256:188baaeed7a1f8056c1e610d600e55b8ab8b16a4a8b08ff3a1ba96a07af2af51",
+          "network": "app-8b10e0362844481bb5f3afb0_default",
+          "state": "running"
+        }
+      },
+      "deploy_operation": {
+        "application_id": "8fafb6fb-a67b-44dc-9a89-1062067945c3",
+        "created_at": "2026-11-19T20:28:03.480558Z",
+        "error_code": null,
+        "finished_at": "2026-11-19T20:28:49.105995Z",
+        "id": "9e5b0e3e-8593-4730-8324-3e388a558336",
+        "kind": "deploy",
+        "phase": "complete",
+        "public_error": null,
+        "report": {
+          "environment_fingerprint": "8aec3d7f2017308d29484ff5f35b8b2a0516e6392789e2e97d917fdeb276be34",
+          "environment_names": [
+            "API_KEY",
+            "APP_DB_NAME",
+            "APP_DB_PASSWORD",
+            "APP_DB_USER",
+            "CLOUDFLARE_R2_ACCESS_KEY_ID",
+            "CLOUDFLARE_R2_BUCKET",
+            "CLOUDFLARE_R2_ENABLED",
+            "CLOUDFLARE_R2_ENDPOINT_URL",
+            "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+            "CLOUDFLARE_WORKER_SHARED_SECRET",
+            "CORS_ORIGINS",
+            "DATABASE_URL",
+            "JWT_SECRET_KEY",
+            "PAYPAL_ENABLED",
+            "RUN_DB_MIGRATIONS",
+            "SECRET_KEY",
+            "VITE_API_BASE_URL",
+            "VITE_CHAT_ENABLED",
+            "WAIT_FOR_DB",
+            "WORKER_BASE_URL"
+          ],
+          "tenant_environment_names": [
+            "API_KEY",
+            "CLOUDFLARE_R2_ACCESS_KEY_ID",
+            "CLOUDFLARE_R2_BUCKET",
+            "CLOUDFLARE_R2_ENABLED",
+            "CLOUDFLARE_R2_ENDPOINT_URL",
+            "CLOUDFLARE_R2_SECRET_ACCESS_KEY",
+            "CLOUDFLARE_WORKER_SHARED_SECRET",
+            "CORS_ORIGINS",
+            "DATABASE_URL",
+            "JWT_SECRET_KEY",
+            "PAYPAL_ENABLED",
+            "RUN_DB_MIGRATIONS",
+            "SECRET_KEY",
+            "VITE_API_BASE_URL",
+            "VITE_CHAT_ENABLED",
+            "WAIT_FOR_DB",
+            "WORKER_BASE_URL"
+          ]
+        },
+        "result": {
+          "artifact_sha256": "0b24933999c76a0d3ebf0047950d9f579c7ab558a87fd07cfeba4e46f9a91991",
+          "branch": "feature/workflow-diseno",
+          "commit": "ae33f9d10f6263d975bcb1bfdb8650a7021dff23",
+          "compose_sha256": "2d1c62149a0fb09a381b50fc614aaa49167b7c1076bd9a42417f1f5152fb432f",
+          "created_at": "2026-11-19T20:28:12.464760+00:00",
+          "deployment_id": "91748ee3-1838-4b32-b53d-7a20cf1a799f",
+          "expires_at": "2026-11-20T20:28:12.464760+00:00",
+          "gate_sha256": "20ba9ac2fee9e045679b96b99b1ea55c763d941014b34c3f8d8b59d4bd5b6a2f",
+          "hardened_tree_sha256": "b6f6de3d0ef9636a513d041efdfe6f3ba829defd13812b2711e3ca767edb38fd",
+          "key_id": "165a05fc",
+          "policy_sha256": "7db9dd3f165b6a04db7d17070569ae678afb336683597b5bc24999dd60c42994",
+          "release_id": "9e5b0e3e-8593-4730-8324-3e388a558336",
+          "repo": "luc444s/software-de-gestion-para-editores",
+          "scope": {
+            "effective_services": [
+              "backend",
+              "database",
+              "frontend"
+            ],
+            "fallback_reason": null,
+            "requested_scope": "global",
+            "requested_service": null,
+            "strategy": "initial"
+          },
+          "service_fingerprints": {
+            "backend": "bb42d0326f8f33373f6346552ae28c8f4f227c8f1958e46938d6ca2988b5b781",
+            "database": "405675bc4a500f64a50ecdb270de464793d3fdb2c09dbb06c26296345a1fde3c",
+            "frontend": "b731f96ac21aec6b535e5620084b7312acee9f14230d6f7c0be0fba366f5bf5c"
+          },
+          "shared_fingerprint": "5aafd24d71b3252d195d6cd3906c39ea4eaa422d033cbafa48a04bb0d33bc7c4",
+          "status": "running"
+        },
+        "started_at": "2026-11-19T20:28:03.692692Z",
+        "status": "succeeded",
+        "subject_id": "8fafb6fb-a67b-44dc-9a89-1062067945c3",
+        "subject_type": "application"
+      },
+      "deploy_status": "running",
+      "environment": {
+        "cell": "e2e0109r4v3",
+        "code_under_test": "/var/tmp/spanel-e2e-0109r4",
+        "fixture": "luc444s/software-de-gestion-para-editores@feature/workflow-diseno/docker-compose.dokploy.yml",
+        "host": "lucas-ThinkPad-E570",
+        "method": "single scripted black-box: cloned DB, disposable API/worker/redis, real rootless cell, real GitHub fixture"
+      },
+      "finished_at": "2026-11-19T20:29:20.046989+00:00",
+      "network": "app-8b10e0362844481bb5f3afb0_default",
+      "ok": true,
+      "phase": "run",
+      "probe": {
+        "http_status": "200",
+        "target": "http://frontend:8080/"
+      },
+      "rollback": {
+        "containers_in_cell": true,
+        "first_deployment": "91748ee3-1838-4b32-b53d-7a20cf1a799f",
+        "operation": {
+          "application_id": "8fafb6fb-a67b-44dc-9a89-1062067945c3",
+          "created_at": "2026-11-19T20:29:09.456457Z",
+          "error_code": null,
+          "finished_at": "2026-11-19T20:29:15.886168Z",
+          "id": "dec4b40b-feb4-4ed1-a56e-b9cfdbeb9083",
+          "kind": "rollback",
+          "phase": "complete",
+          "public_error": null,
+          "report": {
+            "to_deployment_id": "91748ee3-1838-4b32-b53d-7a20cf1a799f"
+          },
+          "result": {
+            "artifact_sha256": "0b24933999c76a0d3ebf0047950d9f579c7ab558a87fd07cfeba4e46f9a91991",
+            "branch": "feature/workflow-diseno",
+            "commit": "ae33f9d10f6263d975bcb1bfdb8650a7021dff23",
+            "compose_sha256": "2d1c62149a0fb09a381b50fc614aaa49167b7c1076bd9a42417f1f5152fb432f",
+            "created_at": "2026-11-19T20:28:12.464760+00:00",
+            "deployment_id": "2ebc6753-3848-45f2-8cd9-419a9024f36e",
+            "expires_at": "2026-11-20T20:28:12.464760+00:00",
+            "gate_sha256": "20ba9ac2fee9e045679b96b99b1ea55c763d941014b34c3f8d8b59d4bd5b6a2f",
+            "hardened_tree_sha256": "b6f6de3d0ef9636a513d041efdfe6f3ba829defd13812b2711e3ca767edb38fd",
+            "key_id": "165a05fc",
+            "policy_sha256": "7db9dd3f165b6a04db7d17070569ae678afb336683597b5bc24999dd60c42994",
+            "release_id": "9e5b0e3e-8593-4730-8324-3e388a558336",
+            "repo": "luc444s/software-de-gestion-para-editores",
+            "rollback": true,
+            "scope": {
+              "effective_services": [],
+              "fallback_reason": null,
+              "requested_scope": "global",
+              "requested_service": null,
+              "strategy": "noop"
+            },
+            "service_fingerprints": {
+              "backend": "bb42d0326f8f33373f6346552ae28c8f4f227c8f1958e46938d6ca2988b5b781",
+              "database": "405675bc4a500f64a50ecdb270de464793d3fdb2c09dbb06c26296345a1fde3c",
+              "frontend": "b731f96ac21aec6b535e5620084b7312acee9f14230d6f7c0be0fba366f5bf5c"
+            },
+            "shared_fingerprint": "5aafd24d71b3252d195d6cd3906c39ea4eaa422d033cbafa48a04bb0d33bc7c4",
+            "status": "running"
+          },
+          "started_at": "2026-11-19T20:29:09.498367Z",
+          "status": "succeeded",
+          "subject_id": "8fafb6fb-a67b-44dc-9a89-1062067945c3",
+          "subject_type": "application"
+        },
+        "restored_commit": "ae33f9d10f6263d975bcb1bfdb8650a7021dff23",
+        "restored_deployment": "2ebc6753-3848-45f2-8cd9-419a9024f36e",
+        "restored_release": "/var/tmp/spanel-e2e-0109r4/state/app-8b10e0362844481bb5f3afb0/releases/9e5b0e3e-8593-4730-8324-3e388a558336",
+        "second_deployment": "fea1662e-52f1-4602-9cf1-32083e113271"
+      },
+      "spec": "0109-r4-host-nat-and-domains-owned-hosts",
+      "started_at": "2026-11-19T20:27:50.452946+00:00"
+    }
+  },
+  "result": "PASS",
+  "result_reason": "Real HTTP API + Dramatiq worker deploy of luc444s/software-de-gestion-para-editores@feature/workflow-diseno into a provisioned rootless tenant cell. All three release services ran and were healthy inside the cell daemon, none existed in the rootful daemon, an independent probe from inside the cell returned HTTP 200, a second deployment activated a new row, and rollback restored the first signed release with its containers still in the cell. Cleanup dropped the disposable DB, retired the cell and restored host state byte-for-byte.",
+  "scope_note": "This is a scoped E2E. It does NOT replace the four-check R4 artifact (artifacts/0109-r4-host-nat-and-domains-owned-hosts-e2e.json), which remains BLOCKED 2/4: checks 3 and 4 and the 005 downgrade were not rerun here. This artifact proves only the editors deployment/probe/rollback path in its real rootless environment.",
+  "spec": "0109-r4-host-nat-and-domains-owned-hosts"
+}

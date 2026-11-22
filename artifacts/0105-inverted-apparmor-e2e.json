@@ -1,0 +1,280 @@
+{
+  "artifact": "0105-inverted-apparmor-e2e",
+  "spec": "A.SPEC 0105",
+  "subagent": 2,
+  "role": "E2E en laboratorio (sin cambios de codigo fuente, sin GENERATOR, sin parcheos manuales, sin commit de codigo)",
+  "date_utc": "2026-11-18T15:08:05Z",
+  "result": "PASS",
+  "commit_under_test": "9b129f9 (reglas para el INODO de directorios, no solo /**) sobre 935f810",
+  "artifact_choice": "Se actualizo UNICO este artifact con TAREA A y TAREA B. No se creo artifacts/0105-editor-stack-e2e.json separado.",
+  "ronda": "Novena ronda. Compuerta apparmor_parser -Q rc=0. TAREA A: las 5 imagenes pasan, incluida MariaDB Up con 'mysqld is alive'. TAREA B: stack completo de editores (frontend + backend + PostgreSQL) corriendo en UNA celda rootless nueva con red bridge privada creada por compose; backend alcanzable por nombre de servicio; frontend publicado por relay. 0 DENIED nuevos en todas las celdas. No se parcheo nada.",
+  "gate": {
+    "command": "render_profile() + apparmor_parser -Q sobre /var/tmp/spanel-e2e-0105/rendered-probe.aa",
+    "rendered_bytes": 11074,
+    "parser_q_rc": 0,
+    "result": "PASS"
+  },
+  "lab": {
+    "host": "lucas@100.67.5.50",
+    "hostname": "lucas-ThinkPad-E570",
+    "venv_python": "/home/lucas/mailadmin/.venv/bin/python",
+    "temp_checkout": "/var/tmp/spanel-e2e-0105 (tar fresco, chown 1000:1000)",
+    "data_root": "/var/lib/spanel",
+    "traefik_ip": "172.25.0.3",
+    "gateway": "172.25.0.1",
+    "http_entrypoint_host_port": 9080,
+    "dynamic_dir": "/home/lucas/mailadmin/scripts/traefik-lab/dynamic",
+    "relay_pid": 547039,
+    "forbidden_targets_untouched": [
+      "cell-g (uid 60008)",
+      "cell-h (uid 60009)",
+      "Traefik (config estatica / restart)",
+      "phpMyAdmin",
+      "MariaDB del host",
+      "WordPress",
+      "produccion vmi3461574",
+      "/opt/stacks"
+    ]
+  },
+  "verification_deploy": {
+    "fresh_tar": "tar --exclude __pycache__/*.pyc de scripts/spanel_tenant.py + scripts/tenant_cell; scp; rm -rf /var/tmp/spanel-e2e-0105 y re-extraer; chown -R 1000:1000",
+    "apparmor_inode_rules_present": ["/data/ rwklix,", "/var/lib/mysql/ rwklix,", "/app/ rwklix,", "/docker-entrypoint-initdb.d/ rwklix,", "/run/mysqld/ rwklix,", "/etc/mysql/ rwklix,", "/home/ rwklix,"],
+    "cli_help_rc": 0,
+    "doctor_ready": true,
+    "docker_info_seccomp": "SecurityOptions: seccomp, Profile: /var/lib/spanel/cells/<slug>/cell-seccomp.json, rootless, Cgroup Driver systemd (WARNING: daemon is not using the default seccomp profile)"
+  },
+  "tarea_a": {
+    "result": "PASS (todas las imagenes)",
+    "aa_status_during_test": "las 5 celdas r9 en enforce (apparmor effective=true)",
+    "dmesg": {
+      "baseline_file": "/var/tmp/spanel-e2e-0105/dmesg-baseline.log",
+      "baseline_denied": 286,
+      "final_file": "/var/tmp/spanel-e2e-0105/dmesg-final.log",
+      "new_denied_por_fsuid": {
+        "60058_nginx": 0,
+        "60059_spa": 0,
+        "60060_php": 0,
+        "60061_mariadb": 0,
+        "60062_gitea": 0
+      },
+      "new_denied_total": 0
+    },
+    "matrix": [
+      {
+        "image": "nginx:alpine",
+        "slug": "cell-e2e-0105r9nginx",
+        "index": 58,
+        "uid": 60058,
+        "rc": 0,
+        "result": "PASS",
+        "container_state": "Up",
+        "aa_status": "enforce",
+        "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-0105r9nginx/cell-seccomp.json",
+        "denied_new": 0,
+        "http_code": 200,
+        "body": "nginx-0105-r9-OK"
+      },
+      {
+        "image": "software-de-gestion-para-editores-main_frontend:latest (SPA real)",
+        "slug": "cell-e2e-0105r9spa",
+        "index": 59,
+        "uid": 60059,
+        "rc": 0,
+        "result": "PASS",
+        "container_state": "Up",
+        "aa_status": "enforce",
+        "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-0105r9spa/cell-seccomp.json",
+        "denied_new": 0,
+        "http_code": 200,
+        "body_bytes": 394,
+        "body_sample": "<title>Panel Editor</title>",
+        "config_override_note": "Mismo override de configuracion de la app de 0104 (default.conf estatico; la imagen no es autocontenida). NO es parche de AppArmor ni de seccomp."
+      },
+      {
+        "image": "php:8.2-fpm-alpine",
+        "slug": "cell-e2e-0105r9php",
+        "index": 60,
+        "uid": 60060,
+        "rc": 0,
+        "result": "PASS",
+        "container_state": "Up",
+        "aa_status": "enforce",
+        "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-0105r9php/cell-seccomp.json",
+        "denied_new": 0
+      },
+      {
+        "image": "mariadb:10.11",
+        "slug": "cell-e2e-0105r9db",
+        "index": 61,
+        "uid": 60061,
+        "rc": 0,
+        "result": "PASS",
+        "container_state": "Up 26 segundos",
+        "aa_status": "enforce",
+        "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-0105r9db/cell-seccomp.json",
+        "denied_new": 0,
+        "password_usada": "labpass123 (efimera, solo laboratorio)",
+        "mysqladmin_ping": "mysqld is alive",
+        "logs": "mariadbd: ready for connections. Version: '10.11.19-MariaDB-ubu2204'; Server socket created on IP 0.0.0.0 port 3306; InnoDB buffer pool loaded",
+        "volumen": "/var/lib/spanel/cells/cell-e2e-0105r9db/dbdata:/var/lib/mysql"
+      },
+      {
+        "image": "gitea/gitea:1.22 (SQLite, volumen en /data)",
+        "slug": "cell-e2e-0105r9gitea",
+        "index": 62,
+        "uid": 60062,
+        "rc": 0,
+        "result": "PASS",
+        "container_state": "Up",
+        "aa_status": "enforce",
+        "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-0105r9gitea/cell-seccomp.json",
+        "denied_new": 0,
+        "datadir": "/var/lib/spanel/cells/cell-e2e-0105r9gitea/gitea-data",
+        "direct_http_code": 200,
+        "link": "http://gitea-e2e.lab:9080/"
+      },
+      {
+        "image": "node:20-alpine (opcional)",
+        "slug": null,
+        "rc": null,
+        "result": "NO EJECUTADO"
+      }
+    ],
+    "gitea_link": {
+      "url": "http://gitea-e2e.lab:9080/",
+      "http_code": 200,
+      "bytes": 22643,
+      "body_contains_gitea": 17,
+      "title": "Installation - Gitea: Git with a cup of tea",
+      "relay_endpoint": {
+        "slug": "cell-e2e-0105r9gitea",
+        "loopback_address": "127.63.1.1",
+        "publish_port": 20062,
+        "relay_port": 40062,
+        "bind": "172.25.0.1",
+        "allowed_sources": ["172.25.0.3"]
+      },
+      "route_file": "/home/lucas/mailadmin/scripts/traefik-lab/dynamic/spanel-route-0105-gitea.yml",
+      "hosts_entry": "127.0.0.1 gitea-e2e.lab",
+      "nota": "La ruta se cambio del backend de la ronda 8 (40055) al backend nuevo r9 (40062); el endpoint viejo 40055 se retiro del relay. Link verificado 200 al final."
+    }
+  },
+  "tarea_b": {
+    "result": "PASS",
+    "ejecutada": true,
+    "razon_ejecucion": "TAREA A quedo toda PASS, por lo que se ejecuto la TAREA B segun la instruccion.",
+    "cell": {
+      "slug": "cell-e2e-0105r9stack",
+      "index": 63,
+      "uid": 60063,
+      "project_compose": "e2e0105stack",
+      "compose_file": "/var/tmp/spanel-e2e-0105/stack/compose.yaml",
+      "aa_status": "spanel-cell-cell-e2e-0105r9stack = enforce",
+      "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-0105r9stack/cell-seccomp.json (docker info)",
+      "denied_new": 0
+    },
+    "images": [
+      "software-de-gestion-para-editores-main_backend:latest",
+      "software-de-gestion-para-editores-main_frontend:latest",
+      "postgres:17-alpine"
+    ],
+    "image_provenance": "docker save del daemon host + docker load en el daemon rootless de la celda (no build, no red del host).",
+    "network": {
+      "name": "e2e0105stack_editornet",
+      "driver": "bridge",
+      "defined_by": "compose (seccion networks)",
+      "containers_attached": 3,
+      "database_published": false,
+      "backend_published": false,
+      "frontend_published": "127.64.1.1:20063->80/tcp",
+      "note": "Red bridge privada propia del compose; ni la BD ni el backend exponen puertos al host. No se uso --network host."
+    },
+    "docker_compose_ps": [
+      "e2e0105stack-database-1 postgres:17-alpine Up (healthy)",
+      "e2e0105stack-backend-1 software-de-gestion-para-editores-main_backend:latest Up",
+      "e2e0105stack-frontend-1 software-de-gestion-para-editores-main_frontend:latest Up"
+    ],
+    "internal_connectivity": {
+      "command": "docker exec e2e0105stack-frontend-1 wget -qO- http://backend:8000/health",
+      "result": "{\"status\":\"ok\"}",
+      "http_code": 200,
+      "backend_log": "127.0.0.1:55170 - GET /health HTTP/1.1 200 OK; 172.18.0.4:55202 - GET /health HTTP/1.1 200 OK"
+    },
+    "frontend_direct": {
+      "url": "http://127.64.1.1:20063/",
+      "http_code": 200,
+      "bytes": 394,
+      "title": "<title>Panel Editor</title>"
+    },
+    "link": {
+      "url": "http://stack-editores-e2e.lab:9080/",
+      "http_code": 200,
+      "bytes": 394,
+      "title": "<title>Panel Editor</title>",
+      "relay_endpoint": {
+        "slug": "cell-e2e-0105r9stack",
+        "loopback_address": "127.64.1.1",
+        "publish_port": 20063,
+        "relay_port": 40063,
+        "bind": "172.25.0.1",
+        "allowed_sources": ["172.25.0.3"]
+      },
+      "route_file": "/home/lucas/mailadmin/scripts/traefik-lab/dynamic/spanel-route-0105-stack-editores.yml",
+      "route_marker": "# managed-by: spanel",
+      "servers_url": "http://172.25.0.1:40063",
+      "hosts_entry": "127.0.0.1 stack-editores-e2e.lab",
+      "relay_listener": "172.25.0.1:40063 -> pid 547039",
+      "verified": true
+    },
+    "manual_patch_applied": false
+  },
+  "links_final": {
+    "http://rootless-e2e.lab:9080/": 200,
+    "http://editores-e2e.lab:9080/": 200,
+    "http://gitea-e2e.lab:9080/": 200,
+    "http://stack-editores-e2e.lab:9080/": 200,
+    "relay_pid": 547039
+  },
+  "cleanup": {
+    "failed_cells_removed": [],
+    "reason": "No hubo ningun FAIL en esta ronda: TAREA A toda PASS y TAREA B PASS. No se retiro ninguna celda; se conservan como evidencia viva.",
+    "stale_relay_endpoint_removed": "cell-e2e-0105r8gitea (endpoint 40055 sin ruta viva; se documento que el link de Gitea usa ahora 40062)",
+    "kept_alive": [
+      "5 celdas TAREA A (nginx, SPA, php, MariaDB, Gitea) con sus contenedores",
+      "celda TAREA B con el stack de 3 contenedores y red e2e0105stack_editornet",
+      "relay edge-relay PID 547039 (no tocado)",
+      "cell-g, cell-h, cell-e2e-0104a, cell-e2e-0104b intactas",
+      "Traefik (sin reiniciar), phpMyAdmin, MariaDB del host, WordPress, produccion y /opt/stacks intactos"
+    ],
+    "hosts_entries_e2e": 4,
+    "route_files_0105": 2
+  },
+  "integrity": {
+    "source_code_modified": false,
+    "apparmor_or_seccomp_manually_patched": false,
+    "generator_run": false,
+    "committed_code": false,
+    "artifact_path": "/data/data/com.termux/files/home/Proyectos/mailadmin/artifacts/0105-inverted-apparmor-e2e.json"
+  },
+  "final_summary": {
+    "round": "PASS",
+    "tarea_a": "PASS - 5/5 imagenes (MariaDB Up con 'mysqld is alive'), 0 DENIED nuevos",
+    "tarea_b": "PASS - stack completo (frontend+backend+postgres) en una celda rootless con red bridge privada por compose; backend /health 200 por nombre de servicio; SPA publicada por relay",
+    "links": [
+      "http://rootless-e2e.lab:9080/",
+      "http://editores-e2e.lab:9080/",
+      "http://gitea-e2e.lab:9080/",
+      "http://stack-editores-e2e.lab:9080/"
+    ],
+    "denied_unpatched": 0,
+    "gaps": [],
+    "resultados": {
+      "nginx:alpine": "PASS",
+      "SPA editores": "PASS",
+      "php:8.2-fpm-alpine": "PASS",
+      "mariadb:10.11": "PASS (mysqld is alive)",
+      "gitea/gitea:1.22": "PASS (UI por relay)",
+      "stack editores (3 contenedores, red interna)": "PASS (backend /health 200 por nombre de servicio + SPA por relay)"
+    }
+  }
+}

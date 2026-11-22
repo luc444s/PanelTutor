@@ -85,9 +85,16 @@ def db(tmp_path):
     with Session(engine) as session:
         session.add(Tenant(id="t1", name="Tenant", slug="tenant"))
         # The builtin profile the migration 003 creates in every deployment.
-        session.add(StaticProfile(id="nginx", name="Nginx (static)",
-                                  image="nginx:alpine", web_root="/usr/share/nginx/html",
-                                  container_port=80, health_mode="marker"))
+        session.add(
+            StaticProfile(
+                id="nginx",
+                name="Nginx (static)",
+                image="nginx:alpine",
+                web_root="/usr/share/nginx/html",
+                container_port=80,
+                health_mode="marker",
+            )
+        )
         session.commit()
         yield session
     engine.dispose()
@@ -152,9 +159,7 @@ def test_invalid_kind_is_rejected() -> None:
 
 def test_free_domain_without_suffix_is_allowed(db: Session) -> None:
     app = FastAPI()
-    response = service(db).create_site(
-        context(), "sitio", "debug.com", kind="static", app=app
-    )
+    response = service(db).create_site(context(), "sitio", "debug.com", kind="static", app=app)
     assert response.site.domain == "debug.com"
     assert FakeStaticProvisioner.calls == [("spanel-sitio-web", "t1", "debug.com", True)]
 
@@ -171,9 +176,7 @@ def test_domain_owned_by_another_tenant_conflicts_without_provisioning(
     )
 
     with pytest.raises(AppError) as exc:
-        service(db).create_site(
-            context(), "sitio", "otro.com", kind="static", app=app
-        )
+        service(db).create_site(context(), "sitio", "otro.com", kind="static", app=app)
     assert exc.value.code == "hosting_site_domain_conflict"
     assert FakeStaticProvisioner.calls == []
 
@@ -214,13 +217,9 @@ def test_site_with_reserved_tenant_domain_keeps_ownership(db: Session) -> None:
         if _db.get(TenantDomain, domain) is None:
             _db.add(TenantDomain(domain=domain, tenant_id=tenant_id))
 
-    register_domain_providers(
-        app, "tenant", list_domains=list_owned, owner=owner_of, claim=claim
-    )
+    register_domain_providers(app, "tenant", list_domains=list_owned, owner=owner_of, claim=claim)
 
-    response = service(db).create_site(
-        context(), "sitio", "debug.com", kind="static", app=app
-    )
+    response = service(db).create_site(context(), "sitio", "debug.com", kind="static", app=app)
     assert response.site.domain == "debug.com"
     # La propiedad explícita queda en tenant_domains: sigue siendo del tenant.
     row = db.get(TenantDomain, "debug.com")
@@ -238,9 +237,7 @@ def test_domain_already_in_hosting_sites_conflicts(db: Session) -> None:
     )
     db.commit()
     with pytest.raises(AppError) as exc:
-        service(db).create_site(
-            context(), "sitio", "sitio.spanel", kind="static", app=suffix_app()
-        )
+        service(db).create_site(context(), "sitio", "sitio.spanel", kind="static", app=suffix_app())
     assert exc.value.code == "hosting_site_conflict"
     assert FakeStaticProvisioner.calls == []
 
@@ -256,9 +253,7 @@ def test_wordpress_uses_authenticated_user_email(db: Session) -> None:
         )
     )
     db.commit()
-    response = service(db).create_site(
-        context(), "demowp", "demowp.spanel", app=suffix_app()
-    )
+    response = service(db).create_site(context(), "demowp", "demowp.spanel", app=suffix_app())
     assert FakeWordPressProvisioner.calls[0][3] == "lucas@example.com"
     assert response.admin_password == "generated-password"
     assert response.site.kind == "wordpress"
@@ -273,9 +268,7 @@ def test_static_with_publisher_uses_no_traefik_labels(db: Session) -> None:
     app = suffix_app()
     publisher = FakePublisher()
     register_site_domain_publisher(app, "domains", publisher)
-    response = service(db).create_site(
-        context(), "pagina", "pagina.spanel", kind="static", app=app
-    )
+    response = service(db).create_site(context(), "pagina", "pagina.spanel", kind="static", app=app)
     assert FakeStaticProvisioner.calls[0][3] is False
     assert publisher.published == [("spanel-pagina-web", "pagina.spanel")]
     assert response.admin_password is None
@@ -284,9 +277,7 @@ def test_static_with_publisher_uses_no_traefik_labels(db: Session) -> None:
 
 
 def test_static_without_publisher_keeps_traefik_labels(db: Session) -> None:
-    service(db).create_site(
-        context(), "pagina", "pagina.spanel", kind="static", app=suffix_app()
-    )
+    service(db).create_site(context(), "pagina", "pagina.spanel", kind="static", app=suffix_app())
     assert FakeStaticProvisioner.calls[0][3] is True
     assert get_site_domain_publisher(None) is None
 
@@ -295,9 +286,7 @@ def test_publish_failure_cleans_up_and_inserts_no_row(db: Session) -> None:
     app = suffix_app()
     register_site_domain_publisher(app, "domains", FakePublisher(fail=True))
     with pytest.raises(AppError) as exc:
-        service(db).create_site(
-            context(), "pagina", "pagina.spanel", kind="static", app=app
-        )
+        service(db).create_site(context(), "pagina", "pagina.spanel", kind="static", app=app)
     assert exc.value.code == "hosting_provision_failed"
     assert FakeStaticProvisioner.cleaned == ["spanel-pagina-web"]
     assert db.query(HostingSite).count() == 0
@@ -352,7 +341,11 @@ def test_create_static_with_unknown_profile_fails_clean(db: Session) -> None:
     # 404 BEFORE any Docker call, any volume, any row (I2/I3).
     with pytest.raises(AppError) as exc:
         service(db).create_site(
-            context(), "sitio", "sitio.spanel", kind="static", profile="king",
+            context(),
+            "sitio",
+            "sitio.spanel",
+            kind="static",
+            profile="king",
             app=suffix_app(),
         )
     assert exc.value.code == "hosting_profile_unknown"
@@ -402,9 +395,7 @@ def test_create_static_with_custom_profile_seats_the_profile(db: Session, monkey
     assert row.kind == "static"
 
 
-def test_delete_static_unpublishes_and_removes_owned_resources(
-    db: Session, monkeypatch
-) -> None:
+def test_delete_static_unpublishes_and_removes_owned_resources(db: Session, monkeypatch) -> None:
     DeletingProvisioner.last = None
     monkeypatch.setattr(service_module, "Provisioner", DeletingProvisioner)
     app = suffix_app()

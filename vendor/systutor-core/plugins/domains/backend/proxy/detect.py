@@ -17,7 +17,7 @@ from pathlib import Path
 import yaml
 
 from .config import PROFILES, Settings
-from .core import EXIT_TRANSPORT, ProxyError
+from .core import EXIT_TRANSPORT, EXIT_VALIDATION, ProxyError
 
 DEFAULT_CONFIG_DIR = "/config"
 STATIC_CONFIG_CANDIDATES = ("/traefik.yml", "/etc/traefik/traefik.yml")

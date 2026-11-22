@@ -12,6 +12,8 @@ plugin and never written to the audit row or a log line.
 from __future__ import annotations
 
 import json
+import logging
+import os
 import re
 import secrets
 import shlex
@@ -19,7 +21,7 @@ from collections.abc import Callable
 from urllib.parse import quote
 
 from fastapi import FastAPI
-from sqlalchemy import Select, select
+from sqlalchemy import Select, delete, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -29,12 +31,13 @@ from systutor.contracts.domain_namespace import (
     domain_owner,
 )
 from systutor.contracts.domain_ownership import is_extra_claimed
+from systutor.contracts.resource_runtime import write_resource_runtime
 from systutor.contracts.site_domain_publisher import get_site_domain_publisher
 from systutor.core.errors import AppError, NotFoundError
 from systutor.kernel.audit.service import record_audit
 from systutor.kernel.auth.models import User
 from systutor.kernel.tenants.context import TenantContext
-from systutor.kernel.tenants.models import Tenant
+from systutor.kernel.tenants.models import Tenant, new_uuid
 
 from .config import ENV_WHITELIST, RawAdapter, site_dir
 from .database import (
@@ -47,7 +50,7 @@ from .database import (
 from .database_binding import database_credentials as _database_credentials
 from .database_binding import resolve_database_binding
 from .inspection import candidato_de, inspect_container
-from .models import HostingSite, StaticProfile
+from .models import HostingSite, RootlessMigrationOperation, StaticProfile
 from .network import (
     connect_args,
     multi_database_enabled,
@@ -55,10 +58,23 @@ from .network import (
     validate_network_name,
 )
 from .passwords import hash_de_password
+from .phpmyadmin_broker import (
+    PmaBrokerClient,
+    broker_enabled,
+    server_address,
+    source_ip_from_env,
+)
 from .phpmyadmin_proxy import PmaClient
 from .profiles import ProfileSpec, spec_from_row
 from .provisioner import Provisioner, SiteNames, slug_for
 from .reset import actualizar_hash, leer_hash
+from .rootless_ingress import (
+    RootlessIngress,
+    RootlessRoutePublisher,
+    RouteSpec,
+    verify_external_route,
+)
+from .runtime import HostingRuntimeResolver
 from .schemas import (
     CreateSiteResponse,
     HostingSiteListResponse,
@@ -81,6 +97,7 @@ from .transport import Fallo, build_docker_argv, run
 from .wpconfig import read_wp_config
 
 PASSWORD_GENERATED_BYTES = 12
+logger = logging.getLogger(__name__)
 
 
 def generar_password() -> str:
@@ -143,9 +160,31 @@ class HostingService:
         db: Session,
         *,
         settings: HostingSettings | None = None,
+        app: FastAPI | None = None,
     ) -> None:
         self._db = db
         self._settings = settings or get_hosting_settings()
+        self._app = app
+
+    def _runtime_for(self, site: HostingSite):
+        if self._app is None:
+            return None
+        if not getattr(self._app.state, "resource_runtime_registry_providers", None):
+            return None
+        return HostingRuntimeResolver(self._app, self._db).resolve(
+            site.tenant_id, site.kind, site.id
+        )
+
+    def _provisioner_for(self, site: HostingSite):
+        runtime = self._runtime_for(site)
+        return Provisioner(self._settings, runtime) if runtime else Provisioner(self._settings)
+
+    def _env_for(self, site: HostingSite) -> dict:
+        env: dict = dict(self._env)
+        runtime = self._runtime_for(site)
+        if runtime is not None:
+            env["_SPANEL_RUNTIME_HANDLE"] = runtime
+        return env
 
     @property
     def _env(self) -> dict[str, str]:
@@ -158,6 +197,12 @@ class HostingService:
             timeout=self._settings.command_timeout,
         )
 
+    def _inspect_for(self, site: HostingSite, container_name: str) -> dict | None:
+        runtime = self._runtime_for(site)
+        if runtime is not None:
+            return runtime.inspect("container", container_name)
+        return self._inspect(container_name)
+
     def _require_site(self, site: HostingSite) -> tuple[dict, bool]:
         """The container must exist and still be a managed site.
 
@@ -166,7 +211,7 @@ class HostingService:
         site is validated by the ownership label alone because nginx is not a
         WordPress container.
         """
-        info = self._inspect(site.container_name)
+        info = self._inspect_for(site, site.container_name)
         if info is None:
             raise AppError(
                 f"Container {site.container_name} does not exist or is not responding",
@@ -188,8 +233,7 @@ class HostingService:
     def _require_wordpress(self, site: HostingSite) -> None:
         if site.kind == "static":
             raise AppError(
-                f"Site {site.container_name} is static; "
-                "this operation is only for WordPress",
+                f"Site {site.container_name} is static; this operation is only for WordPress",
                 status_code=409,
                 code="hosting_site_wrong_kind",
             )
@@ -213,10 +257,10 @@ class HostingService:
         can never disagree about where a site's database lives.
         """
         return resolve_database_binding(
-            self._env,
+            self._env_for(site),
             site.container_name,
             info,
-            inspector=self._inspect,
+            inspector=lambda name: self._inspect_for(site, name),
             timeout=self._settings.command_timeout,
             read_config=read_wp_config,
             resolve_alias=resolver_alias_de_contenedor,
@@ -251,6 +295,23 @@ class HostingService:
             details={"container_name": site.container_name, **(details or {})},
         )
 
+    @staticmethod
+    def _verify_external(
+        domain: str,
+        *,
+        https: bool = True,
+        deadline_seconds: float = 30.0,
+        initial_backoff: float = 0.25,
+        max_backoff: float = 2.0,
+    ) -> None:
+        verify_external_route(
+            domain,
+            https=https,
+            deadline_seconds=deadline_seconds,
+            initial_backoff=initial_backoff,
+            max_backoff=max_backoff,
+        )
+
     def create_site(
         self,
         tenant_context: TenantContext,
@@ -280,6 +341,7 @@ class HostingService:
         names = StaticNames.for_profile(slug, spec) if kind == "static" else SiteNames(slug)
         container_name = names.container if kind == "static" else names.wp
         tenant_id = tenant_context.current_tenant_id
+        site_id = new_uuid()
         tenant = self._db.get(Tenant, tenant_id)
         if tenant is None or not tenant.is_active:
             raise AppError(
@@ -312,11 +374,24 @@ class HostingService:
             claim_needed = owner is None
         if kind == "static":
             return self._create_static(
-                tenant_context, names, tenant_id, domain, spec=spec, app=app, claim=claim_needed
+                tenant_context,
+                names,
+                tenant_id,
+                domain,
+                site_id=site_id,
+                spec=spec,
+                app=app,
+                claim=claim_needed,
             )
         return self._create_wordpress(
-            tenant_context, names, tenant_id, domain, admin_email,
-            app=app, claim=claim_needed,
+            tenant_context,
+            names,
+            tenant_id,
+            domain,
+            admin_email,
+            site_id=site_id,
+            app=app,
+            claim=claim_needed,
         )
 
     def _create_wordpress(
@@ -327,10 +402,20 @@ class HostingService:
         domain: str,
         admin_email: str | None,
         *,
+        site_id: str,
         app: FastAPI | None = None,
         claim: bool = False,
     ) -> CreateSiteResponse:
-        provisioner = Provisioner(self._settings)
+        runtime = (
+            HostingRuntimeResolver(app, self._db).candidate(tenant_id)
+            if app and os.getenv("SPANEL_TENANTS_ROOTLESS", "false").lower() == "true"
+            else None
+        )
+        if runtime is not None and runtime.runtime == "rootless":
+            RootlessIngress(self._db, runtime)._network()
+        provisioner = (
+            Provisioner(self._settings, runtime) if runtime else Provisioner(self._settings)
+        )
         email = self._wordpress_admin_email(tenant_context, domain, admin_email)
         try:
             password = provisioner.create(names, tenant_id, domain, email)
@@ -342,6 +427,8 @@ class HostingService:
             container_name=names.wp,
             domain=domain,
             kind="wordpress",
+            site_id=site_id,
+            runtime=runtime,
             password=password,
             cleanup=lambda: provisioner.cleanup(names, tenant_id),
             app=app,
@@ -355,18 +442,32 @@ class HostingService:
         tenant_id: str,
         domain: str,
         *,
+        site_id: str,
         app: FastAPI | None,
         claim: bool = False,
         spec: ProfileSpec | None = None,
     ) -> CreateSiteResponse:
-        provisioner = StaticProvisioner(self._settings)
+        runtime = (
+            HostingRuntimeResolver(app, self._db).candidate(tenant_id)
+            if app and os.getenv("SPANEL_TENANTS_ROOTLESS", "false").lower() == "true"
+            else None
+        )
+        if runtime is not None and runtime.runtime == "rootless":
+            RootlessIngress(self._db, runtime)._network()
+        provisioner = (
+            StaticProvisioner(self._settings, runtime)
+            if runtime
+            else StaticProvisioner(self._settings)
+        )
         publisher = get_site_domain_publisher(app)
         try:
             provisioner.create(
                 names,
                 tenant_id,
                 domain,
-                traefik=publisher is None and self._settings.traefik,
+                traefik=(runtime is None or runtime.runtime == "rootful")
+                and publisher is None
+                and self._settings.traefik,
                 profile=spec,
             )
         except Fallo as exc:
@@ -381,6 +482,8 @@ class HostingService:
             container_name=names.container,
             domain=domain,
             kind="static",
+            site_id=site_id,
+            runtime=runtime,
             password=None,
             cleanup=lambda: provisioner.cleanup(names, tenant_id),
             publisher=publisher,
@@ -403,9 +506,12 @@ class HostingService:
         app: FastAPI | None = None,
         claim: bool = False,
         profile_id: str | None = None,
+        site_id: str,
+        runtime=None,
     ) -> CreateSiteResponse:
         published = False
-        if publisher is not None:
+        rootless = runtime is not None and runtime.runtime == "rootless"
+        if publisher is not None and not rootless:
             try:
                 publisher.publish(container_name, domain)
                 published = True
@@ -417,6 +523,7 @@ class HostingService:
                     code="hosting_provision_failed",
                 ) from exc
         site = HostingSite(
+            id=site_id,
             tenant_id=tenant_id,
             container_name=container_name,
             domain=domain,
@@ -428,6 +535,18 @@ class HostingService:
                 claim_domain(app, self._db, tenant_id, domain)
             self._db.add(site)
             self._db.flush()
+            if rootless:
+                port = 80
+                if profile_id:
+                    profile_row = self._db.get(StaticProfile, profile_id)
+                    port = int(profile_row.container_port) if profile_row else 80
+                RootlessIngress(self._db, runtime).upsert(
+                    RouteSpec(site.id, tenant_id, domain, container_name, port)
+                )
+                https = RootlessRoutePublisher(app, self._db).publish(tenant_id, domain)
+                published = True
+                self._verify_external(domain, https=https)
+                write_resource_runtime(app, self._db, tenant_id, kind, site.id, "rootless")
             details = {"kind": kind}
             if profile_id:
                 details["profile"] = profile_id
@@ -435,9 +554,17 @@ class HostingService:
             self._db.commit()
         except DomainConflictError as exc:
             self._db.rollback()
+            if rootless:
+                try:
+                    RootlessIngress(self._db, runtime).remove(site.id, tenant_id)
+                except Exception:
+                    pass
             if published:
                 try:
-                    publisher.unpublish(domain)
+                    if rootless:
+                        RootlessRoutePublisher(app, self._db).unpublish(domain)
+                    else:
+                        publisher.unpublish(domain)
                 except Exception:
                     pass
             failures = cleanup()
@@ -447,10 +574,23 @@ class HostingService:
                 code="hosting_site_domain_conflict",
             ) from exc
         except Exception as exc:
+            logger.exception(
+                "hosting_site_registration_failed type=%s",
+                type(exc).__name__,
+                extra={"domain": domain, "rootless": rootless},
+            )
             self._db.rollback()
+            if rootless:
+                try:
+                    RootlessIngress(self._db, runtime).remove(site.id, tenant_id)
+                except Exception:
+                    pass
             if published:
                 try:
-                    publisher.unpublish(domain)
+                    if rootless:
+                        RootlessRoutePublisher(app, self._db).unpublish(domain)
+                    else:
+                        publisher.unpublish(domain)
                 except Exception:
                     # The row is gone either way; an orphan route is corrected
                     # by the operator or by deleting the site again.
@@ -463,7 +603,8 @@ class HostingService:
                     code="hosting_site_conflict",
                 ) from exc
             raise AppError(
-                f"Could not register the site; cleanup: {failures}",
+                "Could not register the site "
+                f"({type(exc).__name__}); cleanup: {failures}",
                 status_code=500,
                 code="hosting_provision_failed",
             ) from exc
@@ -485,9 +626,18 @@ class HostingService:
     ) -> HostingSiteSummary:
         self._managed_site(site)
         try:
-            Provisioner(self._settings).command(action, site.container_name)
+            self._provisioner_for(site).command(action, site.container_name)
         except Fallo as exc:
             raise AppError(str(exc), status_code=409, code="hosting_site_unavailable") from exc
+        runtime = self._runtime_for(site)
+        if (
+            runtime is not None
+            and runtime.runtime == "rootless"
+            and action in {"start", "restart"}
+        ):
+            # Un recreate del contenedor puede perder la red del ingress de la
+            # celda; reconciliar restaura el enlace y recarga nginx.
+            RootlessIngress(self._db, runtime).reconcile(site.tenant_id)
         self._audit_site(site, tenant_context, action)
         return HostingSiteSummary(
             id=site.id,
@@ -512,7 +662,7 @@ class HostingService:
         self._require_site(site)
         limit = min(max(1, lines), max(1, min(1000, self._settings.log_lines)))
         try:
-            logs = Provisioner(self._settings).command(
+            logs = self._provisioner_for(site).command(
                 "logs", "--tail", str(limit), site.container_name
             )
         except Fallo as exc:
@@ -526,10 +676,16 @@ class HostingService:
         *,
         app: FastAPI | None = None,
     ) -> None:
+        runtime = self._runtime_for(site)
+        if runtime is not None and runtime.runtime == "rootless":
+            if site.domain and app is not None:
+                RootlessRoutePublisher(app, self._db).unpublish(site.domain)
+            RootlessIngress(self._db, runtime).remove(site.id, site.tenant_id)
+            app = None
         if site.kind == "static":
             self._delete_static(site, tenant_context, app)
             return
-        info = self._inspect(site.container_name)
+        info = self._inspect_for(site, site.container_name)
         if info is not None:
             self._managed_site(site)
         names = SiteNames(site.container_name.removeprefix("spanel-").removesuffix("-wp"))
@@ -539,7 +695,7 @@ class HostingService:
                 status_code=409,
                 code="hosting_site_not_managed",
             )
-        provisioner = Provisioner(self._settings)
+        provisioner = self._provisioner_for(site)
         # Never delete a foreign resource even when a row references its name.
         for kind, name in (
             ("container", names.wp),
@@ -568,10 +724,24 @@ class HostingService:
             raise AppError("; ".join(failures), status_code=409, code="hosting_delete_failed")
         # The stable env file holds the site's database secret. A deletion that
         # leaves it behind leaks the secret of a site that no longer exists.
-        stable = site_dir(self._settings, site.container_name)
-        run(build_docker_argv(f"rm -rf {shlex.quote(stable)}", env=self._env), env=self._env)
+        runtime = self._runtime_for(site)
+        if runtime is not None and runtime.runtime == "rootless":
+            runtime.remove_private(f"{site.container_name}/db.env")
+            runtime.remove_private(f"{site.container_name}/wp.env")
+        else:
+            stable = site_dir(self._settings, site.container_name)
+            run(build_docker_argv(f"rm -rf {shlex.quote(stable)}", env=self._env), env=self._env)
         self._audit_site(site, tenant_context, "delete", {"missing": missing})
+        self._purge_migration_history(site.id)
         self._db.delete(site)
+
+    def _purge_migration_history(self, site_id: str) -> None:
+        """Drop own operation rows before the site, or the FK blocks deletion."""
+        self._db.execute(
+            delete(RootlessMigrationOperation).where(
+                RootlessMigrationOperation.site_id == site_id
+            )
+        )
 
     def _delete_static(
         self,
@@ -586,7 +756,7 @@ class HostingService:
                 status_code=409,
                 code="hosting_site_not_managed",
             )
-        provisioner = Provisioner(self._settings)
+        provisioner = self._provisioner_for(site)
         # Reversed by `cleanup`, so the container goes before its volume.
         resources = [("volume", names.volume), ("container", names.container)]
         for kind, name in resources:
@@ -610,9 +780,8 @@ class HostingService:
         failures = provisioner.cleanup(names, site.tenant_id, resources)
         if failures:
             raise AppError("; ".join(failures), status_code=409, code="hosting_delete_failed")
-        self._audit_site(
-            site, tenant_context, "delete", {"missing": missing, "kind": "static"}
-        )
+        self._audit_site(site, tenant_context, "delete", {"missing": missing, "kind": "static"})
+        self._purge_migration_history(site.id)
         self._db.delete(site)
 
     def list_sites(self, tenant_id: str | None) -> HostingSiteListResponse:
@@ -626,7 +795,7 @@ class HostingService:
         stmt = stmt.order_by(HostingSite.container_name.asc())
         summaries: list[HostingSiteSummary] = []
         for site in self._db.scalars(stmt):
-            info = self._inspect(site.container_name)
+            info = self._inspect_for(site, site.container_name)
             if info is None:
                 # Visible, marked missing, and not offered as operable: a
                 # container that does not exist is not an exception in a list.
@@ -662,7 +831,7 @@ class HostingService:
     def get_site_config(self, site: HostingSite) -> SiteConfigResponse:
         """The editable env and the NAMES of the secrets. Values never leak."""
         self._require_wordpress(site)
-        config = RawAdapter(self._settings).read_config(site)
+        config = RawAdapter(self._settings, self._runtime_for(site)).read_config(site)
         return SiteConfigResponse(
             site_id=config.site_id,
             container_name=config.container_name,
@@ -682,7 +851,7 @@ class HostingService:
         self._require_wordpress(site)
         info, _managed = self._require_site(site)
         _raw_host, host, database, user, password = self._database_binding_for(site, info)
-        db_info = self._inspect(host)
+        db_info = self._inspect_for(site, host)
         if db_info is None:
             raise AppError(
                 f"Container {host} does not exist or is not responding",
@@ -750,8 +919,79 @@ class HostingService:
             )
         return True
 
+    def phpmyadmin_relay_server(
+        self,
+        site: HostingSite,
+        tenant_context: TenantContext,
+        pma_session_id: str,
+    ) -> dict[str, str] | None:
+        """Open the ephemeral rootless relay; rootful sites keep the old path."""
+        self._require_wordpress(site)
+        runtime = self._runtime_for(site)
+        if runtime is None or runtime.runtime != "rootless":
+            return None
+        if not broker_enabled(self._settings):
+            raise AppError(
+                "Rootless phpMyAdmin access is disabled",
+                status_code=409,
+                code="hosting_phpmyadmin_unavailable",
+            )
+        if not self._settings.phpmyadmin_arbitrary:
+            raise AppError(
+                "phpMyAdmin arbitrary-server mode is required for rootless access",
+                status_code=409,
+                code="hosting_phpmyadmin_unavailable",
+            )
+        slug = runtime.health().tenant_slug
+        if not slug:
+            raise AppError(
+                "The tenant cell has no slug",
+                status_code=409,
+                code="hosting_phpmyadmin_unavailable",
+            )
+        client = PmaBrokerClient(
+            self._settings.phpmyadmin_broker_socket,
+            self._settings.phpmyadmin_broker_token_file,
+            timeout=self._settings.phpmyadmin_broker_timeout,
+        )
+        try:
+            result = client.open(
+                tenant=slug,
+                tenant_id=site.tenant_id,
+                site_id=site.id,
+                pma_session_id=pma_session_id,
+                source_ip=source_ip_from_env(self._settings),
+                ttl=self._settings.phpmyadmin_session_ttl,
+            )
+        except Exception:
+            self._audit_site(
+                site,
+                tenant_context,
+                "phpmyadmin_relay_rejected",
+                {"runtime": "rootless", "reason": "relay_open_failed"},
+            )
+            raise
+        relay = {
+            "relay_id": str(result["relay_id"]),
+            "server": server_address(result),
+            "tenant_slug": slug,
+            "runtime": "rootless",
+        }
+        self._audit_site(
+            site,
+            tenant_context,
+            "phpmyadmin_relay_opened",
+            {"runtime": "rootless", "relay_id": relay["relay_id"]},
+        )
+        return relay
+
     def phpmyadmin_login_credentials(
-        self, site: HostingSite, tenant_context: TenantContext, client: PmaClient
+        self,
+        site: HostingSite,
+        tenant_context: TenantContext,
+        client: PmaClient,
+        *,
+        server: str | None = None,
     ) -> dict[str, str]:
         """Log in upstream here; the HTTP route never receives the DB password."""
         self._require_wordpress(site)
@@ -768,7 +1008,7 @@ class HostingService:
             raise AppError(
                 "Site not available", status_code=409, code="hosting_phpmyadmin_unavailable"
             )
-        db_info = self._inspect(host)
+        db_info = self._inspect_for(site, host)
         if db_info is None or estado_del_contenedor(db_info) != "running":
             raise AppError(
                 "Database not available",
@@ -777,7 +1017,9 @@ class HostingService:
             )
         network = self._settings.phpmyadmin_db_network.strip()
         arbitrary = self._settings.phpmyadmin_arbitrary
-        multi = multi_database_enabled(arbitrary, network)
+        # A rootless site is reached only through the ephemeral relay; it must
+        # never be attached to the rootful phpMyAdmin network.
+        multi = server is None and multi_database_enabled(arbitrary, network)
         connected = False
         if multi:
             try:
@@ -790,7 +1032,9 @@ class HostingService:
                 ) from exc
             connected = self._ensure_database_network(db_info, host, network)
         # `None` keeps the old fixed-server POST byte-for-byte.
-        cookies = client.login(user, password, host if multi else None)
+        cookies = client.login(
+            user, password, server if server is not None else (host if multi else None)
+        )
         details = {"database": database, "host": host}
         if connected:
             details["network"] = network
@@ -805,7 +1049,7 @@ class HostingService:
     ) -> SiteConfigResponse:
         """Persist whitelisted env changes and recreate the owned container."""
         self._require_wordpress(site)
-        config = RawAdapter(self._settings).update_config(site, env)
+        config = RawAdapter(self._settings, self._runtime_for(site)).update_config(site, env)
         self._audit_site(site, tenant_context, "config_update", {"keys": sorted(env)})
         return SiteConfigResponse(
             site_id=config.site_id,
@@ -820,7 +1064,7 @@ class HostingService:
     ) -> SecretRotationResponse:
         """Rotate WordPress auth salts. Audited; no secret value is recorded."""
         self._require_wordpress(site)
-        RawAdapter(self._settings).rotate_salts(site)
+        RawAdapter(self._settings, self._runtime_for(site)).rotate_salts(site)
         self._audit_site(site, tenant_context, "secrets_rotated", {"kind": "salts"})
         return SecretRotationResponse(
             site_id=site.id,
@@ -839,7 +1083,7 @@ class HostingService:
         raw_host, db_container, database, user, password = self._database_binding_for(site, info)
         try:
             prefijo = prefijo_de_tablas(
-                self._env,
+                self._env_for(site),
                 db_container,
                 user,
                 password,
@@ -872,7 +1116,7 @@ class HostingService:
         credenciales, db_container, prefijo = self._credentials(site, info)
         try:
             rows = usuarios_con_rol(
-                self._env,
+                self._env_for(site),
                 db_container,
                 credenciales["usuario"],
                 credenciales["_password"],
@@ -927,7 +1171,7 @@ class HostingService:
             # The selector is the numeric WordPress ID, never the login: a
             # duplicate login is legal in the schema and must not be touched.
             rows = filas_de_usuarios(
-                self._env,
+                self._env_for(site),
                 db_container,
                 credenciales["usuario"],
                 credenciales["_password"],
@@ -942,14 +1186,14 @@ class HostingService:
             generated = password is None
             new_password = password or generar_password()
             hash_nuevo = hash_de_password(
-                self._env,
+                self._env_for(site),
                 info,
                 credenciales,
                 db_container,
                 new_password,
             )
             actualizar_hash(
-                self._env,
+                self._env_for(site),
                 db_container,
                 credenciales["usuario"],
                 credenciales["_password"],
@@ -959,7 +1203,7 @@ class HostingService:
                 hash_nuevo,
             )
             read_back = leer_hash(
-                self._env,
+                self._env_for(site),
                 db_container,
                 credenciales["usuario"],
                 credenciales["_password"],

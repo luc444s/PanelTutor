@@ -10,6 +10,8 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass, field
 
+from systutor.contracts.container_runtime import ContainerRuntimeHandle
+
 from .profiles import ProfileSpec, marker_for
 from .provisioner import Provisioner
 from .settings import HostingSettings, docker_env
@@ -251,17 +253,19 @@ def build_static_run_args(
 class StaticProvisioner:
     """Create only resources bearing this site's exact ownership labels."""
 
-    def __init__(self, settings: HostingSettings) -> None:
+    def __init__(
+        self, settings: HostingSettings, runtime: ContainerRuntimeHandle | None = None
+    ) -> None:
         self.settings = settings
         self.env = docker_env(settings)
-        self._docker = Provisioner(settings)
+        self._docker = Provisioner(settings, runtime)
 
     def _exists(self, kind: str, name: str) -> bool:
         return self._docker.exists(kind, name)
 
     def _preflight(self, names: StaticNames) -> None:
-        if not self._exists("network", self.settings.network):
-            raise Fallo(f"Network {self.settings.network} does not exist")
+        if not self._exists("network", self._docker.network):
+            raise Fallo(f"Network {self._docker.network} does not exist")
         for kind, name in (("container", names.container), ("volume", names.volume)):
             if self._exists(kind, name):
                 raise Fallo(f"A resource named {name} already exists")
@@ -351,7 +355,7 @@ class StaticProvisioner:
             self._docker.command(
                 *build_static_run_args(
                     names,
-                    self.settings,
+                    self.settings.model_copy(update={"network": self._docker.network}),
                     tenant_id,
                     domain,
                     traefik=traefik,

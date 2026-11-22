@@ -13,6 +13,7 @@ from typing import BinaryIO
 
 from fastapi import HTTPException
 
+from systutor.contracts.container_runtime import ContainerRuntimeError, ContainerRuntimeHandle
 from systutor.contracts.file_targets import FileTarget
 
 SCRIPT = Path(__file__).with_name("container.php").read_text(encoding="utf-8").removeprefix("<?php")
@@ -62,6 +63,34 @@ def _command(target: FileTarget, op: str, env: dict[str, str], **arguments: obje
     ]
 
 
+def _runtime_args(
+    target: FileTarget, op: str, env: dict[str, str], **arguments: object
+) -> tuple[str, ...]:
+    encoded = base64.b64encode(
+        json.dumps({"root": target.root, "op": op, "limit": TRANSFER_LIMIT, **arguments}).encode()
+    ).decode()
+    if target.runtime == "volume":
+        helper = env.get("SPANEL_FILEMANAGER_HELPER_IMAGE", "").strip() or "wordpress:cli"
+        return (
+            "run",
+            "--rm",
+            "-i",
+            "--network",
+            "none",
+            "--user",
+            "0",
+            "--volumes-from",
+            target.container,
+            "--entrypoint",
+            "php",
+            helper,
+            "-r",
+            SCRIPT,
+            encoded,
+        )
+    return ("exec", "-i", "-u", "www-data", target.container, "php", "-r", SCRIPT, encoded)
+
+
 def start(
     target: FileTarget, op: str, env: dict[str, str], **arguments: object
 ) -> subprocess.Popen[bytes]:
@@ -90,7 +119,21 @@ def _error(stderr: bytes) -> HTTPException:
     return HTTPException(502, "Could not access the container files")
 
 
-def operation(target: FileTarget, op: str, env: dict[str, str], **arguments: object) -> dict:
+def operation(
+    target: FileTarget,
+    op: str,
+    env: dict[str, str],
+    runtime: ContainerRuntimeHandle | None = None,
+    **arguments: object,
+) -> dict:
+    if runtime is not None:
+        try:
+            stdout = runtime.command(_runtime_args(target, op, env, **arguments))
+            return json.loads(stdout)
+        except ContainerRuntimeError as exc:
+            raise HTTPException(502, "Could not access the container files") from exc
+        except (UnicodeError, ValueError) as exc:
+            raise HTTPException(502, "Invalid response from the container") from exc
     process = start(target, op, env, **arguments)
     try:
         stdout, stderr = process.communicate(timeout=60)
@@ -112,8 +155,19 @@ def upload(
     env: dict[str, str],
     source: BinaryIO,
     limit: int,
+    runtime: ContainerRuntimeHandle | None = None,
     **arguments: object,
 ) -> dict:
+    if runtime is not None:
+        payload = source.read(limit + 1)
+        if len(payload) > limit:
+            raise HTTPException(413, "File too large")
+        try:
+            return json.loads(
+                runtime.command(_runtime_args(target, op, env, **arguments), input=payload)
+            )
+        except ContainerRuntimeError as exc:
+            raise HTTPException(502, "Could not access the container files") from exc
     process = start(target, op, env, **arguments)
     assert process.stdin is not None
     count = 0
@@ -150,8 +204,37 @@ def upload(
 
 
 def download(
-    target: FileTarget, env: dict[str, str], path: str
+    target: FileTarget,
+    env: dict[str, str],
+    path: str,
+    runtime: ContainerRuntimeHandle | None = None,
 ) -> tuple[subprocess.Popen[bytes], Iterator[bytes]]:
+    if runtime is not None:
+        try:
+            payload = runtime.command(_runtime_args(target, "download", env, path=path))
+        except ContainerRuntimeError as exc:
+            raise HTTPException(502, "Could not access the container files") from exc
+
+        class MemoryProcess:
+            returncode = 0
+            stderr = None
+            stdin = None
+            stdout = None
+
+            def poll(self):
+                return 0
+
+            def wait(self, timeout=None):
+                return 0
+
+            def kill(self):
+                return None
+
+        def memory_chunks() -> Iterator[bytes]:
+            for offset in range(0, len(payload), 65536):
+                yield payload[offset : offset + 65536]
+
+        return MemoryProcess(), memory_chunks()  # type: ignore[return-value]
     process = start(target, "download", env, path=path)
     assert process.stdin is not None and process.stdout is not None
     process.stdin.close()

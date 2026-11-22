@@ -250,7 +250,14 @@ def prepare_runtime_volumes(
     policy: HardeningPolicy,
     services: Sequence[str],
 ) -> None:
-    """Create and initialize only volumes declared new by the signed policy."""
+    """Create and initialize only volumes declared by a legacy signed policy.
+
+    New releases carry no runtime volume policy: Compose creates their volumes
+    with the permissions the application itself declares.  This routine only
+    serves releases signed before the hardener was retired.
+    """
+    if not policy.runtime_volumes:
+        return
     selected = set(services)
     image = _probe_image(runner)
     for volume in policy.runtime_volumes:

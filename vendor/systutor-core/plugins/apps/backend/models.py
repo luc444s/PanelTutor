@@ -10,6 +10,7 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     LargeBinary,
@@ -153,6 +154,37 @@ class Deployment(Base):
     public_error: Mapped[str | None] = mapped_column(String(500))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AppsTenantPlan(Base):
+    """Aggregate resource plan for one tenant (DB is the single source of truth).
+
+    ``plans.json`` on the host is only a cache of the last applied state; this
+    row is what the API manages and what the deploy pipeline reads.
+    """
+
+    __tablename__ = "apps_tenant_plans"
+    __table_args__ = (UniqueConstraint("tenant_id"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    memory_bytes: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    cpus: Mapped[float] = mapped_column(Float, nullable=False)
+    pids: Mapped[int] = mapped_column(Integer, nullable=False)
+    # A.SPEC 0111: declared storage limit only. NULL keeps pre-0111 rows
+    # compatible; the value is not applied as a kernel quota nor sent to systemd.
+    storage_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    cpuset: Mapped[str | None] = mapped_column(String(255))
+    # A.SPEC 0102: explicit lifecycle state. A persisted plan is always
+    # recoverable: pending while the agent works, applied only after real
+    # materialization, failed (with last_error) otherwise.
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    applied_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str | None] = mapped_column(Text)
+    desired_hash: Mapped[str | None] = mapped_column(String(64))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
 
 
 class Operation(Base):

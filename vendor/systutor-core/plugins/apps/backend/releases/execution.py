@@ -1,8 +1,12 @@
 """Trusted release orchestration shared by the Apps worker.
 
 The worker owns operation lifecycle and source preparation; this module owns the
-parts that consume a signed release: hardening, scoped deploy and rollback.
+parts that consume a signed release: preparation, scoped deploy and rollback.
 Every entry point re-verifies the descriptor before touching the runtime.
+
+Releases are snapshots of the unmodified application source.  The former
+hardening phase (which rewrote Dockerfiles and Compose files to force non-root)
+has been removed; ``prepare_release`` only validates and signs what was cloned.
 """
 
 from __future__ import annotations
@@ -11,23 +15,23 @@ import logging
 import os
 import threading
 from collections.abc import Callable, Mapping
-from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from ..managed_environment import MANAGED_DATABASE_NAMES
-from ..models import Application, Deployment, Operation
+from ..models import Application, AppsTenantPlan, Deployment, Operation
 from ..runtime import AppDeployError, Runner
+from ..runtime.scoped_execution import deploy_scoped
+from ..runtime.tenant_plan import TenantPlan
+from ..runtime.tenant_runtime import tenant_slug
 from .pipeline import create_release, release_result
 from .planner import DeployScope, plan_deployment
-from .scoped_execution import (
-    ScopedDeployFailed,
-    ScopedRestoreError,
-    deploy_scoped,
-)
+from .retention import configured_keep, prune_application_releases
+from .scoped_execution import ScopedDeployFailed, ScopedRestoreError
 from .store import find_release, release_store_root
 from .trusted import TrustedRelease
 from .verify import verify_release
@@ -78,15 +82,36 @@ class ReleaseExecution:
         session_factory: Callable[[], Session],
         runner_factory: Callable[..., Runner],
         *,
-        hardening_engine: Any,
         route_refresh: Callable[[Session, str, str], None] | None,
         transport: Callable[[], str],
+        runner_for_tenant: Callable[[str], Runner] | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.runner_factory = runner_factory
-        self.hardening_engine = hardening_engine
         self.route_refresh = route_refresh
         self.transport = transport
+        self.runner_for_tenant = runner_for_tenant
+
+    def _runner(self, tenant_id: str | None) -> Runner:
+        """Resolve the runner for an authenticated tenant when one is injected.
+
+        Without ``runner_for_tenant`` this is byte-identical to the former
+        global ``runner_factory(self.transport())`` call.
+        """
+        if tenant_id is not None and self.runner_for_tenant is not None:
+            return self.runner_for_tenant(tenant_id)
+        return self.runner_factory(self.transport())
+
+    def _resource_plan(self, db: Session, tenant_id: str | None) -> TenantPlan | None:
+        """Bind the tenant aggregate plan for overrides and probe budgets."""
+        if tenant_id is None:
+            return None
+        plan_row = db.scalar(
+            select(AppsTenantPlan).where(AppsTenantPlan.tenant_id == tenant_id)
+        )
+        if plan_row is None:
+            return None
+        return TenantPlan.from_row(plan_row, tenant_slug(db, tenant_id))
 
     def _publish_restored_state(
         self,
@@ -163,14 +188,13 @@ class ReleaseExecution:
         self.refresh_routes(application_id)
         return deployment_id
 
-    def harden_checkout(self, checkout, source, policy, operation_id, application_id,
-                        tenant_id, *, normalization=None):
-        candidate = self.hardening_engine.prepare(checkout, source[2], policy)
-        if normalization is not None:
-            candidate = replace(candidate, normalization=normalization)
+    def prepare_release(self, checkout, source, policy, operation_id, application_id,
+                        tenant_id):
+        """Validate and sign the checkout without modifying any of its files."""
+
         release = create_release(
             checkout,
-            candidate,
+            compose_file=source[2],
             tenant_id=tenant_id,
             application_id=application_id,
             operation_id=operation_id,
@@ -178,12 +202,12 @@ class ReleaseExecution:
             branch=source[1],
             policy=policy,
             environ=os.environ,
-            normalization=candidate.normalization,
         )
-        return release, candidate
+        return release
 
     def deploy_known_release(self, operation_id: str, application_id: str,
-                             release_id: str, operation_report: dict) -> dict:
+                             release_id: str, operation_report: dict, *,
+                             ingress_publish: tuple[str, int] | None = None) -> dict:
         with self.session_factory() as db:
             app = db.get(Application, application_id)
             if app is None:
@@ -205,13 +229,17 @@ class ReleaseExecution:
             operation_id, application_id, release, source, tenant_names,
             repository=source[0], branch=source[1],
             scope=operation_report.get("scope"),
+            ingress_publish=ingress_publish,
         )
 
     def trusted_deploy(self, operation_id, application_id, release, source,
                        tenant_names, *, repository, branch,
-                       scope: object = None) -> dict:
+                       scope: object = None,
+                       ingress_publish: tuple[str, int] | None = None) -> dict:
         with self.session_factory() as db:
             current_app = db.get(Application, application_id)
+            tenant_id = current_app.tenant_id if current_app is not None else None
+            resource_plan = self._resource_plan(db, tenant_id)
             previous = (
                 db.get(Deployment, current_app.active_deployment_id)
                 if current_app is not None and current_app.active_deployment_id else None
@@ -231,7 +259,7 @@ class ReleaseExecution:
             release, previous_manifest, requested, services=services or None
         )
         env_file = pending_env_path(operation_id)
-        runner = self.runner_factory(self.transport())
+        runner = self._runner(tenant_id)
         lock = application_lock(application_id)
         if not lock.acquire(blocking=False):
             raise RuntimeError("Another build or deployment is active")
@@ -241,6 +269,7 @@ class ReleaseExecution:
                     runner,
                     release,
                     plan=plan,
+                    resource_plan=resource_plan,
                     scope=requested,
                     project=source[3],
                     previous_manifest=previous_manifest,
@@ -251,6 +280,7 @@ class ReleaseExecution:
                     publish_state=True,
                     require_expiry=True,
                     probe_target=_probe_target(source[4], source[5]),
+                    ingress_publish=ingress_publish,
                 )
             except ScopedDeployFailed as exc:
                 self._publish_restored_state(
@@ -305,6 +335,7 @@ class ReleaseExecution:
                 db.commit()
                 deployment_id = deployment.id
             self.refresh_routes(application_id)
+            self._prune_releases(application_id, source[3])
         finally:
             lock.release()
         result = {
@@ -315,12 +346,14 @@ class ReleaseExecution:
         result.update(release_result(release))
         return result
 
-    def rollback_operation(self, operation_id: str, application_id: str) -> dict:
+    def rollback_operation(self, operation_id: str, application_id: str, *,
+                           ingress_publish: tuple[str, int] | None = None) -> dict:
         with self.session_factory() as db:
             app = db.get(Application, application_id)
             operation = db.get(Operation, operation_id)
             if app is None or operation is None:
                 raise RuntimeError("Application not found")
+            tenant_id = app.tenant_id
             report = dict(operation.report or {})
             target_id = report.get("to_deployment_id")
             target = db.get(Deployment, target_id) if isinstance(target_id, str) else None
@@ -357,7 +390,9 @@ class ReleaseExecution:
         plan = plan_deployment(
             release, current_manifest, requested, services=services or None
         )
-        runner = self.runner_factory(self.transport())
+        with self.session_factory() as db:
+            resource_plan = self._resource_plan(db, tenant_id)
+        runner = self._runner(tenant_id)
         lock = application_lock(application_id)
         if not lock.acquire(blocking=False):
             raise RuntimeError("Another build or deployment is active")
@@ -374,6 +409,7 @@ class ReleaseExecution:
                     runner,
                     release,
                     plan=plan,
+                    resource_plan=resource_plan,
                     scope=requested,
                     project=project,
                     previous_manifest=current_manifest,
@@ -384,6 +420,7 @@ class ReleaseExecution:
                     require_expiry=False,
                     staging_release=staging_release,
                     probe_target=_probe_target(ingress_service, ingress_port),
+                    ingress_publish=ingress_publish,
                 )
             except ScopedDeployFailed as exc:
                 self._publish_restored_state(
@@ -436,6 +473,7 @@ class ReleaseExecution:
                 db.commit()
                 deployment_id = deployment.id
             self.refresh_routes(application_id)
+            self._prune_releases(application_id, project)
         finally:
             lock.release()
         result = {
@@ -446,6 +484,40 @@ class ReleaseExecution:
         }
         result.update(release_result(release))
         return result
+
+    def _prune_releases(self, application_id: str, project: str) -> None:
+        """Best-effort retention; never fails a deployment or rollback."""
+        try:
+            project_root = release_store_root(os.environ) / project
+            with self.session_factory() as db:
+                app = db.get(Application, application_id)
+                if app is None:
+                    return
+                removed = prune_application_releases(
+                    db,
+                    application_id=application_id,
+                    project_root=project_root,
+                    keep=configured_keep(os.environ),
+                    active_deployment_id=app.active_deployment_id,
+                    store_root=release_store_root(os.environ),
+                    tenant_id=app.tenant_id,
+                    grace_seconds=int(os.environ.get(
+                        "SPANEL_APPS_RELEASE_GRACE_SECONDS", "3600"
+                    )),
+                )
+            if removed:
+                logger.info(
+                    "apps_release_retention",
+                    extra={
+                        "application_id": application_id,
+                        "removed": len(removed),
+                    },
+                )
+        except Exception:  # noqa: BLE001 - retention must not block the operation
+            logger.warning(
+                "apps_release_retention_failed",
+                extra={"application_id": application_id},
+            )
 
     def refresh_routes(self, application_id: str) -> None:
         if self.route_refresh is None:

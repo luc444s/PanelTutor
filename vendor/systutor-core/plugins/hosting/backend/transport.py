@@ -145,6 +145,19 @@ def pedir(
     carry a secret, and an error that prints it is a secret in the log.
     `entrada` goes over stdin, for what must not appear in the command.
     """
+    runtime = env.get("_SPANEL_RUNTIME_HANDLE")  # type: ignore[arg-type]
+    if runtime is not None:
+        try:
+            parts = shlex.split(comando)
+            if not parts or parts[0] != "docker":
+                raise Fallo("runtime command must be a Docker operation")
+            return runtime.command(
+                tuple(parts[1:]), input=entrada.encode() if entrada is not None else None
+            ).decode(errors="replace")
+        except Fallo:
+            raise
+        except Exception as exc:
+            raise Fallo(redactar(str(exc)[:400], secretos)) from exc
     r = run(build_docker_argv(comando, env=env), env=env, input=entrada)
     if r.returncode != 0:
         raise Fallo(
@@ -198,9 +211,7 @@ def escribir_archivo_remoto_en(env: dict[str, str], ruta: str, contenido: str) -
     )
     r = run(build_docker_argv(comando, env=env), env=env, input=contenido)
     if r.returncode != 0:
-        raise Fallo(
-            f"could not write to {ruta}: {(r.stderr or '').strip()[:200]}"
-        )
+        raise Fallo(f"could not write to {ruta}: {(r.stderr or '').strip()[:200]}")
 
 
 def leer_archivo_remoto(env: dict[str, str], ruta: str) -> str | None:

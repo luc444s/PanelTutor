@@ -47,9 +47,7 @@ def spec_from_row(row) -> ProfileSpec:
         try:
             loaded = json.loads(row.env_json)
         except ValueError as exc:
-            raise ProfileValidationError(
-                "The profile environment variables are invalid"
-            ) from exc
+            raise ProfileValidationError("The profile environment variables are invalid") from exc
         if isinstance(loaded, dict):
             env = {k: v for k, v in loaded.items() if isinstance(k, str) and isinstance(v, str)}
     return ProfileSpec(
@@ -121,9 +119,7 @@ def validate_profile_env(value: dict[str, str] | None) -> dict[str, str] | None:
         isinstance(key, str) and isinstance(item, str) and key.strip()
         for key, item in value.items()
     ):
-        raise ProfileValidationError(
-            "The environment variables must be an object of strings"
-        )
+        raise ProfileValidationError("The environment variables must be an object of strings")
     return dict(value)
 
 

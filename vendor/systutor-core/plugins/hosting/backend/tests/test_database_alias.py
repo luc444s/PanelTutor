@@ -64,9 +64,7 @@ def context() -> TenantContext:
 
 
 def site(kind: str = "wordpress") -> SimpleNamespace:
-    return SimpleNamespace(
-        id="s1", tenant_id="t1", container_name="legalattorney-clean", kind=kind
-    )
+    return SimpleNamespace(id="s1", tenant_id="t1", container_name="legalattorney-clean", kind=kind)
 
 
 class FakeClient:
@@ -147,12 +145,7 @@ def test_two_containers_with_the_same_alias_are_ambiguous() -> None:
 
 def test_an_alias_on_a_foreign_network_is_ignored() -> None:
     candidatos = [candidato(REAL_DB, {FOREIGN_NETWORK: ["db"]})]
-    assert (
-        alias_contenedor(
-            "db", candidatos, redes_del_sitio={SITE_NETWORK}
-        )
-        is None
-    )
+    assert alias_contenedor("db", candidatos, redes_del_sitio={SITE_NETWORK}) is None
 
 
 def test_the_io_resolver_only_scans_the_site_networks(monkeypatch) -> None:
@@ -183,9 +176,7 @@ def test_the_io_resolver_only_scans_the_site_networks(monkeypatch) -> None:
 
 
 def test_an_existing_container_skips_the_alias_scan(monkeypatch) -> None:
-    service, inspected, _spy, _audits = build_service(
-        monkeypatch, {"spanel-demo-db": RUNNING}
-    )
+    service, inspected, _spy, _audits = build_service(monkeypatch, {"spanel-demo-db": RUNNING})
     scanned: list[str] = []
     monkeypatch.setattr(
         service_module,
@@ -249,9 +240,7 @@ def test_credentials_keep_db_but_exec_against_the_real_container(monkeypatch) ->
 
 
 def test_phpmyadmin_login_receives_the_resolved_container(monkeypatch) -> None:
-    service, inspected, spy, audits = build_service(
-        monkeypatch, {REAL_DB: DB_RUNNING}
-    )
+    service, inspected, spy, audits = build_service(monkeypatch, {REAL_DB: DB_RUNNING})
     monkeypatch.setattr(
         service_module,
         "resolver_alias_de_contenedor",

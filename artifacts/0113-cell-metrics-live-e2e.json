@@ -1,0 +1,127 @@
+{
+  "spec": "0113",
+  "title": "Live cell metrics daemon, SSE and panel section",
+  "result": "PASS",
+  "ok": true,
+  "environment": {
+    "host": "spanel.lab",
+    "access": "lucas@100.67.5.50",
+    "repo_root": "/home/lucas/spanel-0111-test",
+    "app_url": "https://spanel.lab",
+    "app_container": "spanel-app-1",
+    "api_base": "http://127.0.0.1:3000",
+    "metrics_service": "spanel-cell-metrics.service",
+    "metrics_binary": "/home/lucas/spanel-0111-test/apps/cell-metrics/target/release/spanel-cell-metrics",
+    "metrics_socket": "/run/spanel/cell-metrics.sock",
+    "metrics_token": "/var/lib/spanel/secrets/cell_metrics_token",
+    "tenant": {
+      "id": "658e5ca2-00a4-4672-b5c5-f093db3066fa",
+      "slug": "demo",
+      "uid": 60070
+    },
+    "toolchain": {
+      "rustc": "1.75.0",
+      "cargo": "1.75.0"
+    }
+  },
+  "deployment": {
+    "daemon": "systemd service active, enabled, AF_UNIX only",
+    "socket_mode": "0600 root:root",
+    "app_mounts": [
+      "/run/spanel -> /run/spanel",
+      "/var/lib/spanel/secrets/cell_metrics_token -> /run/secrets/cell_metrics_token:ro"
+    ],
+    "app_env": [
+      "SPANEL_CELL_METRICS_SOCKET=/run/spanel/cell-metrics.sock",
+      "SPANEL_CELL_METRICS_TOKEN_FILE=/run/secrets/cell_metrics_token"
+    ]
+  },
+  "checks": [
+    {
+      "id": "daemon_service",
+      "pass": true,
+      "observed": "spanel-cell-metrics.service active; socket /run/spanel/cell-metrics.sock mode 0600"
+    },
+    {
+      "id": "sse_stream",
+      "pass": true,
+      "command": "curl -sN -H 'Authorization: Bearer <jwt>' 'http://127.0.0.1:3000/api/v1/plugins/tenant/tenants/<id>/metrics/stream?interval_ms=1000'",
+      "observed": [
+        "retry: 3000",
+        "data: {\"ts_ms\":1795327889050,...,\"warmup\":true,...}",
+        "data: {\"ts_ms\":1795327890052,...,\"warmup\":false,\"cpu\":{\"cores\":0.000853,...}}",
+        "data: {\"ts_ms\":1795327891054,...,\"cpu\":{\"cores\":0.000926,...}}",
+        "data: {\"ts_ms\":1795327892054,...,\"cpu\":{\"cores\":0.000617,...}}",
+        "data: {\"ts_ms\":1795327893055,...,\"cpu\":{\"cores\":0.000701,...}}"
+      ],
+      "note": "Four data events in a 4 s curl window after the retry line."
+    },
+    {
+      "id": "sse_with_real_cpu_load",
+      "pass": true,
+      "how": "systemd-run --user --scope --unit=burn0113 -- /usr/bin/yes as spanel-demo, 8 s",
+      "observed_cores": [0, 0.962, 0.939, 0.956, 0.986],
+      "note": "The first sample is warmup; the next four show ~0.96 cores against a 1.00 core plan."
+    },
+    {
+      "id": "limits_in_stream",
+      "pass": true,
+      "observed": {
+        "memory.max_bytes": 2147483648,
+        "cpu.quota_usec": 100000,
+        "cpu.period_usec": 100000,
+        "pids.max": 256
+      },
+      "note": "Limits come from the user-manager tree; the system slice is unlimited."
+    },
+    {
+      "id": "ui_asset",
+      "pass": true,
+      "observed": {
+        "asset": "/assets/index-X6FupBW_.js",
+        "strings": [
+          "Métricas en vivo",
+          "RAM actual",
+          "CPU actual",
+          "Reconectando",
+          "Esperando la primera muestra"
+        ]
+      }
+    },
+    {
+      "id": "no_500",
+      "pass": true,
+      "observed": "0 responses with status_code=500 in spanel-app-1"
+    },
+    {
+      "id": "core_untouched",
+      "pass": true,
+      "observed": [
+        "spanel-traefik-lab",
+        "spanel-lab-mariadb",
+        "spanel-lab-phpmyadmin",
+        "spanel-powerdns-lab-auth",
+        "spanel-powerdns-lab-postgres",
+        "spanel-mail"
+      ]
+    }
+  ],
+  "gaps": [
+    {
+      "id": "0113-G1",
+      "what": "No historical storage, Prometheus or alerts",
+      "why": "Explicitly out of scope for v1; the stream keeps the last 60 samples only in the browser."
+    },
+    {
+      "id": "0113-G2",
+      "what": "Storage occupancy is not measured",
+      "why": "cgroups expose I/O bytes, not filesystem usage; du/quotas remain out of scope."
+    }
+  ],
+  "repo": {
+    "branch": "remove-hardener",
+    "commit": "431832d",
+    "pushed": true
+  },
+  "finished_at": "2026-11-22T06:13:30Z"
+}

@@ -70,7 +70,8 @@ def test_profile_crud_requires_profiles_manage() -> None:
     }
     for path, method in expected:
         routes = [
-            route for route in _site_routes()
+            route
+            for route in _site_routes()
             if route.path == path and method in set(route.methods or ())
         ]
         assert len(routes) == 1, (path, method)

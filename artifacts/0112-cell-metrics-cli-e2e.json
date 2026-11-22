@@ -1,0 +1,151 @@
+{
+  "spec": "0112",
+  "title": "Read-only cell metrics collector and CLI v1",
+  "result": "PASS",
+  "ok": true,
+  "environment": {
+    "host": "spanel.lab",
+    "access": "lucas@100.67.5.50",
+    "repo_root": "/home/lucas/spanel-0111-test",
+    "cell": {
+      "slug": "demo",
+      "uid": 60070,
+      "user": "spanel-demo"
+    },
+    "toolchain": {
+      "rustc": "1.75.0 (82e1608df 2023-12-21)",
+      "cargo": "1.75.0"
+    },
+    "binary": "apps/cell-metrics/target/release/spanel-cell-metrics",
+    "binary_bytes": 13381464,
+    "interval_ms": 1000
+  },
+  "plan": {
+    "memory_bytes": 2147483648,
+    "cpus": 1.0,
+    "pids": 256,
+    "storage_bytes": 10737418240,
+    "status": "applied"
+  },
+  "checks": [
+    {
+      "id": "once_table",
+      "pass": true,
+      "command": "python3 scripts/cell_metrics_cli.py --slug demo --once",
+      "observed": [
+        "Cell demo · uid 60070 · 2026-11-22 03:55:43Z · intervalo 1.0s",
+        "RAM        116,73 MiB / 2,00 GiB    6 %   pico 194,78 MiB",
+        "CPU        0,002 cores / 1,00    0,2 %   throttled 0",
+        "PIDs       83 / 256",
+        "Presión    CPU 0,2 % · RAM 0,0 % · IO 0,0 %",
+        "I/O        lectura 0 B/s · escritura 0 B/s"
+      ]
+    },
+    {
+      "id": "once_json",
+      "pass": true,
+      "command": "python3 scripts/cell_metrics_cli.py --slug demo --once --json",
+      "output": {
+        "ts_ms": 1795319743550,
+        "slug": "demo",
+        "uid": 60070,
+        "interval_ms": 1000,
+        "warmup": false,
+        "memory": {
+          "current_bytes": 122396672,
+          "peak_bytes": 204242944,
+          "max_bytes": 2147483648,
+          "oom_kill": 0
+        },
+        "cpu": {
+          "usage_usec": 591230339,
+          "cores": 0,
+          "quota_usec": 100000,
+          "period_usec": 100000,
+          "nr_throttled": 0
+        },
+        "pids": {
+          "current": 83,
+          "max": 256
+        },
+        "pressure": {
+          "cpu": {"some_avg10": 0.19, "full_avg10": 0.19},
+          "memory": {"some_avg10": 0, "full_avg10": 0},
+          "io": {"some_avg10": 0, "full_avg10": 0}
+        },
+        "io": {
+          "read_bytes": 154644480,
+          "write_bytes": 1124458496,
+          "read_bytes_per_s": 0,
+          "write_bytes_per_s": 0
+        }
+      }
+    },
+    {
+      "id": "limits_from_the_user_manager",
+      "pass": true,
+      "observed": {
+        "system_tree": {
+          "memory.max": "max",
+          "cpu.max": "max 100000",
+          "pids.max": "12299"
+        },
+        "user_manager_tree": {
+          "memory.max": "2147483648",
+          "cpu.max": "100000 100000",
+          "pids.max": "256"
+        },
+        "reported_by_cli": {
+          "memory.max_bytes": 2147483648,
+          "cpu.quota_usec": 100000,
+          "cpu.period_usec": 100000,
+          "pids.max": 256
+        }
+      },
+      "note": "Usage counters are summed; limits are taken from the most restrictive tree, not summed."
+    },
+    {
+      "id": "watch_with_real_cpu_load",
+      "pass": true,
+      "how": "systemd-run --user --scope --unit=burn0112 -- /usr/bin/yes as spanel-demo, 7 s",
+      "command": "timeout 5 python3 scripts/cell_metrics_cli.py --slug demo --interval-ms 1000 --no-clear",
+      "observed": [
+        "03:55:26  CPU 0,00 cores / 1,00   0,0 %   (warmup)",
+        "03:55:27  CPU 0,99 cores / 1,00  98,8 %",
+        "03:55:28  CPU 0,99 cores / 1,00  99,4 %",
+        "03:55:29  CPU 0,99 cores / 1,00  98,9 %",
+        "03:55:30  CPU 0,98 cores / 1,00  97,8 %"
+      ],
+      "note": "RAM stayed at ~117 MiB / 2 GiB and PIDs at 84 / 256 while the CPU load ran."
+    },
+    {
+      "id": "warmup_once",
+      "pass": true,
+      "observed": "The CLI --once output shows real CPU (0,002 cores at idle) because the binary performs a 250 ms internal warmup; --watch still emits the first line as warmup."
+    },
+    {
+      "id": "read_only",
+      "pass": true,
+      "observed": "No cgroup write, no network, no external command; the binary only reads /sys/fs/cgroup and the CLI only reads registry.json and spawns the binary."
+    }
+  ],
+  "gaps": [
+    {
+      "id": "0112-G1",
+      "what": "No daemon, Unix socket, SSE, UI or Prometheus",
+      "why": "Explicitly out of scope for v1; the CLI is the only consumer."
+    },
+    {
+      "id": "0112-G2",
+      "what": "Storage occupancy is not measured",
+      "why": "cgroups expose I/O bytes, not filesystem usage; du/quotas are out of scope and belong to the storage quota spec."
+    }
+  ],
+  "core_untouched": true,
+  "finished_at": "2026-11-22T03:56:00Z",
+  "repo": {
+    "branch": "remove-hardener",
+    "commit": "fd25018",
+    "pushed": true
+  }
+}

@@ -1,0 +1,134 @@
+{
+  "artifact": "0105-pos-rootless-e2e",
+  "spec": "verificacion E2E adicional pedida por el usuario (repo luc444s/pos) - reintento final con fix ONLY en la copia POS del lab",
+  "subagent": 2,
+  "role": "SOLO laboratorio (fix exclusivamente en /var/tmp/pos-e2e/src/back/app/db.py; sin cambios en mailadmin, sin parcheos de AppArmor/seccomp, sin commit)",
+  "date_utc": "2026-11-18T16:02:22Z",
+  "result": "PASS",
+  "commit_mailadmin": "9df7beb (intacto)",
+  "commit_pos": "6d3c95138dd917a8deaaae52f692ed0598b12b56 (master)",
+  "fix_aplicado": {
+    "archivo": "/var/tmp/pos-e2e/src/back/app/db.py (SOLO copia del repo POS en el lab)",
+    "diff_guardado": "/var/tmp/pos-e2e/db.py.patch",
+    "original_guardado": "/var/tmp/pos-e2e/db.py.orig",
+    "descripcion": "create_db_and_tables() crea de forma idempotente los 4 enum types nativos (user_role, staff_contract_kind, staff_contract_status, staff_contract_payment_structure) con engine.begin() + conn.exec_driver_sql() y bloques DO $$ ... EXCEPTION WHEN duplicate_object THEN null; END $$, antes de SQLModel.metadata.create_all(engine). Valores tomados de back/migrations/20260204100000_add_user_roles.sql y 20260325180000_staff_contract.sql.",
+    "diff": "--- /var/tmp/pos-e2e/db.py.orig\n+++ /var/tmp/pos-e2e/src/back/app/db.py\n@@ -10,8 +10,36 @@\n     pool_pre_ping=True,\n )\n \n+# E2E lab fix on the POS copy only: the models declare SAEnum(..., create_type=False),\n+# so SQLModel.metadata.create_all() cannot create the native PostgreSQL enum types\n+# itself. Create them idempotently before create_all, using the same DO-block\n+# pattern as the repo migrations, so a fresh database boots correctly.\n+_ENUM_TYPES_SQL = (\n+    \"\"\"DO $$ BEGIN\n+    CREATE TYPE user_role AS ENUM ('owner', 'admin', 'kitchen', 'waiter', 'receptionist');\n+EXCEPTION WHEN duplicate_object THEN null;\n+END $$;\"\"\",\n+    \"\"\"DO $$ BEGIN\n+    CREATE TYPE staff_contract_kind AS ENUM ('employee', 'freelancer');\n+EXCEPTION WHEN duplicate_object THEN null;\n+END $$;\"\"\",\n+    \"\"\"DO $$ BEGIN\n+    CREATE TYPE staff_contract_status AS ENUM (\n+        'draft', 'pending_signature', 'active', 'expired', 'superseded'\n+    );\n+EXCEPTION WHEN duplicate_object THEN null;\n+END $$;\"\"\",\n+    \"\"\"DO $$ BEGIN\n+    CREATE TYPE staff_contract_payment_structure AS ENUM ('payroll', 'invoice');\n+EXCEPTION WHEN duplicate_object THEN null;\n+END $$;\"\"\",\n+)\n+\n \n def create_db_and_tables() -> None:\n+    with engine.begin() as conn:\n+        for statement in _ENUM_TYPES_SQL:\n+            conn.exec_driver_sql(statement)\n     SQLModel.metadata.create_all(engine)",
+    "_scope": "Unico archivo modificado fue la copia POS del lab. No se toco /data/data/com.termux/files/home/Proyectos/mailadmin ni perfiles AppArmor/seccomp."
+  },
+  "gate": {
+    "comando": "apparmor_parser -Q sobre render_profile('cell-e2e-pos3') con la CLI actual del repo local",
+    "rc": 0,
+    "rendered_bytes": 11253
+  },
+  "celda": {
+    "slug": "cell-e2e-pos3 (reutilizada, re-desplegada con down -v)",
+    "index": 67,
+    "uid": 60067,
+    "aa_status": "spanel-cell-cell-e2e-pos3 = enforce",
+    "cgroup_driver": "systemd",
+    "seccomp_profile": "/var/lib/spanel/cells/cell-e2e-pos3/cell-seccomp.json",
+    "docker_info": "SecurityOptions: seccomp / Profile: /var/lib/spanel/cells/cell-e2e-pos3/cell-seccomp.json, rootless, Cgroup Driver systemd",
+    "loopback_address": "127.68.1.1",
+    "publish_port": 20067,
+    "relay_port": 40067
+  },
+  "rebuild_imagen": {
+    "comando": "docker compose -f docker-compose.yml -f docker-compose.dev.yml -f build-override.yml --env-file config.env build back (daemon ROOT del lab, con DNS) -> rc=0",
+    "save": "docker save pos-back:latest -o /var/tmp/pos-e2e/pos-back-fixed.tar (375108096 bytes)",
+    "load": "docker load -i /var/tmp/pos-e2e/pos-back-fixed.tar en el daemon de la celda -> Loaded image: pos-back:latest",
+    "rebuild_log": "/var/tmp/pos-e2e/rebuild-back.log"
+  },
+  "compose": {
+    "comando_down": "docker compose ... down -v (BD efimera eliminada) -> rc=0",
+    "comando_up": "docker compose ... up -d (SIN --build) -> rc=0",
+    "up_log": "/var/tmp/pos-e2e/up-pos3-final.log",
+    "network": "pos2_net (bridge privada, 6 contenedores unidos, db/redis sin puertos publicados, haproxy SOLO en 127.68.1.1:20067:4202)",
+    "runtime_override": "/var/tmp/pos-e2e/runtime-override.yml (build: !reset null + image en back/front/ws-bridge; ports !override [] en db/redis; haproxy 127.68.1.1:20067:4202)"
+  },
+  "servicios": {
+    "totales_up": "6/6",
+    "db": "Up (healthy) - pg_isready OK",
+    "redis": "Up (healthy) - redis-cli ping OK",
+    "back": "Up - startup OK, sin error; 'Database schema version (max applied): 0' -> 'Found 124 migration file(s)' -> migraciones ejecutadas",
+    "ws-bridge": "Up - /health 200 (ws_backend UP)",
+    "front": "Up - Angular dev server en :80 (frontend_backend UP)",
+    "haproxy": "Up - api_backend UP, ws_backend UP, frontend_backend UP"
+  },
+  "red_interna": {
+    "back_a_db": "OK: DB_OK via db (1,) (psycopg.connect con DB_HOST=db)",
+    "back_a_redis": "OK: REDIS_OK True (redis://redis:6379)",
+    "haproxy_a_api_a_back": "OK: GET http://127.68.1.1:20067/api/health -> 200 {\"status\":\"ok\"}",
+    "haproxy_a_front": "OK: GET http://127.68.1.1:20067/ -> 200 SPA POS"
+  },
+  "back_logs_inicio": "INFO: Started server process [8]; INFO: Waiting for application startup.; INFO - Starting application...; INFO - Database schema version (max applied): 0; INFO - Found 124 migration file(s); ... (sin 'Application startup failed')",
+  "denied": {
+    "baseline": 155,
+    "nuevos_filtrando_slug_y_fsuid": 0,
+    "detalle": "0 entradas DENIED con 'cell-e2e-pos3' o fsuid=60067 antes/despues. El sandbox AppArmor/seccomp quedo intacto."
+  },
+  "publicacion": {
+    "relay_endpoint": {
+      "slug": "cell-e2e-pos3",
+      "loopback_address": "127.68.1.1",
+      "publish_port": 20067,
+      "relay_port": 40067,
+      "bind": "172.25.0.1",
+      "allowed_sources": ["172.25.0.3"]
+    },
+    "relay_listener": "172.25.0.1:40067 -> pid 547039 (uid 1000)",
+    "route_file": "/home/lucas/mailadmin/scripts/traefik-lab/dynamic/spanel-route-0105-pos.yml",
+    "route_marker": "# managed-by: spanel",
+    "route_rule": "Host(`pos-e2e.lab`)",
+    "entrypoint": "web",
+    "servers_url": "http://172.25.0.1:40067",
+    "hosts_entry": "127.0.0.1 pos-e2e.lab",
+    "traefik_restart": false,
+    "link": "http://pos-e2e.lab:9080/"
+  },
+  "curl_final": {
+    "comando": "curl -sSL -H 'Host: pos-e2e.lab' http://127.0.0.1:9080/",
+    "http_code": 200,
+    "bytes": 3393,
+    "title": "<title>Satisfecho — Open-source restaurant platform</title>",
+    "sha256": "9ece2741ddd7ea9bd7af869923e8012040fbda4723642b539e8f05d1aacb8a9a",
+    "link_real_hostname": "http://pos-e2e.lab:9080/ -> 200, mismo titulo",
+    "api_por_link": "curl -H 'Host: pos-e2e.lab' http://127.0.0.1:9080/api/health -> 200 {\"status\":\"ok\"}"
+  },
+  "links_vivos_finales": {
+    "http://rootless-e2e.lab:9080/": {"raw": 200, "followed": 200},
+    "http://editores-e2e.lab:9080/": {"raw": 200, "followed": 200},
+    "http://gitea-e2e.lab:9080/": {"raw": 200, "followed": 200},
+    "http://stack-editores-e2e.lab:9080/": {"raw": 200, "followed": 200},
+    "http://wp-e2e.lab:9080/": {"raw": 301, "followed": 200, "nota": "redirect estandar de WordPress a /wp-admin/install.php; link vivo"},
+    "http://pos-e2e.lab:9080/": {"raw": 200, "followed": 200},
+    "relay_pid": 547039,
+    "relay_intacto": true
+  },
+  "prohibidos_intocados": [
+    "cell-g",
+    "cell-h",
+    "Traefik (config estatica / restart)",
+    "phpMyAdmin",
+    "MariaDB del host",
+    "WordPress del host",
+    "produccion vmi3461574",
+    "/opt/stacks"
+  ],
+  "integridad": {
+    "source_code_mailadmin_modificado": false,
+    "apparmor_o_seccomp_parcheados": false,
+    "generator_run": false,
+    "committed_code": false,
+    "unico_archivo_modificado": "/var/tmp/pos-e2e/src/back/app/db.py (copia POS del lab)",
+    "artifact_path": "/data/data/com.termux/files/home/Proyectos/mailadmin/artifacts/0105-pos-rootless-e2e.json"
+  },
+  "final_summary": {
+    "resultado": "PASS",
+    "resumen": "Con el fix exclusivamente en la copia POS del lab (db.py), el back creo los 4 enum types antes del create_all y las 124 migraciones corrieron sobre una BD fresca. 6/6 contenedores Up, todos los backends de HAProxy UP, red interna verificada (back->db, back->redis, haproxy->/api->back), 0 DENIED nuevos. Link http://pos-e2e.lab:9080/ publicado por relay con HTTP 200 y HTML real del POS (title 'Satisfecho — Open-source restaurant platform'). Los 5 links preexistentes siguen vivos.",
+    "link": "http://pos-e2e.lab:9080/",
+    "denied_sin_parchear": 0,
+    "servicios_up": "6/6",
+    "links_alive": true,
+    "nota_para_el_dueno": "El fix debe incorporarse al repo POS (no a mailadmin). El sandbox (perfil invertido + seccomp, commit 9df7beb) quedo demostrado con 0 DENIED para este stack de 6 servicios con red interna."
+  }
+}

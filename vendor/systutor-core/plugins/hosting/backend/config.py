@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import re
 
+from systutor.contracts.container_runtime import ContainerRuntimeHandle
 from systutor.core.errors import AppError
 
 from .inspection import candidato_de, inspect_container
@@ -202,6 +203,15 @@ def build_run_args(info: dict, *, name: str, env_file: str) -> list[str]:
     return args
 
 
+def additional_networks(info: dict) -> tuple[str, ...]:
+    """Networks that must be reattached after recreating the container."""
+    host = _mapping(info.get("HostConfig"))
+    primary = str(host.get("NetworkMode") or "").strip()
+    settings = _mapping(info.get("NetworkSettings"))
+    networks = _mapping(settings.get("Networks"))
+    return tuple(sorted(str(name) for name in networks if str(name) != primary))
+
+
 class HostingConfig:
     """The canonical, non-secret view of a site's configuration."""
 
@@ -222,14 +232,21 @@ class HostingConfig:
 class RawAdapter:
     """Configuration for containers created with `docker run`."""
 
-    def __init__(self, settings: HostingSettings) -> None:
+    def __init__(
+        self, settings: HostingSettings, runtime: ContainerRuntimeHandle | None = None
+    ) -> None:
         self.settings = settings
         self.env = docker_env(settings)
-        self.provisioner = Provisioner(settings)
+        self.runtime = runtime
+        self.provisioner = Provisioner(settings, runtime)
 
     def _inspect(self, site: HostingSite) -> dict:
-        info = inspect_container(
-            self.env, site.container_name, timeout=self.settings.command_timeout
+        info = (
+            self.runtime.inspect("container", site.container_name)
+            if self.runtime is not None
+            else inspect_container(
+                self.env, site.container_name, timeout=self.settings.command_timeout
+            )
         )
         if info is None:
             raise AppError(
@@ -261,8 +278,13 @@ class RawAdapter:
 
     def _ensure_env_file(self, site: HostingSite, info: dict) -> str:
         """Write the stable env file the recreate and wp-cli will use."""
-        path = env_path(self.settings, site.container_name)
-        escribir_archivo_remoto_en(self.env, path, render_env(env_of(info)))
+        if self.runtime is not None:
+            path = self.runtime.write_private(
+                f"{site.container_name}/wp.env", render_env(env_of(info)).encode()
+            )
+        else:
+            path = env_path(self.settings, site.container_name)
+            escribir_archivo_remoto_en(self.env, path, render_env(env_of(info)))
         return path
 
     def update_config(self, site: HostingSite, updates: dict[str, str]) -> HostingConfig:
@@ -272,16 +294,24 @@ class RawAdapter:
         env = env_of(info)
         env.update(cleaned)
 
-        path = env_path(self.settings, site.container_name)
-        escribir_archivo_remoto_en(self.env, path, render_env(env))
+        if self.runtime is not None:
+            path = self.runtime.write_private(
+                f"{site.container_name}/wp.env", render_env(env).encode()
+            )
+        else:
+            path = env_path(self.settings, site.container_name)
+            escribir_archivo_remoto_en(self.env, path, render_env(env))
 
         args = build_run_args(info, name=site.container_name, env_file=path)
+        extra_networks = additional_networks(info)
         try:
             self.provisioner.command("rm", "-f", site.container_name)
         except Fallo as exc:
             if "No such" not in str(exc) and "no such" not in str(exc):
                 raise
         self.provisioner.command("run", *args)
+        for network in extra_networks:
+            self.provisioner.command("network", "connect", network, site.container_name)
         return self.read_config(site)
 
     def rotate_salts(self, site: HostingSite) -> None:
@@ -300,6 +330,11 @@ class RawAdapter:
         owner = self.provisioner.command(
             "exec", site.container_name, "stat", "-c", "%u", "/var/www/html"
         ).strip()
+        # En celdas rootless el volumen está dentro del user namespace del
+        # tenant: uid 0 del helper es el dueño real de los ficheros del sitio.
+        rootless_helper = self.runtime is not None and self.runtime.runtime == "rootless"
+        if rootless_helper:
+            owner = "0"
         self.provisioner.command(
             "run",
             "--rm",
@@ -315,6 +350,7 @@ class RawAdapter:
             path,
             "wordpress:cli",
             "wp",
+            *( ["--allow-root"] if rootless_helper else [] ),
             "config",
             "shuffle-salts",
         )

@@ -1,0 +1,155 @@
+{
+  "base": "http://127.0.0.1:3000",
+  "blocked": [
+    "No live rootful WordPress fixture: the lab tenant is rootless and the old demowp/lucas-wp containers are gone.",
+    "Single-tenant lab: demo holds both sites and no second user/tenant with a rootless cell exists; cross-tenant isolation is covered by host-agent unit tests, not by a live second tenant."
+  ],
+  "checks": {
+    "bounded_during_session": {
+      "detail": {
+        "connectors": [
+          "spanel-pma-pma-4626f8561da8c0c3d48fe775a464a6f2",
+          "spanel-pma-pma-b16cdf7855f8b0f98870285ed3afd1c8"
+        ],
+        "listeners": [
+          41000,
+          41001,
+          42000,
+          42001
+        ],
+        "relays": [
+          {
+            "bytes_in": 6274,
+            "bytes_out": 140490,
+            "created_at": 1795207122.5677447,
+            "expires_at": 1795207152.5677452,
+            "listen_port": 41000,
+            "pma_session_id": "Mtb-RkAKyOx6m3sve9GcGKG9R01D8RAEbeE0WLdJIGA",
+            "relay_id": "pma-b16cdf7855f8b0f98870285ed3afd1c8",
+            "site_id": "a72c50d6-3a50-402a-a82a-7e3f098f58c0",
+            "slug": "demo",
+            "state": "open",
+            "target_port": 42000,
+            "tenant_id": "658e5ca2-00a4-4672-b5c5-f093db3066fa"
+          },
+          {
+            "bytes_in": 6274,
+            "bytes_out": 140490,
+            "created_at": 1795207124.8193243,
+            "expires_at": 1795207154.819325,
+            "listen_port": 41001,
+            "pma_session_id": "heM6gU8ZAAkZG7sspxNxZCVV5FgxdAm9fekXQtmdyRw",
+            "relay_id": "pma-4626f8561da8c0c3d48fe775a464a6f2",
+            "site_id": "5bf2d8d5-208a-4b32-8f20-d7574da04e7c",
+            "slug": "demo",
+            "state": "open",
+            "target_port": 42001,
+            "tenant_id": "658e5ca2-00a4-4672-b5c5-f093db3066fa"
+          }
+        ]
+      },
+      "ok": true
+    },
+    "crash_reconcile_cleanup": {
+      "detail": {
+        "connectors": [],
+        "listeners": []
+      },
+      "ok": true
+    },
+    "cross_site_cookie_rejected": {
+      "detail": {
+        "status": 401
+      },
+      "ok": true
+    },
+    "cross_site_ticket_rejected": {
+      "detail": {
+        "cross_status": 401,
+        "cross_ticket": "7sAGhA3I2m1o...",
+        "own_status": 200
+      },
+      "ok": true
+    },
+    "delta_denied_zero": {
+      "detail": {
+        "denied": 0
+      },
+      "ok": true
+    },
+    "logout_cleanup": {
+      "detail": {
+        "connectors": [],
+        "listeners": []
+      },
+      "ok": true
+    },
+    "no_permanent_db_port": {
+      "detail": {
+        "published": []
+      },
+      "ok": true
+    },
+    "relay_close_breaks_only_a": {
+      "detail": {
+        "b_still_works": true,
+        "closed_relay_gone": true,
+        "dead_status": 401
+      },
+      "ok": true
+    },
+    "session_a_dashboard": {
+      "detail": {
+        "bytes": 343125,
+        "status": 200
+      },
+      "ok": true
+    },
+    "session_b_dashboard": {
+      "detail": {
+        "bytes": 343125,
+        "status": 200
+      },
+      "ok": true
+    },
+    "simultaneous_isolation": {
+      "detail": {
+        "db_a": "wp_3cf55b3bd9",
+        "db_b": "wp_61d4c1d1da"
+      },
+      "ok": true
+    },
+    "ttl_expiry_cleanup": {
+      "detail": {
+        "expires_in": 30,
+        "relay_ids": [
+          "pma-d8994c071227334989bf55dd07c0f4f7"
+        ]
+      },
+      "ok": true
+    },
+    "zero_resources_before": {
+      "detail": {
+        "connectors": [],
+        "db_published": [],
+        "listeners": [],
+        "relays": []
+      },
+      "ok": true
+    }
+  },
+  "cleanup_complete": true,
+  "duration_s": 107.0,
+  "final": {
+    "connectors": [],
+    "listeners": [],
+    "relays": []
+  },
+  "finished_at": 1795207227.1331582,
+  "result": "PARTIAL",
+  "site_a": "a72c50d6-3a50-402a-a82a-7e3f098f58c0",
+  "site_b": "5bf2d8d5-208a-4b32-8f20-d7574da04e7c",
+  "spec": "0110-B",
+  "started_at": 1795207120.0990493,
+  "tenant_slug": "demo"
+}

@@ -1,0 +1,62 @@
+# Reference systemd unit for the Spanel cell metrics daemon (A.SPEC 0113).
+#
+# Install the binary at /usr/local/bin/spanel-cell-metrics, keep the token in a
+# root-only file and adjust --allowed-uids to the uid of the app runtime.
+[Unit]
+Description=Spanel read-only cell metrics daemon (AF_UNIX)
+Documentation=https://github.com/systutor/spanel
+After=local-fs.target
+Before=spanel-app.service
+
+[Service]
+Type=simple
+User=root
+Group=root
+RuntimeDirectory=spanel
+RuntimeDirectoryMode=0755
+UMask=0077
+ExecStart=/usr/local/bin/spanel-cell-metrics --serve \
+  --socket /run/spanel/cell-metrics.sock \
+  --token-file /run/secrets/cell_metrics_token \
+  --allowed-uids 0
+Restart=on-failure
+RestartSec=2
+
+# The sampler only reads cgroups and speaks AF_UNIX. It never writes cgroups,
+# never opens a network socket and never needs capabilities.
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectControlGroups=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+PrivateTmp=true
+PrivateDevices=true
+NoNewPrivileges=true
+RestrictAddressFamilies=AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+ReadOnlyPaths=/sys/fs/cgroup
+ReadOnlyPaths=/etc/passwd
+ReadOnlyPaths=/run/secrets/cell_metrics_token
+
+# Hard resource bounds: a few hundred KiB per sample and one sample/second
+# per connected client.
+MemoryMax=64M
+MemoryHigh=48M
+CPUQuota=10%
+TasksMax=32
+
+[Install]
+WantedBy=multi-user.target

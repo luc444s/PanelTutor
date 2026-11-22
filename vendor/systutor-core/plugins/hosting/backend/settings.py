@@ -81,6 +81,13 @@ class HostingSettings(BaseModel):
     # one off, phpMyAdmin keeps its fixed `PMA_HOST` and login sends no server.
     phpmyadmin_arbitrary: bool = False
     phpmyadmin_db_network: str = ""
+    # A.SPEC 0110-B: one Core phpMyAdmin reaches rootless DBs through an
+    # ephemeral host-agent relay. Disabling it makes rootless fail closed.
+    phpmyadmin_rootless_broker: bool = True
+    phpmyadmin_broker_socket: str = "/run/spanel/plan-agent.sock"
+    phpmyadmin_broker_token_file: str = "/run/secrets/plan_agent_token"
+    phpmyadmin_broker_timeout: int = 10
+    phpmyadmin_source_ip: str = ""
     files_root: str = "/var/www/html"
     backups_dir: str = "/var/lib/spanel/hosting-backups"
     backup_scripts_dir: str = "/app/scripts"
@@ -142,6 +149,17 @@ def register_hosting_settings() -> HostingSettings:
         phpmyadmin_timeout=max(1, _int_env("SPANEL_PHPMYADMIN_TIMEOUT", 15)),
         phpmyadmin_arbitrary=_bool_env("SPANEL_PHPMYADMIN_ARBITRARY", False),
         phpmyadmin_db_network=os.getenv("SPANEL_PHPMYADMIN_DB_NETWORK", "").strip(),
+        phpmyadmin_rootless_broker=_bool_env("SPANEL_HOSTING_ROOTLESS_PMA_BROKER", True),
+        phpmyadmin_broker_socket=os.getenv(
+            "SPANEL_PLAN_AGENT_SOCKET", "/run/spanel/plan-agent.sock"
+        ).strip(),
+        phpmyadmin_broker_token_file=os.getenv(
+            "SPANEL_PLAN_AGENT_TOKEN_FILE", "/run/secrets/plan_agent_token"
+        ).strip(),
+        phpmyadmin_broker_timeout=max(
+            1, _int_env("SPANEL_PHPMYADMIN_BROKER_TIMEOUT", 10)
+        ),
+        phpmyadmin_source_ip=os.getenv("SPANEL_PHPMYADMIN_SOURCE_IP", "").strip(),
         files_root=os.getenv("SPANEL_HOSTING_FILES_ROOT", "/var/www/html").strip(),
         backups_dir=os.getenv(
             "SPANEL_HOSTING_BACKUPS_DIR", "/var/lib/spanel/hosting-backups"
@@ -151,9 +169,7 @@ def register_hosting_settings() -> HostingSettings:
             "SPANEL_HOSTING_BACKUP_SCRIPTS_DIR", _default_backup_scripts_dir()
         ).strip()
         or _default_backup_scripts_dir(),
-        backup_link_ttl=min(
-            900, max(30, _int_env("SPANEL_HOSTING_BACKUP_LINK_TTL", 300))
-        ),
+        backup_link_ttl=min(900, max(30, _int_env("SPANEL_HOSTING_BACKUP_LINK_TTL", 300))),
         backup_max_upload_bytes=max(
             1024 * 1024,
             _int_env("SPANEL_HOSTING_BACKUP_MAX_UPLOAD_BYTES", 5 * 1024 * 1024 * 1024),

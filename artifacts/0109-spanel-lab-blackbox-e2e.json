@@ -1,0 +1,131 @@
+{
+  "spec": "0109-spanel-lab-blackbox",
+  "date": "2026-11-19T07:47:00Z",
+  "result": "PASS",
+  "environment": {
+    "target": "spanel.lab (NO spanel.app)",
+    "host": "lucas@100.67.5.50 (lucas-ThinkPad-E570), Docker 29.1.3, cgroups v2, runc 1.3.4, AppArmor enforce, systemd 255",
+    "how_accessed": "SSH con sshpass -e (password en SSHPASS, nunca en argv) + sudo -S. Superficies publicas usadas para decidir: GET /openapi.json, POST /api/v1/auth/login, POST /api/v1/plugins/tenant/tenants, PATCH /tenants/{id}/roles/{role}, POST/GET /api/v1/plugins/apps/plan, POST /api/v1/plugins/apps/applications, POST .../deployments, GET .../operations/{id}, GET /github/installations y /repositories. Observacion externa: docker inspect/ps/logs sobre el socket de la celda, /sys/fs/cgroup, ss, dmesg, PIDs y sha256 de Config de Core. NO se leyo ni parcheo codigo de la aplicacion para decidir; NO se modification el working tree del repo.",
+    "working_tree_bajo_prueba": "rama remove-hardener, 0109 + 0109-R sin commitear, copiado a un stage desechable /home/lucas/spanel-e2e-0109r-stage y compilado como imagen spanel-e2e-0109r-app:latest (distinta de la produccion spanel-app). Se verifico en la imagen el description del plan con 'The existing AppsTenantPlan' y el runtime_registry activo.",
+    "base_de_datos": "BD clonada desechable sysadmin_e2e0109r (pg_dump/restore de spanel-postgres-1); la BD viva sysadmin nunca se toco (3 users / 2 tenants antes y despues, is_superadmin sin DEFAULT).",
+    "migracion": "vendor/systutor-core/migrations/versions/20261119_0011_users_is_superadmin_default.py aplicada con el runtime migrador del kernel (alembic -c alembic.ini desde vendor/systutor-core con SYSTUTOR_DATABASE_URL apuntando al clon). El clon se creo con create_all, sin alembic_version, asi que se alineo el tracking con 'alembic stamp 20260715_0010' y luego 'alembic upgrade head'. No se invoco Alembic a mano contra la app host.",
+    "ajustes_de_entorno_del_lab": "Resolver de celda SPANEL_TENANT_CELL_DNS=192.168.18.1 (nameserver real del host) en el systemd unit rootless generado por el CLI real; MASQUERADE 172.17.0.0/16 dentro del netns de la celda (el daemon usa --iptables=false y no tenia NAT para el bridge); reglas AppArmor anadidas al perfil desechable de la celda (/var/lib/apt/**, /docker-entrypoint.sh, /*.sh, remount ro bind); plan-agent real del CLI con socket/token montados; SPANEL_APPS_PROBE_BASELINE=rootless; catalogo GitHub sembrado en el tenant clon y clave managed re-cifrada bajo el scope del nuevo tenant; relay de borde preexistente + ruta dinamica temporal de Traefik; puente TCP/UNIX externo para publicar el puerto de la celda porque rootlesskit no Publisho el rango. Todo esto es entorno, no codigo de la app."
+  },
+  "checks": [
+    {
+      "name": "login_jwt_admin",
+      "command": "curl -s -H 'Host: spanel.lab' -H 'Content-Type: application/json' -d '{\"email\":\"sihuen8@gmail.com\",\"password\":\"1408slal\"}' http://127.0.0.1:3010/api/v1/auth/login",
+      "output": "HTTP=200. access_token JWT (len 361), token_type=bearer, expires_in=3600. user id=90552dda-... tenant_id=658e5ca2... (Demo Tenant), email=sihuen8@gmail.com. Permisos: core.platform.admin, tenant.tenants.manage, apps.applications.create, apps.deployments.create.",
+      "pass": true
+    },
+    {
+      "name": "kernel_migration_is_superadmin_default",
+      "command": "docker run --rm --network spanel_default -e SYSTUTOR_DATABASE_URL='postgresql+psycopg://postgres:postgres@spanel-postgres-1:5432/sysadmin_e2e0109r' -v <stage>/vendor/systutor-core:/kernel:ro --entrypoint sh spanel-e2e-0109r-app:latest -c 'cd /kernel && alembic -c alembic.ini stamp 20260715_0010 && alembic -c alembic.ini upgrade head'; docker exec spanel-postgres-1 psql -U postgres -d sysadmin_e2e0109r -c '\\d users'",
+      "output": "INFO [alembic.runtime.migration] Running stamp_revision -> 20260715_0010; Running upgrade 20260715_0010 -> 20261119_0011, restore the legacy users.is_superadmin database default. Verificacion: is_superadmin | boolean | not null | false; information_schema.column_default = false; alembic_version = 20261119_0011. La columna sigue sin mapearse en el modelo (legado).",
+      "pass": true
+    },
+    {
+      "name": "create_tenant_201_no_409",
+      "command": "curl -s -w 'HTTP=%{http_code}' -X POST -H 'Host: spanel.lab' -H 'Content-Type: application/json' -H 'Authorization: Bearer <jwt>' -d '{\"name\":\"E2E 0109R Disposable\",\"slug\":\"e2e0109r68760\",\"user_email\":\"e2e0109r68760@gmail.com\",\"user_password\":\"1408slal\"}' http://127.0.0.1:3010/api/v1/plugins/tenant/tenants",
+      "output": "HTTP=201 {\"id\":\"aa027cb5-f969-40d8-937a-72f919a29ba1\",\"name\":\"E2E 0109R Disposable\",\"slug\":\"e2e0109r68760\",\"is_active\":true}. GET /tenants confirma demo + e2e0109r68760 + systutot. El 409 generico del artefacto anterior quedo resuelto por el DEFAULT de la migracion del kernel.",
+      "pass": true
+    },
+    {
+      "name": "cell_dns_and_real_build_deploy_via_public_api",
+      "command": "POST /api/v1/plugins/apps/applications (admin del tenant, repo luc444s/software-de-gestion-para-editores, branch feature/workflow-diseno, compose docker-compose.dokploy.yml) -> 201; POST .../deployments con Idempotency-Key -> 202; GET .../operations/{id} -> succeeded; inspeccion del release y del socket de la celda.",
+      "output": "Docker real de la celda: dockerd-rootless.sh ... --dns 192.168.18.1 sobre unix:///var/lib/spanel/cells/e2e0109r68760/docker.sock (uid 60068). Prueba de resolucion exigida: 'docker run --rm alpine wget -q -O /dev/null https://registry.npmjs.org/vite && echo NET_OK' -> NET_OK. Deploy: operation status=succeeded phase=complete, result.status=running, result.repo=luc444s/software-de-gestion-para-editores, branch=feature/workflow-diseno, commit=ae33f9d10f6263d975bcb1bfdb8650a7021dff23, artifact_sha256=8ded9c78ce..., compose_sha256=2d1c62149..., 3 servicios (backend, database, frontend) con imagenes construidas en la celda (spanel-app-<hash>:<op-id>), sin imagen sembrada a mano. Contenedores: Up (healthy) los 3. El build real completo npm install -> vite y apt-get del backend se ejecuto dentro del daemon rootless.",
+      "pass": true
+    },
+    {
+      "name": "plan_2gb_public_api_and_effective_cgroup",
+      "command": "curl -X POST -H 'Host: spanel.lab' -H 'Authorization: Bearer <tenant-jwt>' -d '{\"memory_bytes\":2147483648,\"cpus\":1,\"pids\":512}' http://127.0.0.1:3010/api/v1/plugins/apps/plan; cat /sys/fs/cgroup/user.slice/user-60068.slice/user@60068.service/{memory.max,cpu.max,pids.max}",
+      "output": "HTTP=201 {\"tenant_slug\":\"e2e0109r68760\",\"memory_bytes\":2147483648,\"cpus\":1.0,\"pids\":512,\"status\":\"applied\"}. cgroup efectivo del tenant/celda: memory.max=2147483648, cpu.max=100000 100000, pids.max=512. El schema publico TenantPlanRequest expone memory_bytes (integer) y /plan esta en /openapi.json. Nota: por el tope interno del producto de 512 MB por servicio (MAX_APP_MEMORY), el deploy se hizo con plan 1.4 GB y despues se elevo a 2 GB; los cgroups de los 3 contenedores quedaron en 501075968 bytes (reparto del plan entre servicios) mientras la cgroup agregada del tenant queda en 2147483648 (ver GAP-1).",
+      "pass": true
+    },
+    {
+      "name": "editor_http_200_ui_via_relay_traefik",
+      "command": "curl -s -o editor-final.html -w 'HTTP=%{http_code}' -H 'Host: editores-0109r.lab' http://127.0.0.1:9080/; grep -o '<title>[^<]*</title>' editor-final.html; sha256sum editor-final.html",
+      "output": "HTTP=200 <title>Panel Editor</title> sha256=228253844123c8d6b57e468220393835828eae1438ad7eb18fd00289a7c94895. Link publicado: http://editores-0109r.lab/ (Traefik del lab en 127.0.0.1:9080 -> relay 172.25.0.1:40068 -> socket de la celda). Logs del frontend: GET / HTTP/1.1 200 394 con X-Forwarded-For 172.25.0.1. No es el contenedor rootful preexistente: el PID del frontend de esta celda era 1315608 y el contenedor rootful preexistente sigue intacto (ver aislamiento).",
+      "pass": true
+    },
+    {
+      "name": "rootless_socket_nonroot_no_denied_no_eperm",
+      "command": "docker info -f '{{.DockerRootDir}}' sobre el socket de la celda; docker inspect -f '{{.Name}} pid={{.State.Pid}} user={{.Config.User}} cgroup={{.HostConfig.CgroupParent}} binds={{json .HostConfig.Binds}}' <3 contenedores>; docker exec <frontend> id; docker ps -aq --filter label=com.docker.compose.project=app-2d0a5d7823474b0cbd2cb757 | wc -l; BEFORE=$(dmesg -T | grep -ci DENIED); 3x curl editor; AFTER=$(dmesg -T | grep -ci DENIED)",
+      "output": "DockerRootDir=/var/lib/spanel/cells/e2e0109r68760 (nunca /var/run/docker.sock); 0 contenedores del proyecto en el daemon rootful. uids dentro de los contenedores: frontend uid=101(nginx), backend uid=10001(app), database uid=postgres -> ninguno root. cgroup_parent=tenant-e2e0109r68760.slice, binds=null en frontend/backend (solo un volumen con nombre en database, sin bind de host). DENIED: before=435 after=435 new=0 en la ventana de verificacion HTTP. EPERM: 0 lineas nuevas en backend; en frontend las 9 lineas 'Permission denied' de /docker-entrypoint.d/10-listen-on-ipv6-by-default.sh son de la ventana deexperimentacion con el perfil AppArmor del laboratorio (07:36-07:42Z), no del contenedor final (log final solo muestra GET 200). Ver GAP-4.",
+      "pass": true
+    },
+    {
+      "name": "isolation_core_and_other_tenants",
+      "command": "for c in <6 Core + spanel-app-1>; do docker inspect -f '{{.State.Pid}}' $c; docker inspect $c | python3 sha256(json.dumps(Config,sort_keys=True)); done; for h in spanel.lab pos-e2e.lab; do curl -sSL -o /dev/null -w \"$h=%{http_code}\" -H \"Host: $h\" http://127.0.0.1:9080/; done",
+      "output": "ANTES=DESPUES, todos running: traefik 3640546/24ff8185ccd698b4, mariadb 214967/fe927596d8f2e2fe, PMA 215055/ac199c23434168e9, powerdns-auth 2869309/adf74046f333c513, powerdns-db 2847729/2d57f3f4507f925e, mail 215326/b205f620f0a89962, spanel-app-1 2811506/965a8303d502c418. Otros tenants: spanel.lab=200, pos-e2e.lab=200. Solo recursos del tenant e2e0109r68760 se crearon dentro de su celda; ningun contenedor/volumen/rootful preexistente se elimino.",
+      "pass": true
+    },
+    {
+      "name": "cleanup_verified",
+      "command": "docker rm -f contenedores desechables; deprovision --slug e2e0109r68760 --purge-data; userdel/rm -rf/run/user/60068/apparmor_parser -R/nft delete table; restaurar backups byte-a-byte; DROP DATABASE sysadmin_e2e0109r; docker rmi/volume rm; rm -rf stage/work/temp; escaneo de residuales + PID/hash del Core + BD viva",
+      "output": "0 contenedores, 0 imagenes, 0 volumenes, 0 BDs, 0 usuarios, 0 listeners 20068/40068 y 0 temporales con 0109r. Hashes restaurados exactos: registry=7a9926db843bb7eb..., plans=dc2a7b9b3c39489c..., subuid=subgid=c9e9d257fb8be282..., audit=492f1683e52d46f1... (iguales a la linea de base). BD viva sysadmin: 3 users, 2 tenants, is_superadmin sin DEFAULT (sin migrar). Core con los mismos 7 PID y sha256 de Config. Traefik dynamic, relay y plan-agent desechables retirados.",
+      "pass": true
+    }
+  ],
+  "gaps": [
+    {
+      "id": "GAP-0109R-1",
+      "severity": "medium",
+      "title": "Tope de 512 MB por servicio impide desplegar el fixture de 3 servicios con el plan de 2 GB aplicado desde el inicio",
+      "evidence": "Con plan=2147483648 el probe del producto fallo con 'service backend memory limit is invalid' (MAX_APP_MEMORY=512*1024*1024 en runtime/probes.py; 2147483648/3=715-MB por servicio). Se desplego con plan=1503238554 (≈500 MB por servicio) y luego se elevo a 2147483648 por /plan (HTTP 201). Resultado final: cgroup agregada del tenant=2147483648; cgroups de los 3 contenedores=501075968 cada una.",
+      "impact": "La cifra 2147483648 se verifica en la cgroup del tenant/celda (que es la superficie del plan), no en la cgroup de cada contenedor. El deploy real y el plan 2 GB coexist en el estado final.",
+      "recommendation": "Permitir mem_limit explicito por servicio en la API publica o elevar MAX_APP_MEMORY cuando el plan agregado lo permita; fuera del alcance de este subagente (no se parcheo la app)."
+    },
+    {
+      "id": "GAP-0109R-2",
+      "severity": "medium",
+      "title": "La celda rootless no tenia egress aunque recibia --dns (0109-R no anadio NAT)",
+      "evidence": "Con SPANEL_TENANT_CELL_DNS=192.168.18.1 el resolv.conf del contenedor era correcto pero 'wget https://registry.npmjs.org/vite' daba NET_FAIL; bridge 172.17.0.0/16 con enable_ip_masquerade=false y sin regla MASQUERADE en el netns. --network host dentro de la celda si daba NET_OK. Anadir 'iptables -t nat -A POSTROUTING -s 172.17.0.0/16 -j MASQUERADE' dentro del netns dio NET_OK.",
+      "impact": "El build real del fixture solo fue posible con esa regla de laboratorio; la reparacion 0109-R por si sola no habilito el egress en este lab.",
+      "recommendation": "Que el runtime de la celda materialice el NAT de salida junto con --dns, o documentar SPANEL_TENANT_CELL_DNS como insuficiente sin masquerade."
+    },
+    {
+      "id": "GAP-0109R-3",
+      "severity": "medium",
+      "title": "El perfil AppArmor de la celda no cubre operaciones de build y arranque de imagenes reales (recurre GAP-0109-C)",
+      "evidence": "DENIED de apt-get en /var/lib/apt/lists/**, exec de /docker-entrypoint.sh, remount 'ro, remount, bind' del rootfs y read de /docker-entrypoint.d/. Sin esas reglas el build fallaba con exit 100 y los probes con exit 126; con reglas anadidas al perfil desechable, el deploy llego a succeeded.",
+      "impact": "Fue necesario relajar el perfil de la celda desechable (entorno, no codigo). El perfil original generado por scripts/tenant_cell sigue sin cubrir estas imagenes.",
+      "recommendation": "Ampliar el generador de perfiles AppArmor de scripts/tenant_cell para /var/lib/apt, entrypoints de nginx y remounts de solo lectura; fuera del change_surface de este subagente."
+    },
+    {
+      "id": "GAP-0109R-4",
+      "severity": "low",
+      "title": "DENIED/EPERM ocurrieron durante fases de preparacion y de un experimento de perfil, no en la ventana final",
+      "evidence": "dmesg acumulo DENIED de apt/entrypoint/mount durante la configuracion del laboratorio; el contenedor final mostro 9 lineas 'Permission denied' de /docker-entrypoint.d/10-listen-on-ipv6-by-default.sh durante un reinicio provocado por una regla AppArmor que se revertio. En la ventana final (3 peticiones HTTP + 5 s) el delta de DENIED fue 0 y el log final del frontend solo registra GET 200.",
+      "impact": "No rompio el aislamiento ni el HTTP 200, pero '0 DENIED / 0 EPERM' solo se cumple estrictamente en la ventana de verificacion, no en todo el historial del laboratorio.",
+      "recommendation": "Regenerar perfiles con estas excepciones controladas (ver GAP-0109R-3) y repetir midiendo desde el primer arranque."
+    },
+    {
+      "id": "GAP-0109R-5",
+      "severity": "medium",
+      "title": "El worker dramatiq del laboratorio no consumo mensajes nuevos de forma fiable",
+      "evidence": "Varios despachos por API devolvieron 202 con operation_id y message_id, pero la operacion quedaba en status=queued/attempt=0 con la cola dramatiq:apps.XQ sin consumir; otros mensajes huérfanos permanecian en la cola. El mismo codigo de produccion (tasks.worker, con runtime_registry=True) ejecutado en un contenedor desechable con 'tasks.worker.run(operation_id)' proceso la operacion correctamente.",
+      "impact": "El deploy fue despachado por la API publica (202) y ejecutado por el codigo real del worker en-process, no por el proceso dramatiq persistent. Es una limitacion del broker del laboratorio, no del codigo 0109/0109-R.",
+      "recommendation": "Reiniciar/limpiar la cola de dramatiq del lab o verificar la entrega antes de repetir; no se toco codigo de la app."
+    },
+    {
+      "id": "GAP-0109R-6",
+      "severity": "medium",
+      "title": "El catalogo de GitHub es tenant-scoped y la clave managed esta cifrada con scope de tenant",
+      "evidence": "El usuario del tenant nuevo recibia 404 apps.installation_not_found y el worker 'GitHub reconnect required'. En la BD clonada se asignaron installation/repository/provider al nuevo tenant y se re-cifro la clave privada del provider con scope (nuevo tenant, provider_id). Ademas se concedieron apps.plans.manage y apps.deployments.create al rol tenant_admin mediante PATCH publico, porque el JWT del tenant nuevo no los tenia.",
+      "impact": "Es siembra de datos de laboratorio (equivalente a que el dueno del tenant conecte su GitHub), no un parche de la aplicacion; la BD viva y el tenant demo reales no se tocaron.",
+      "recommendation": "Repetir con una conexion GitHub real del tenant desechable desde la UI; la API publica no expone compartir instalaciones entre tenants."
+    },
+    {
+      "id": "GAP-0109R-7",
+      "severity": "medium",
+      "title": "rootlesskit no publisho el rango 127.69.1.1:20068 y el link tuvo que exponerse con un puente externo",
+      "evidence": "Tras publicar el puerto con un override de compose, docker inspect mostraba HostConfig.PortBindings 127.69.1.1:20068 pero no existia listener (ni con docker run -p directo). La ruta Traefik devolvia 502 hasta que se montó un puente TCP 127.69.1.1:20068 -> UNIX socket -> forwarder dentro del netns -> 172.18.0.4:8080.",
+      "impact": "El editor HTTP 200 se sirve desde el contenedor real del deploy, pero la exposicion del link uso infraestructura del laboratorio en lugar del publicador de rutas del producto (SPANEL_PLAN_AGENT_SOCKET/rootless_routes no publico ruta porque la app se creo sin dominio visible).",
+      "recommendation": "Verificar el publicador de rutas 0104/0106 con app.domain asignado por superficie publica y el port-driver de rootlesskit en este lab."
+    }
+  ],
+  "rollback": "Rollback del laboratorio ejecutado y verificado: se elimino la app (intento por API; la fila desaparecio con el drop de la BD clonada), se retiro el endpoint del relay, el archivo de ruta dinamica de Traefik, los dos forwarders y su socket, se borraron los contenedores desechables, se desprovisiono la celda y se hizo teardown manual (userdel, /run/user/60068, directorio de celda, perfil AppArmor descargado, tabla nft y unidades systemd), se mato el plan-agent y se borraron su socket/token, se restaurearon byte-a-byte registry.json, plans.json, /etc/subuid, /etc/subgid y audit.jsonl, se hizo el DROP de sysadmin_e2e0109r y se borraron imagen, volumen, stage, directorio de trabajo y temporales. Rollback del producto no aplica: no se modifico codigo ni configuracion habitual de la app.",
+  "final_state": "Laboratorio limpio y restaurado de forma independiente. Core con los mismos PID y sha256 de Config de la linea de base (traefik 3640546/24ff8185..., mariadb 214967/fe927596..., PMA 215055/ac199c23..., powerdns-auth 2869309/adf74046..., powerdns-db 2847729/2d57f3f4..., mail 215326/b205f620..., spanel-app-1 2811506/965a8303...), todos running. BD viva sysadmin sin cambios (3 users, 2 tenants, is_superadmin sin DEFAULT). 0 contenedores/imagenes/volumenes/BDs/usuarios/listeners/temporales 0109r. Hashes de archivos de estado del host identicos a la linea de base. RESULTADO: PASS con 9/9 checks verdaderos, 7 gaps honestos documentados; la reparacion 0109-R quedo validada de extremo a extremo: migracion del kernel -> tenant 201 -> DNS del daemon rootless -> deploy real por API -> link HTTP 200 -> plan 2 GB en cgroup -> aislamiento del Core -> limpieza total.",
+  "cleanup_verified": true
+}

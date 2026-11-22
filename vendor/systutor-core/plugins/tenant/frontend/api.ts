@@ -1,4 +1,4 @@
-import { apiRequest } from "@systutor/shell/api/client";
+import { apiRequest, getApiBaseUrl } from "@systutor/shell/api/client";
 
 export type TenantResponse = {
   id: string;
@@ -55,6 +55,72 @@ export type TenantDomainsResponse = {
   domains: TenantDomainItem[];
 };
 
+export type TenantResource = {
+  kind: string;
+  resource_id: string;
+  name: string;
+  container_name: string;
+  domain: string | null;
+  state: string;
+  image: string;
+  endpoint: string | null;
+  runtime: "rootful" | "rootless";
+};
+
+export type TenantResourcesResponse = { resources: TenantResource[] };
+
+export type TenantResourceActionResponse = {
+  action: "start" | "stop" | "restart" | "remove";
+  dry_run: boolean;
+  runtime: "rootful" | "rootless";
+  resource: TenantResource;
+  result: Record<string, unknown> | null;
+};
+
+export type TenantPlan = {
+  tenant_id: string;
+  tenant_slug: string;
+  memory_bytes: number;
+  cpus: number;
+  pids: number;
+  cpuset: string | null;
+  storage_bytes: number | null;
+  status: "applied" | "pending" | "failed";
+  applied_at: string | null;
+  last_error: string | null;
+  updated_at: string | null;
+  slice: string;
+  cgroup_path: string;
+};
+
+export type TenantPlanPayload = {
+  memory_bytes: number;
+  cpus: number;
+  pids: number;
+  cpuset?: string | null;
+  storage_bytes?: number | null;
+};
+
+export type TenantPlanCapacity = {
+  tenant_id: string;
+  host: {
+    memory_bytes: number;
+    cpus: number;
+    storage_bytes: number;
+    storage_available_bytes: number;
+    read_at: string | null;
+    source: string | null;
+    data_root: string | null;
+  };
+  allocated: {
+    memory_bytes: number;
+    cpus: number;
+    pids: number;
+    storage_bytes: number;
+  };
+  unbounded_storage: number;
+};
+
 export type CreateTenantPayload = {
   name: string;
   slug: string;
@@ -89,6 +155,9 @@ export const tenantKeys = {
   roles: (tenantId: string) => ["tenant", tenantId, "roles"] as const,
   permissions: (tenantId: string) => ["tenant", tenantId, "permissions"] as const,
   domains: (tenantId: string) => ["tenant", tenantId, "domains"] as const,
+  resources: (tenantId: string) => ["tenant", tenantId, "resources"] as const,
+  plan: (tenantId: string) => ["tenant", tenantId, "plan"] as const,
+  capacity: (tenantId: string) => ["tenant", tenantId, "capacity"] as const,
 };
 
 export function listTenants() {
@@ -155,6 +224,74 @@ export function removeTenantDomain(tenantId: string, domain: string) {
     `/api/v1/plugins/tenant/tenants/${tenantId}/domains/${encodeURIComponent(domain)}`,
     { method: "DELETE" }
   );
+}
+
+export function listTenantResources(tenantId: string) {
+  return apiRequest<TenantResourcesResponse>(
+    `/api/v1/plugins/tenant/tenants/${tenantId}/resources`,
+  );
+}
+
+export function actOnTenantResource(
+  tenantId: string,
+  resource: Pick<TenantResource, "kind" | "resource_id">,
+  action: "start" | "stop" | "restart" | "remove",
+  dryRun = false,
+) {
+  const kind = encodeURIComponent(resource.kind);
+  const resourceId = encodeURIComponent(resource.resource_id);
+  return apiRequest<TenantResourceActionResponse>(
+    `/api/v1/plugins/tenant/tenants/${tenantId}/resources/${kind}/${resourceId}/actions/${action}?dry_run=${dryRun ? 1 : 0}`,
+    { method: "POST" },
+  );
+}
+
+function planQuery(tenantId: string) {
+  return `?tenant_id=${encodeURIComponent(tenantId)}`;
+}
+
+export function getTenantPlan(tenantId: string) {
+  return apiRequest<TenantPlan | null>(
+    `/api/v1/plugins/apps/plan${planQuery(tenantId)}`,
+  );
+}
+
+export function setTenantPlan(tenantId: string, payload: TenantPlanPayload) {
+  return apiRequest<TenantPlan>(
+    `/api/v1/plugins/apps/plan${planQuery(tenantId)}`,
+    { method: "POST", body: JSON.stringify(payload) },
+  );
+}
+
+export function deleteTenantPlan(tenantId: string) {
+  return apiRequest<Record<string, unknown>>(
+    `/api/v1/plugins/apps/plan${planQuery(tenantId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export function verifyTenantPlan(tenantId: string) {
+  return apiRequest<Record<string, unknown>>(
+    `/api/v1/plugins/apps/plan/verify${planQuery(tenantId)}`,
+    { method: "POST" },
+  );
+}
+
+export function getTenantPlanCapacity(tenantId: string) {
+  return apiRequest<TenantPlanCapacity>(
+    `/api/v1/plugins/apps/plan/capacity${planQuery(tenantId)}`,
+  );
+}
+
+/**
+ * Absolute SSE URL for the live metrics stream. `EventSource` cannot send an
+ * `Authorization` header, so the panel uses `fetch` with this URL and the
+ * bearer token from the auth store.
+ */
+export function tenantMetricsStreamUrl(tenantId: string, intervalMs = 1000) {
+  const path = `/api/v1/plugins/tenant/tenants/${encodeURIComponent(tenantId)}/metrics/stream?interval_ms=${intervalMs}`;
+  const baseUrl = getApiBaseUrl();
+  return baseUrl.endsWith("/api") ? `${baseUrl}${path.slice(4)}` : `${baseUrl}${path}`;
 }
 
 export function assignUserToTenant(tenantId: string, payload: AssignUserPayload) {

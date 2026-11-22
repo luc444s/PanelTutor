@@ -8,6 +8,7 @@ import { usePluginFrontendRuntime } from "../../features/plugins/runtime";
 import { buildShellSidebarSections } from "../../features/shell/navigation";
 import { useT } from "../../i18n/use-i18n";
 import { LanguageToggle } from "./language-toggle";
+import { TenantRamWatcher } from "./TenantRamWatcher";
 import { ThemeToggle } from "./theme-toggle";
 
 function ChevronDown({ open }: { open: boolean }) {
@@ -139,6 +140,7 @@ export function Sidebar() {
       </nav>
 
       <div className="mt-auto space-y-3 border-t border-border pt-3">
+        <TenantRamWatcher />
         <LanguageToggle />
         <ThemeToggle />
       </div>

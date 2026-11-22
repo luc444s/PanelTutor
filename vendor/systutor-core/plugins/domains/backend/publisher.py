@@ -11,6 +11,7 @@ from __future__ import annotations
 import logging
 
 from plugins.domains.backend.proxy import ProxyError, ProxyOperations, build_runner
+from plugins.domains.backend.proxy.core import PathRoute
 from plugins.domains.backend.settings import get_domains_settings
 from systutor.contracts.site_domain_publisher import SiteDomainPublisher
 from systutor.sdk.context import PluginContext
@@ -54,6 +55,57 @@ class ProxySitePublisher:
             raise
 
 
+class RootlessRoutePublisher:
+    """Publish a rootless cell route through the existing file-provider.
+
+    The backend is the unprivileged relay on the proxy gateway, not a cell
+    container in the root daemon, so ``write_route_document`` is called with
+    runtime validation and network connection disabled. Marker, file name and
+    one-owner-per-Host semantics stay exactly the same as for rootful routes.
+    """
+
+    def __init__(self, operations: ProxyOperations | None = None) -> None:
+        self._operations = operations
+
+    @property
+    def operations(self) -> ProxyOperations:
+        if self._operations is None:
+            settings = get_domains_settings().proxy_settings()
+            self._operations = ProxyOperations(settings, build_runner(settings))
+        return self._operations
+
+    def publish(
+        self, domain: str, bind: str, relay_port: int, https: bool = True
+    ) -> object:
+        """Publish the relay-backed route, optionally over HTTPS.
+
+        ``https`` is forwarded to :class:`PathRoute`; the resolver, entrypoints
+        and the ACME challenge exclusion are still chosen by the domains proxy
+        settings and ``render_site_yaml``. The default is ``True`` to preserve
+        the redirect+TLS document already rendered by ``HEAD``; passing
+        ``False`` yields the plain HTTP route of the A.SPEC 0104 artifact.
+        """
+        if not bind.strip():
+            raise ValueError("relay bind is required")
+        if not 1 <= relay_port <= 65535:
+            raise ValueError("relay_port must be between 1 and 65535")
+        operations = self.operations
+        if operations.path_conflict(domain, "/"):
+            raise ValueError(f"the domain {domain} already has a managed route")
+        route = PathRoute(
+            prefix="/", container=bind, port=relay_port, https=https, entrypoints=()
+        )
+        return operations.write_route_document(
+            domain,
+            [route],
+            validate_runtime=False,
+            connect_network=False,
+        )
+
+    def unpublish(self, domain: str) -> bool:
+        return self.operations.remove_route_document(domain)
+
+
 def register_domains_publisher(context: PluginContext) -> None:
     app = context.router_registry
     if app is None:
@@ -63,4 +115,9 @@ def register_domains_publisher(context: PluginContext) -> None:
     register_site_domain_publisher(app, "domains", ProxySitePublisher())
 
 
-__all__ = ["ProxySitePublisher", "register_domains_publisher", "SiteDomainPublisher"]
+__all__ = [
+    "ProxySitePublisher",
+    "RootlessRoutePublisher",
+    "register_domains_publisher",
+    "SiteDomainPublisher",
+]

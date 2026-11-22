@@ -8,6 +8,7 @@ name is always read from an owned row.
 from __future__ import annotations
 
 import re
+import secrets
 import time
 from urllib.parse import parse_qs
 
@@ -25,6 +26,7 @@ from systutor.kernel.tenants.context import TenantContext
 from .backups import backup_router
 from .guard import get_owned_site
 from .models import HostingSite
+from .phpmyadmin_broker import close_relay_quietly
 from .phpmyadmin_proxy import PmaClient, proxy_response, validate_url
 from .phpmyadmin_session import (
     COOKIE,
@@ -36,6 +38,7 @@ from .phpmyadmin_session import (
     proxy_base,
     secure_request,
 )
+from .rootless_migration import RootlessMigrationService
 from .schemas import (
     CreateSiteRequest,
     CreateSiteResponse,
@@ -44,6 +47,8 @@ from .schemas import (
     PhpMyAdminSessionResponse,
     ResetPasswordRequest,
     ResetPasswordResponse,
+    RootlessFinalizeRequest,
+    RootlessOperationRequest,
     SecretRotationResponse,
     SiteConfigResponse,
     SiteConfigUpdateRequest,
@@ -61,8 +66,8 @@ from .settings import get_hosting_settings
 router = APIRouter(prefix="/sites", tags=["hosting"])
 
 
-def _get_hosting_service(db: Session = Depends(get_db_session)) -> HostingService:
-    return HostingService(db)
+def _get_hosting_service(request: Request, db: Session = Depends(get_db_session)) -> HostingService:
+    return HostingService(db, app=request.app)
 
 
 @router.get("", response_model=HostingSiteListResponse)
@@ -82,9 +87,7 @@ def list_sites(
             status_code=403,
             code="hosting.platform_scope_forbidden",
         )
-    return service.list_sites(
-        None if scope == "all" else tenant_context.current_tenant_id
-    )
+    return service.list_sites(None if scope == "all" else tenant_context.current_tenant_id)
 
 
 @router.post("", response_model=CreateSiteResponse, status_code=201)
@@ -216,7 +219,23 @@ def create_phpmyadmin_session(
     db.commit()
     settings = get_hosting_settings()
     client = PmaClient(validate_url(settings.phpmyadmin_internal_url), settings.phpmyadmin_timeout)
-    cookies = service.phpmyadmin_login_credentials(site, tenant_context, client)
+    # The provisional id binds a rootless relay to the session that will own it.
+    pma_session_id = secrets.token_urlsafe(32)
+    relay = None
+    try:
+        relay = service.phpmyadmin_relay_server(site, tenant_context, pma_session_id)
+        cookies = service.phpmyadmin_login_credentials(
+            site,
+            tenant_context,
+            client,
+            server=relay["server"] if relay else None,
+        )
+    except Exception:
+        if relay is not None:
+            close_relay_quietly(
+                settings, relay.get("tenant_slug"), relay.get("relay_id")
+            )
+        raise
     db.commit()
     _, ticket = create_session(
         user_id,
@@ -224,6 +243,10 @@ def create_phpmyadmin_session(
         site_id,
         cookies,
         settings.phpmyadmin_session_ttl,
+        relay_id=relay["relay_id"] if relay else None,
+        tenant_slug=relay["tenant_slug"] if relay else None,
+        runtime=relay["runtime"] if relay else None,
+        session_id=pma_session_id,
     )
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
@@ -244,6 +267,24 @@ def close_phpmyadmin_session(
         invalidate(session)
     response.delete_cookie(COOKIE, path=proxy_base(site.id))
     response.headers["Cache-Control"] = "no-store"
+
+
+def _forbidden_pma_post(body: bytes, content_type: str) -> bool:
+    """Reject credential re-login and any browser-selected server/port."""
+    names = {"pma_username", "pma_password", "pma_servername", "host", "port"}
+    if content_type.startswith("application/x-www-form-urlencoded"):
+        fields = parse_qs(body.decode("utf-8", errors="replace"), keep_blank_values=True)
+        return bool(names & set(fields))
+    if content_type.startswith("multipart/form-data"):
+        return bool(
+            re.search(
+                rb'content-disposition:[^\r\n]*\bname="'
+                rb'(?:pma_(?:username|password|servername)|host|port)"',
+                body,
+                re.I,
+            )
+        )
+    return False
 
 
 @router.api_route(
@@ -285,18 +326,7 @@ async def phpmyadmin_proxy(
         return redirect
     body = await request.body()
     if request.method == "POST":
-        content_type = request.headers.get("content-type", "").lower()
-        forbidden = False
-        if content_type.startswith("application/x-www-form-urlencoded"):
-            fields = parse_qs(body.decode("utf-8", errors="replace"), keep_blank_values=True)
-            forbidden = "pma_username" in fields or "pma_password" in fields
-        elif content_type.startswith("multipart/form-data"):
-            forbidden = bool(
-                re.search(
-                    rb'content-disposition:[^\r\n]*\bname="pma_(?:username|password)"', body, re.I
-                )
-            )
-        if forbidden:
+        if _forbidden_pma_post(body, request.headers.get("content-type", "").lower()):
             raise AppError(
                 "Login disabled", status_code=403, code="hosting_phpmyadmin_login_disabled"
             )
@@ -360,6 +390,62 @@ def delete_site(
 ) -> None:
     service.delete_site(site, tenant_context, app=request.app)
     db.commit()
+
+
+def _rootless_service(request: Request, db: Session) -> RootlessMigrationService:
+    return RootlessMigrationService(request.app, db)
+
+
+@router.get("/{site_id}/rootless/plan")
+def rootless_plan(
+    request: Request,
+    site: HostingSite = Depends(get_owned_site),
+    _current_user: User = Depends(require_permission("hosting.sites.manage", platform_only=True)),
+    db: Session = Depends(get_db_session),
+) -> dict:
+    return _rootless_service(request, db).plan(site.id)
+
+
+@router.post("/{site_id}/rootless/migrate")
+def rootless_migrate(
+    request: Request,
+    site: HostingSite = Depends(get_owned_site),
+    _current_user: User = Depends(require_permission("hosting.sites.manage", platform_only=True)),
+    db: Session = Depends(get_db_session),
+) -> dict:
+    return _rootless_service(request, db).migrate(site.id)
+
+
+@router.post("/{site_id}/rootless/rollback")
+def rootless_rollback(
+    body: RootlessOperationRequest,
+    request: Request,
+    site: HostingSite = Depends(get_owned_site),
+    _current_user: User = Depends(require_permission("hosting.sites.manage", platform_only=True)),
+    db: Session = Depends(get_db_session),
+) -> dict:
+    return _rootless_service(request, db).rollback(site.id, body.operation_id)
+
+
+@router.post("/{site_id}/rootless/finalize")
+def rootless_finalize(
+    body: RootlessFinalizeRequest,
+    request: Request,
+    site: HostingSite = Depends(get_owned_site),
+    _current_user: User = Depends(require_permission("hosting.sites.manage", platform_only=True)),
+    db: Session = Depends(get_db_session),
+) -> dict:
+    return _rootless_service(request, db).finalize(site.id, body.operation_id, body.confirm_domain)
+
+
+@router.get("/{site_id}/rootless/status")
+def rootless_status(
+    request: Request,
+    site: HostingSite = Depends(get_owned_site),
+    _current_user: User = Depends(require_permission("hosting.sites.manage", platform_only=True)),
+    db: Session = Depends(get_db_session),
+) -> dict:
+    return _rootless_service(request, db).status(site.id)
 
 
 @router.get("/{site_id}/users", response_model=WordPressUserListResponse)

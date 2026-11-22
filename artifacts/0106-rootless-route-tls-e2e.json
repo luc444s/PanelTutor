@@ -1,0 +1,86 @@
+{
+  "spec": "0106-apps-rootless-route-tls",
+  "date": "2026-11-18T17:00:00Z",
+  "result": "PASS",
+  "host": "gitea-e2e.lab",
+  "backend": {"bind": "172.25.0.1", "relay_port": 40062},
+  "publisher_call": {
+    "code": "RootlessRoutePublisher(ProxyOperations(Settings.from_env('internal', env={SPANEL_PROXY_CONFIG_DIR, SPANEL_PROXY_CERT_RESOLVER=internal, SPANEL_PROXY_ENTRYPOINT_HTTP=web, SPANEL_PROXY_ENTRYPOINT_HTTPS=websecure, SPANEL_PROXY_TRANSPORT=local}), build_runner(settings))).publish('gitea-e2e.lab', '172.25.0.1', 40062, https=True)",
+    "domain": "gitea-e2e.lab",
+    "https": true,
+    "written_file": "/home/lucas/mailadmin/scripts/traefik-lab/dynamic/spanel-route-45fb306f00382472d3eb.yml"
+  },
+  "route_yaml": "# managed-by: spanel\nhttp:\n  routers:\n    spanel-gitea-e2e-lab-route-path-1-http:\n      rule: (Host(`gitea-e2e.lab`)) && !PathPrefix(`/.well-known/acme-challenge/`)\n      entryPoints:\n      - web\n      middlewares:\n      - spanel-gitea-e2e-lab-route-path-1-redirect\n      service: spanel-gitea-e2e-lab-route-path-1\n      priority: 301\n    spanel-gitea-e2e-lab-route-path-1:\n      rule: Host(`gitea-e2e.lab`)\n      entryPoints:\n      - websecure\n      service: spanel-gitea-e2e-lab-route-path-1\n      priority: 401\n      tls:\n        certResolver: internal\n  middlewares:\n    spanel-gitea-e2e-lab-route-path-1-redirect:\n      redirectScheme:\n        scheme: https\n        permanent: true\n  services:\n    spanel-gitea-e2e-lab-route-path-1:\n      loadBalancer:\n        servers:\n        - url: http://172.25.0.1:40062\n",
+  "certificate": {
+    "subject": "CN = gitea-e2e.lab",
+    "issuer": "O = Spanel Lab CA, CN = Spanel Lab CA Intermediate CA",
+    "san": ["DNS:gitea-e2e.lab"],
+    "not_before": "Nov 18 16:50:19 2026 GMT",
+    "not_after": "Nov 19 16:51:19 2026 GMT",
+    "verify": "ok",
+    "verify_detail": "openssl verify -untrusted intermediate_ca.crt -CAfile root_ca.crt leaf.pem => OK (chain depth2 Root CA); nota: root_ca.crt solo no contiene la intermediate, se verificó con lab_ca_bundle.crt y con -untrusted intermediate_ca.crt"
+  },
+  "checks": [
+    {
+      "name": "yaml_generated_by_publisher",
+      "detail": "router HTTP con redirectScheme permanente y exclusion !PathPrefix(`/.well-known/acme-challenge/`); router websecure con tls.certResolver: internal; backend http://172.25.0.1:40062. Generado por RootlessRoutePublisher.publish, no a mano.",
+      "pass": true
+    },
+    {
+      "name": "cert_issued_by_internal_resolver",
+      "command": "echo | openssl s_client -connect 127.0.0.1:443 -servername gitea-e2e.lab -CAfile ca/root_ca.crt | openssl x509 -noout -subject -issuer -ext subjectAltName",
+      "output": "subject=CN = gitea-e2e.lab; issuer=O = Spanel Lab CA, CN = Spanel Lab CA Intermediate CA; SAN: DNS:gitea-e2e.lab",
+      "pass": true
+    },
+    {
+      "name": "chain_verifies_against_lab_root",
+      "command": "openssl verify -untrusted ca/intermediate_ca.crt -CAfile ca/root_ca.crt leaf.pem",
+      "output": "/tmp/leaf0106.pem: OK (depth2: CN = Spanel Lab CA Root CA)",
+      "pass": true
+    },
+    {
+      "name": "http_redirect",
+      "command": "curl -sS -o /dev/null -w '%{http_code} %{redirect_url}' -H 'Host: gitea-e2e.lab' http://127.0.0.1:9080/",
+      "output": "301 https://gitea-e2e.lab/",
+      "pass": true
+    },
+    {
+      "name": "https_200_with_ca",
+      "command": "curl -sS --cacert ca/root_ca.crt --resolve gitea-e2e.lab:443:127.0.0.1 https://gitea-e2e.lab/ -o /dev/null -w '%{http_code}'",
+      "output": "200; cuerpo contiene 'gitea' (HTML de Gitea)",
+      "pass": true
+    },
+    {
+      "name": "acme_challenge_not_redirected",
+      "command": "curl -sS -o /dev/null -w '%{http_code}' -H 'Host: gitea-e2e.lab' http://127.0.0.1:9080/.well-known/acme-challenge/probe",
+      "output": "404 (no 301/308)",
+      "pass": true
+    },
+    {
+      "name": "traefik_pid_unchanged",
+      "before": "3640546",
+      "after": "3640546",
+      "command": "docker inspect -f '{{.State.Pid}}' spanel-traefik-lab",
+      "pass": true
+    },
+    {
+      "name": "other_rootless_route_untouched",
+      "command": "curl -sS -o /dev/null -w '%{http_code}' -H 'Host: rootless-e2e.lab' http://127.0.0.1:9080/",
+      "output": "200 (router spanel-rootless-e2e-0104a@file intacto)",
+      "pass": true
+    },
+    {
+      "name": "acme_tls_alpn_validation_success",
+      "command": "docker logs spanel-traefik-lab (lego)",
+      "output": "16:51:19 ERR primer intento (status=pending, DNS del lab aun sin gitea-e2e.lab) -> 16:51:20 'The server validated our request' -> 16:51:29 'Server responded with a certificate'; emisor step-ca (Spanel Lab CA Intermediate CA)",
+      "pass": true
+    }
+  ],
+  "gaps": [
+    "El DNS del lab (dnsmasq spanel-lab-dns, hosts en scripts/traefik-lab/dns/hosts) no tenia gitea-e2e.lab: el primer intento TLS-ALPN-01 quedo pending y fallo a los ~8 min. Se agrego '172.25.0.3 gitea-e2e.lab' al hosts del lab y se SIGHUP a dnsmasq; el reintento automatico de Traefik emitio el cert sin reiniciar nada. Un host nuevo via publisher requiere darlo de alta en el DNS del lab (o resolverlo) para TLS-ALPN-01.",
+    "ca/root_ca.crt no incluye la intermediate: la verificacion del chain necesita lab_ca_bundle.crt o -untrusted intermediate_ca.crt (limitacion preexistente del lab, no del publisher).",
+    "El YAML manual spanel-route-0105-gitea.yml (solo HTTP) se movio a scripts/traefik-lab/backup-0106/ para no duplicar el Host; la ruta HTTPS generada por el publisher quedo publicada en su lugar."
+  ],
+  "rollback": "restaurar el YAML de backup-0106 (mv spanel-route-0105-gitea.yml de vuelta a dynamic/) y ejecutar RootlessRoutePublisher(operations).unpublish('gitea-e2e.lab') (o borrar spanel-route-45fb306f00382472d3eb.yml); esperar la recarga del file-provider",
+  "final_state": "Ruta HTTPS de gitea-e2e.lab publicada y operativa (301 en web, 200 en websecure); spanel-route-0105-gitea.yml respaldado en scripts/traefik-lab/backup-0106/"
+}

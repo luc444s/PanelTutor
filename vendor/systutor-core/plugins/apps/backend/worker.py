@@ -18,11 +18,9 @@ from sqlalchemy.orm import Session
 
 from .catalog import audit as record_catalog_audit
 from .catalog import mark_installation_suspended, require_source
-from .compose_normalizer import normalize_compose
 from .crypto import EncryptedValue, TokenCipher
 from .github import GithubClient, UrllibGithubClient, app_jwt_for, repository_row
 from .hardening import (
-    CommandHardeningEngine,
     HardeningPolicy,
     HardeningRejected,
     automatic_hardening_policy,
@@ -48,14 +46,13 @@ from .runtime import (
     audit_project,
     clone_repo,
     compose_candidates,
-    dockerfile_base_images,
     dockerfile_runtime_user,
     lifecycle,
     materialize_source_adapter,
     purge_orphaned_project,
     runtime_snapshot,
 )
-from .runtime.volumes import resolve_runtime_volumes
+from .runtime.tenant_runtime import TenantRuntimeRegistry, tenant_slug
 from .service import audit as record_apps_audit
 
 logger = logging.getLogger(__name__)
@@ -72,22 +69,39 @@ class AppsWorker:
         github: GithubClient | None = None,
         route_cleanup: Callable[[Session, str, str], None] | None = None,
         route_refresh: Callable[[Session, str, str], None] | None = None,
-        hardening_engine: Any = None,
+        runtime_registry: TenantRuntimeRegistry | None = None,
+        runtime_recorder: Callable[[Session, str, list[str], str], dict[str, str]]
+        | None = None,
+        rootless_routes: Any | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.cipher = cipher
         self.runner_factory = runner_factory
+        self.runtime_registry = runtime_registry
+        self.runtime_recorder = runtime_recorder
         self.publisher = publisher
+        self.rootless_routes = rootless_routes
+        if self.rootless_routes is None:
+            from .rootless_routes import build_rootless_routes
+
+            previous_transport = os.environ.get("SPANEL_DOCKER_TRANSPORT")
+            try:
+                self.rootless_routes = build_rootless_routes()
+            finally:
+                if self.runtime_registry is None:
+                    if previous_transport is None:
+                        os.environ.pop("SPANEL_DOCKER_TRANSPORT", None)
+                    else:
+                        os.environ["SPANEL_DOCKER_TRANSPORT"] = previous_transport
         self.github = github or UrllibGithubClient()
         self.route_cleanup = route_cleanup
         self.route_refresh = route_refresh
-        self.hardening_engine = hardening_engine or CommandHardeningEngine()
         self.execution = ReleaseExecution(
             session_factory,
             runner_factory,
-            hardening_engine=self.hardening_engine,
             route_refresh=route_refresh,
             transport=self._transport,
+            runner_for_tenant=self._runner,
         )
 
     def run(self, operation_id: str) -> None:
@@ -110,11 +124,25 @@ class AppsWorker:
             elif kind in {"inspect", "deploy", "harden"}:
                 if application_id is None:
                     raise RuntimeError("Application not found")
-                result = self._source_operation(operation_id, application_id, kind)
+                if kind == "deploy" and self.runtime_registry is not None:
+                    result = self._rootless_deploy(operation_id, application_id)
+                else:
+                    result = self._source_operation(operation_id, application_id, kind)
             elif kind == "rollback":
                 if application_id is None:
                     raise RuntimeError("Application not found")
-                result = self.execution.rollback_operation(operation_id, application_id)
+                with self.session_factory() as db:
+                    app = db.get(Application, application_id)
+                    rollback_tenant = app.tenant_id if app is not None else None
+                result = self.execution.rollback_operation(
+                    operation_id,
+                    application_id,
+                    ingress_publish=(
+                        self._ingress_publish(rollback_tenant)
+                        if rollback_tenant is not None
+                        else None
+                    ),
+                )
             else:
                 if application_id is None:
                     raise RuntimeError("Application not found")
@@ -161,7 +189,132 @@ class AppsWorker:
         value = os.environ.get("SPANEL_DOCKER_TRANSPORT", "local").strip()
         return value if value in {"local", "ssh"} else "local"
 
-    def _source_operation(self, operation_id: str, application_id: str, kind: str) -> dict:
+    def _ingress_publish(self, tenant_id: str) -> tuple[str, int] | None:
+        """Resolve the cell loopback where the ingress service must be published.
+
+        The plan-agent owns the cell endpoint; the deploy only mirrors its
+        ``loopback_address``/``publish_port`` into a loopback-only Compose
+        ``ports`` entry.  Without an agent the helper stays inert and the
+        deployment remains exactly as before.
+        """
+        if self.rootless_routes is None:
+            return None
+        resolver = getattr(self.rootless_routes, "endpoint", None)
+        if not callable(resolver):
+            return None
+        with self.session_factory() as db:
+            slug = tenant_slug(db, tenant_id)
+        try:
+            endpoint = resolver(slug)
+        except Exception:  # noqa: BLE001 - the cutover fails closed on route
+            logger.warning(
+                "apps_rootless_ingress_endpoint_failed", extra={"slug": slug},
+                exc_info=True,
+            )
+            return None
+        host = str(getattr(endpoint, "loopback_address", "")).strip()
+        port = int(getattr(endpoint, "publish_port", 0) or 0)
+        if not host or not 1 <= port <= 65535:
+            return None
+        return host, port
+
+    def _runner(self, tenant_id: str) -> Runner:
+        """Select the authenticated tenant's rootless socket when configured.
+
+        Without an injected registry the worker is byte-identical to before:
+        one global Runner inherited from the worker environment.
+        """
+        if self.runtime_registry is None:
+            return self.runner_factory(self._transport())
+        with self.session_factory() as db:
+            slug = tenant_slug(db, tenant_id)
+        return self.runtime_registry.for_tenant(tenant_id, slug).runner()
+
+    def _rootless_deploy(self, operation_id: str, application_id: str) -> dict:
+        """Complete the rootless cutover only after deploy, probe and route."""
+        with self.session_factory() as db:
+            app = db.get(Application, application_id)
+            if app is None:
+                raise RuntimeError("Application not found")
+            tenant_id = app.tenant_id
+            previous_deployment_id = app.active_deployment_id
+            previous_status = app.status
+        ingress_publish = self._ingress_publish(tenant_id)
+        result = self._source_operation(
+            operation_id, application_id, "deploy", ingress_publish=ingress_publish
+        )
+        try:
+            resource_ids = self._publish_and_verify_rootless_route(
+                tenant_id, application_id, result
+            )
+            if self.runtime_recorder is not None:
+                with self.session_factory() as db:
+                    self.runtime_recorder(db, tenant_id, resource_ids, "rootless")
+                    db.commit()
+        except Exception as exc:
+            self._restore_deploy_cutover(
+                tenant_id,
+                application_id,
+                previous_deployment_id,
+                previous_status,
+            )
+            if isinstance(exc, AppDeployError):
+                raise
+            raise AppDeployError("Rootless deployment cutover failed") from exc
+        return result
+
+    def _publish_and_verify_rootless_route(
+        self, tenant_id: str, application_id: str, result: dict
+    ) -> list[str]:
+        deployment_id = result.get("deployment_id")
+        if result.get("status") != "running" or not isinstance(deployment_id, str):
+            raise AppDeployError("Rootless deployment was not verified")
+        with self.session_factory() as db:
+            app = db.get(Application, application_id)
+            deployment = db.get(Deployment, deployment_id)
+            if app is None or deployment is None or app.active_deployment_id != deployment.id:
+                raise AppDeployError("Rootless deployment was not published")
+            manifest = deployment.manifest if isinstance(deployment.manifest, dict) else {}
+            containers = manifest.get("containers")
+            if not isinstance(containers, dict) or not containers:
+                raise AppDeployError("Rootless deployment has no verified containers")
+            if app.domain:
+                if self.rootless_routes is None:
+                    raise AppDeployError("Rootless route publisher is unavailable")
+                published = self.rootless_routes.refresh(db, tenant_id, application_id)
+                domains = published.get("published", []) if isinstance(published, dict) else []
+                if app.domain not in domains:
+                    raise AppDeployError("Rootless route publication failed")
+            return [f"{application_id}:{service}" for service in sorted(containers)]
+
+    def _restore_deploy_cutover(
+        self,
+        tenant_id: str,
+        application_id: str,
+        previous_deployment_id: str | None,
+        previous_status: str,
+    ) -> None:
+        """Restore metadata and routes; intentionally retain every container/volume."""
+        with self.session_factory() as db:
+            app = db.get(Application, application_id)
+            if app is not None:
+                app.active_deployment_id = previous_deployment_id
+                app.status = previous_status
+                db.commit()
+        with self.session_factory() as db:
+            if self.rootless_routes is not None:
+                self.rootless_routes.cleanup(db, tenant_id, application_id)
+            if self.route_refresh is not None and previous_deployment_id is not None:
+                self.route_refresh(db, tenant_id, application_id)
+
+    def _source_operation(
+        self,
+        operation_id: str,
+        application_id: str,
+        kind: str,
+        *,
+        ingress_publish: tuple[str, int] | None = None,
+    ) -> dict:
         from systutor.core.errors import AppError
 
         with self.session_factory() as db:
@@ -171,7 +324,8 @@ class AppsWorker:
             release_id = operation_report.get("hardened_operation_id")
             if isinstance(release_id, str) and release_id:
                 return self.execution.deploy_known_release(
-                    operation_id, application_id, release_id, operation_report
+                    operation_id, application_id, release_id, operation_report,
+                    ingress_publish=ingress_publish,
                 )
         with self.session_factory() as db:
             app = db.get(Application, application_id)
@@ -236,19 +390,12 @@ class AppsWorker:
                 source[0], source[1], effective_compose, source[3],
                 source[4], source[5], source[6],
             )
-            selected = audit_project(checkout, effective_compose, non_root=True)
-            compose_path = selected.compose
-            compose_relative = compose_path.relative_to(checkout)
-            normalization = normalize_compose(
-                compose_path.read_text(encoding="utf-8"),
-                checkout,
-                compose_relative,
-            )
-            compose_path.write_text(normalization.text, encoding="utf-8")
+            # The checkout is audited exactly as cloned.  No normalizer runs
+            # here: container names, binds, ports and users are validated, not
+            # rewritten, so the developer's Compose remains byte-identical.
             audit = audit_project(checkout, effective_compose, non_root=True)
             service_details = []
             dockerfile_users: dict[str, str | None] = {}
-            dockerfile_images: dict[str, tuple[str, ...]] = {}
             for service in sorted(audit.data["services"]):
                 config = audit.data["services"].get(service)
                 config = config if isinstance(config, dict) else {}
@@ -260,10 +407,6 @@ class AppsWorker:
                     if dockerfile is not None else None
                 )
                 dockerfile_users[service] = user_declared
-                dockerfile_images[service] = (
-                    dockerfile_base_images(dockerfile)
-                    if dockerfile is not None else ()
-                )
                 service_details.append({
                     "name": service,
                     "build": dockerfile is not None,
@@ -289,7 +432,6 @@ class AppsWorker:
                 "warnings": list(audit.warnings),
                 "blocking": bool(audit.errors),
                 "source_adapter": adaptation.as_dict(),
-                "normalization": normalization.evidence,
             }
             if audit.warnings:
                 report["output"] = "\n".join(
@@ -313,26 +455,20 @@ class AppsWorker:
                         HardeningPolicy.from_dict(raw_policy),
                         audit.data["services"],
                         dockerfile_users,
-                        dockerfile_images,
                     )
                 except (TypeError, ValueError):
                     raise HardeningRejected(
-                        "Hardening policy is missing or invalid"
+                        "Admission policy is missing or invalid"
                     ) from None
-                policy = resolve_runtime_volumes(
-                    self.runner_factory(self._transport()),
-                    audit.data,
-                    source[3],
-                    policy,
-                )
-                release, candidate = self.execution.harden_checkout(
+                # Kept operation name for API compatibility: this now only
+                # validates and signs the original tree; it does not harden it.
+                release = self.execution.prepare_release(
                     checkout, source, policy, operation_id, application_id, tenant_id,
-                    normalization=normalization.evidence,
                 )
                 result = release_result(release)
                 result.update({
                     "status": "validated",
-                    "services": list(candidate.services),
+                    "services": sorted(audit.data["services"]),
                 })
                 return result
             if kind != "deploy":
@@ -344,33 +480,26 @@ class AppsWorker:
                         HardeningPolicy.from_dict(raw_policy),
                         audit.data["services"],
                         dockerfile_users,
-                        dockerfile_images,
                     )
                 else:
                     policy = automatic_hardening_policy(
-                        audit.data["services"], dockerfile_users, dockerfile_images
+                        audit.data["services"], dockerfile_users
                     )
             except (TypeError, ValueError) as exc:
-                raise AppDeployError(f"Runtime policy could not be generated: {exc}") from None
-            policy = resolve_runtime_volumes(
-                self.runner_factory(self._transport()),
-                audit.data,
-                source[3],
-                policy,
-            )
-            release, _candidate = self.execution.harden_checkout(
+                raise AppDeployError(f"Admission policy could not be generated: {exc}") from None
+            release = self.execution.prepare_release(
                 checkout, source, policy, operation_id, application_id, tenant_id,
-                normalization=normalization.evidence,
             )
             return self.execution.trusted_deploy(
                 operation_id, application_id, release, source, tenant_names,
                 repository=source[0], branch=source[1],
                 scope=operation_report.get("scope"),
+                ingress_publish=ingress_publish,
             )
 
     def reconcile_routes(self) -> int:
         """Re-publish routes for every active app; safe to run on every boot."""
-        if self.route_refresh is None:
+        if self.route_refresh is None and self.rootless_routes is None:
             return 0
         with self.session_factory() as db:
             rows = list(db.execute(
@@ -383,7 +512,10 @@ class AppsWorker:
         for application_id, tenant_id in rows:
             with self.session_factory() as db:
                 try:
-                    self.route_refresh(db, tenant_id, application_id)
+                    if self.route_refresh is not None:
+                        self.route_refresh(db, tenant_id, application_id)
+                    if self.rootless_routes is not None:
+                        self.rootless_routes.refresh(db, tenant_id, application_id)
                 except Exception:  # noqa: BLE001 - una app no bloquea al resto
                     logger.warning(
                         "apps_route_reconcile_failed",
@@ -541,7 +673,7 @@ class AppsWorker:
             # Un borrador (o una inspección/deploy fallido) no tiene runtime
             # publicado: se retiran los recursos etiquetados que sí existan y
             # los metadatos. Los volúmenes solo se eliminan al purgar datos.
-            runner = self.runner_factory(self._transport())
+            runner = self._runner(tenant_id)
             purge_orphaned_project(runner, project, volumes=purge_data)
             project_root = release_store_root(runner.environ) / project
             if project_root.name == project:
@@ -549,9 +681,12 @@ class AppsWorker:
                     runner.run(["rm", "-rf", "--", str(project_root)])
                 elif project_root.exists():
                     shutil.rmtree(project_root)
-            if self.route_cleanup is not None:
+            if self.route_cleanup is not None or self.rootless_routes is not None:
                 with self.session_factory() as db:
-                    self.route_cleanup(db, tenant_id, application_id)
+                    if self.route_cleanup is not None:
+                        self.route_cleanup(db, tenant_id, application_id)
+                    if self.rootless_routes is not None:
+                        self.rootless_routes.cleanup(db, tenant_id, application_id)
             if domain and self.publisher is not None:
                 self.publisher.unpublish(domain)
             with self.session_factory() as db:
@@ -569,7 +704,7 @@ class AppsWorker:
                 "output": "No active deployment; application metadata removed.",
             }
         command = "status" if kind == "refresh" else kind
-        runner = self.runner_factory(self._transport())
+        runner = self._runner(tenant_id)
         result = lifecycle(
             LifecycleOptions(
                 command=command, project=project,
@@ -592,9 +727,14 @@ class AppsWorker:
                             "service_runtime": snapshot,
                         }
                         db.commit()
-        if kind == "delete" and self.route_cleanup is not None:
+        if kind == "delete" and (
+            self.route_cleanup is not None or self.rootless_routes is not None
+        ):
             with self.session_factory() as db:
-                self.route_cleanup(db, tenant_id, application_id)
+                if self.route_cleanup is not None:
+                    self.route_cleanup(db, tenant_id, application_id)
+                if self.rootless_routes is not None:
+                    self.rootless_routes.cleanup(db, tenant_id, application_id)
         if domain and self.publisher is not None and kind == "delete":
             self.publisher.unpublish(domain)
         if kind == "delete":
@@ -603,7 +743,7 @@ class AppsWorker:
                 release.parent.parent if release.parent.name == "releases" else release
             )
             if project_root.name == project:
-                runner = self.runner_factory(self._transport())
+                runner = self._runner(tenant_id)
                 if runner.transport == "ssh":
                     runner.run(["rm", "-rf", "--", str(project_root)])
                 elif project_root.exists():

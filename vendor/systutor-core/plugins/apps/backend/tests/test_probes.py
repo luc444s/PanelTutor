@@ -5,8 +5,11 @@ import json
 import pytest
 
 from plugins.apps.backend.runtime.probes import (
+    HARDENED_BASELINE,
+    ROOTLESS_BASELINE,
     ProbeFailed,
     check_isolation,
+    resolve_baseline,
     run_functional_probe,
     run_probes,
 )
@@ -114,6 +117,117 @@ def test_isolation_accepts_hardened_containers_and_rejects_root_processes() -> N
         check_isolation(runner, {"web": "cid1"})
 
 
+def _rootless_runner(payload=None):
+    """A runner whose daemon reports rootless SecurityOptions via docker info."""
+    base = FakeRunner(payload)
+    original = base.run
+
+    def run(argv, **kwargs):
+        if argv[:2] == ["docker", "info"]:
+            return Completed(0, '["name=seccomp,profile=builtin","name=rootless"]')
+        return original(argv, **kwargs)
+
+    base.run = run
+    return base
+
+
+def test_rootless_baseline_accepts_uid0_in_a_user_namespace() -> None:
+    """UID 0 mapped by a rootless daemon is a tenant subuid, not host root."""
+    payload = container(
+        Config={"User": ""},
+        HostConfig={
+            "CapDrop": [],
+            "SecurityOpt": ["no-new-privileges:true", "seccomp=builtin"],
+        },
+        AppArmorProfile="spanel-cell-cell-g",
+    )
+    base = FakeRunner(payload)
+    delegate = _rootless_runner(payload).run
+
+    def run(argv, **kwargs):
+        if argv[:2] == ["docker", "top"]:
+            return Completed(0, "PID UID\n1 0\n")
+        return delegate(argv, **kwargs)
+
+    base.run = run
+    evidence = check_isolation(base, {"web": "cid1"}, baseline=ROOTLESS_BASELINE)
+    assert evidence["web"]["baseline"] == "rootless"
+    assert evidence["web"]["user_namespace"] is True
+    assert evidence["web"]["processes"] == 1
+    # The same container is still rejected by the hardened baseline.
+    with pytest.raises(ProbeFailed, match="non-root user"):
+        check_isolation(_rootless_runner(payload), {"web": "cid1"})
+
+
+def test_rootless_baseline_requires_proven_user_namespace() -> None:
+    """A rootful daemon cannot silently select the relaxed baseline."""
+    payload = container(Config={"User": "0"})
+    with pytest.raises(ProbeFailed, match="user namespace"):
+        check_isolation(FakeRunner(payload), {"web": "cid1"}, baseline=ROOTLESS_BASELINE)
+
+
+def test_rootless_baseline_still_enforces_prohibited_conditions() -> None:
+    payload = container(HostConfig={"Privileged": True})
+    with pytest.raises(ProbeFailed, match="privileged"):
+        check_isolation(
+            _rootless_runner(payload), {"web": "cid1"}, baseline=ROOTLESS_BASELINE
+        )
+
+
+def test_rootless_baseline_allows_only_a_loopback_ingress_port() -> None:
+    loopback = container(HostConfig={
+        "PortBindings": {
+            "8080/tcp": [{"HostIp": "127.71.1.1", "HostPort": "20070"}]
+        }
+    })
+    evidence = check_isolation(
+        _rootless_runner(loopback), {"web": "cid1"}, baseline=ROOTLESS_BASELINE
+    )
+    assert evidence["web"]["baseline"] == "rootless"
+
+    public = container(HostConfig={
+        "PortBindings": {
+            "8080/tcp": [{"HostIp": "0.0.0.0", "HostPort": "20070"}]
+        }
+    })
+    with pytest.raises(ProbeFailed, match="publishes host ports"):
+        check_isolation(
+            _rootless_runner(public), {"web": "cid1"}, baseline=ROOTLESS_BASELINE
+        )
+
+
+def test_hardened_baseline_rejects_even_a_loopback_ingress_port() -> None:
+    payload = container(HostConfig={
+        "PortBindings": {
+            "8080/tcp": [{"HostIp": "127.71.1.1", "HostPort": "20070"}]
+        }
+    })
+    with pytest.raises(ProbeFailed, match="publishes host ports"):
+        check_isolation(FakeRunner(payload), {"web": "cid1"})
+
+
+def test_signed_networks_reads_the_product_ingress_override(tmp_path) -> None:
+    from plugins.apps.backend.runtime.probes import _signed_networks
+
+    (tmp_path / "compose.yml").write_text("services: {}\n", encoding="utf-8")
+    (tmp_path / "override.yaml").write_text(
+        "networks:\n"
+        "  spanel-ingress:\n"
+        "    internal: false\n",
+        encoding="utf-8",
+    )
+    networks = _signed_networks(tmp_path, "compose.yml")
+    assert networks["spanel-ingress"]["internal"] is False
+
+
+def test_resolve_baseline_defaults_to_hardened() -> None:
+    assert resolve_baseline({}) is HARDENED_BASELINE
+    assert resolve_baseline({"SPANEL_APPS_PROBE_BASELINE": "rootless"}) is ROOTLESS_BASELINE
+    assert resolve_baseline({"SPANEL_APPS_PROBE_BASELINE": "hardened"}) is HARDENED_BASELINE
+    with pytest.raises(ProbeFailed, match="unknown probe baseline"):
+        resolve_baseline({"SPANEL_APPS_PROBE_BASELINE": "permissive"})
+
+
 def test_isolation_rejects_a_container_without_a_declared_user() -> None:
     from plugins.apps.backend.runtime.docker_audit import _is_definitely_non_root_user
 
@@ -212,11 +326,33 @@ def test_functional_probe_is_bounded_and_never_returns_output() -> None:
     assert CANARY not in json.dumps(evidence)
     assert evidence["returncode"] == 0
     assert evidence["bytes"] == len(CANARY)
+    assert evidence["read_only"] is True
     argv = runner.calls[-1]
     assert argv[:2] == ["docker", "run"]
     assert "no-new-privileges:true" in argv
+    assert "--read-only" in argv
     assert "--pids-limit" in argv and "--memory" in argv and "--cpus" in argv
     assert "--network" in argv and argv[argv.index("--network") + 1] == "proj_default"
+
+
+def test_rootless_functional_probe_uses_ephemeral_writable_rootfs(tmp_path) -> None:
+    """Rootless AppArmor cannot perform runc's read-only rootfs remount."""
+    runner = _rootless_runner()
+    evidence = run_probes(
+        runner,
+        release=tmp_path,
+        compose_rel="compose.yml",
+        project="proj",
+        services=["web"],
+        containers={"web": "cid1"},
+        environ=env(SPANEL_APPS_PROBE_BASELINE="rootless"),
+        sleep=lambda _seconds: None,
+    )
+    argv = next(call for call in runner.calls if call[:2] == ["docker", "run"])
+    assert "--read-only" not in argv
+    assert argv[argv.index("--user") + 1] == "65534:65534"
+    assert "ALL" in argv and "no-new-privileges:true" in argv
+    assert evidence["functional"]["checks"][0]["read_only"] is False
 
 
 def test_run_probes_accepts_image_healthcheck_by_default(tmp_path) -> None:

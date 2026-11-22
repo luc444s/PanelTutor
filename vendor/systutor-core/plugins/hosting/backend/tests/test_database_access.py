@@ -118,9 +118,7 @@ def test_the_server_placeholder_is_replaced() -> None:
 
 
 def test_the_server_is_url_encoded() -> None:
-    assert phpmyadmin_url("https://pma.example/{server}", "a b") == (
-        "https://pma.example/a%20b"
-    )
+    assert phpmyadmin_url("https://pma.example/{server}", "a b") == ("https://pma.example/a%20b")
 
 
 def test_credentials_come_from_wp_config_when_the_environment_is_silent() -> None:
@@ -150,8 +148,9 @@ def test_the_environment_wins_over_wp_config() -> None:
 @pytest.mark.parametrize("host", ["mariadb:3306", "spanel-lab-mariadb", "db.example.com"])
 def test_wp_config_accepts_an_external_database_container(host: str) -> None:
     config = WP_CONFIG.replace("mariadb:3306", host)
-    assert database_credentials({"Config": {"Env": []}}, wp_config=config)[0] == (
-        host.split(":", 1)[0]
+    assert (
+        database_credentials({"Config": {"Env": []}}, wp_config=config)[0]
+        == (host.split(":", 1)[0])
     )
 
 

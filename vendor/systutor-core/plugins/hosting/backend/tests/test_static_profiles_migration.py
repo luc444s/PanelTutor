@@ -68,8 +68,16 @@ def test_migration_creates_builtin_and_backfills_statics(seed) -> None:
         assert inspect(engine).has_table("hosting_static_profiles")
         columns = _columns(engine, "hosting_static_profiles")
         for name in (
-            "id", "name", "image", "web_root", "container_port",
-            "health_mode", "env_json", "command", "created_at", "updated_at",
+            "id",
+            "name",
+            "image",
+            "web_root",
+            "container_port",
+            "health_mode",
+            "env_json",
+            "command",
+            "created_at",
+            "updated_at",
         ):
             assert name in columns
 
@@ -118,16 +126,12 @@ def test_migration_downgrade_then_upgrade(seed) -> None:
             third.upgrade(session)
         with Session(engine) as session:
             count = session.execute(
-                text(
-                    "SELECT COUNT(*) FROM hosting_static_profiles WHERE id = 'nginx'"
-                )
+                text("SELECT COUNT(*) FROM hosting_static_profiles WHERE id = 'nginx'")
             ).scalar()
             assert count == 1
             # The statics are re-mapped to the builtin (kind back to NULL first).
             static_profile = session.execute(
-                text(
-                    "SELECT profile_id FROM hosting_sites WHERE id = 's-static'"
-                )
+                text("SELECT profile_id FROM hosting_sites WHERE id = 's-static'")
             ).scalar()
             assert static_profile == "nginx"
 
@@ -135,9 +139,7 @@ def test_migration_downgrade_then_upgrade(seed) -> None:
         with Session(engine) as session:
             third.upgrade(session)
         with Session(engine) as session:
-            count = session.execute(
-                text("SELECT COUNT(*) FROM hosting_static_profiles")
-            ).scalar()
+            count = session.execute(text("SELECT COUNT(*) FROM hosting_static_profiles")).scalar()
             assert count == 1
     finally:
         engine.dispose()
@@ -176,16 +178,31 @@ ASTRO_COMMAND = (
 
 EXPECTED_ROWS = {
     "react": (
-        "React SPA (Caddy)", "caddy:2-alpine", "/usr/share/caddy", 80,
-        "marker", None, None,
+        "React SPA (Caddy)",
+        "caddy:2-alpine",
+        "/usr/share/caddy",
+        80,
+        "marker",
+        None,
+        None,
     ),
     "boot": (
-        "Bootstrap (Apache)", "httpd:alpine", "/usr/local/apache2/htdocs", 80,
-        "marker", None, None,
+        "Bootstrap (Apache)",
+        "httpd:alpine",
+        "/usr/local/apache2/htdocs",
+        80,
+        "marker",
+        None,
+        None,
     ),
     "astro": (
-        "Astro (build + preview)", "node:24-alpine", "/site", 80,
-        "http_200", None, ASTRO_COMMAND,
+        "Astro (build + preview)",
+        "node:24-alpine",
+        "/site",
+        80,
+        "http_200",
+        None,
+        ASTRO_COMMAND,
     ),
 }
 
@@ -225,8 +242,13 @@ def test_004_up_inserts_the_three_lab_rows_next_to_nginx(seed) -> None:
         # I4: the builtin nginx survives 004, plus exactly the three rows.
         assert set(rows) == {"nginx", *SEED_IDS}
         assert rows["nginx"] == (
-            "Nginx (static)", "nginx:alpine-lab", "/usr/share/nginx/html",
-            80, "marker", None, None,
+            "Nginx (static)",
+            "nginx:alpine-lab",
+            "/usr/share/nginx/html",
+            80,
+            "marker",
+            None,
+            None,
         )
         for seed_id in SEED_IDS:
             # I1: every field matches the lab-validated prototype.
@@ -245,10 +267,7 @@ def test_004_up_is_idempotent_and_keeps_admin_edits(seed) -> None:
         # The admin edits the react image in the panel (I2 prep).
         with Session(engine) as session:
             session.execute(
-                text(
-                    "UPDATE hosting_static_profiles SET image = :image "
-                    "WHERE id = 'react'"
-                ),
+                text("UPDATE hosting_static_profiles SET image = :image WHERE id = 'react'"),
                 {"image": "caddy:custom-editada"},
             )
             session.commit()
@@ -279,10 +298,7 @@ def test_004_downgrade_keeps_in_use_and_removes_unused(seed) -> None:
         # A site leans on `react` (the "hosting_profile_in_use" guard).
         with Session(engine) as session:
             session.execute(
-                text(
-                    "UPDATE hosting_sites SET profile_id = 'react' "
-                    "WHERE id = 's-static'"
-                )
+                text("UPDATE hosting_sites SET profile_id = 'react' WHERE id = 's-static'")
             )
             session.commit()
 

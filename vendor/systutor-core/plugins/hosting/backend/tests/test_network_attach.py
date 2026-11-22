@@ -44,9 +44,7 @@ def context() -> TenantContext:
 
 
 def site(kind: str = "wordpress") -> SimpleNamespace:
-    return SimpleNamespace(
-        id="s1", tenant_id="t1", container_name="spanel-demo-wp", kind=kind
-    )
+    return SimpleNamespace(id="s1", tenant_id="t1", container_name="spanel-demo-wp", kind=kind)
 
 
 class FakeClient:
@@ -158,9 +156,7 @@ def test_without_arbitrary_the_login_sends_no_server(monkeypatch) -> None:
 
 
 def test_with_an_empty_network_the_login_sends_no_server(monkeypatch) -> None:
-    service, spy, _ = build(
-        monkeypatch, arbitrary=True, network="", db_info=info_with("proxy")
-    )
+    service, spy, _ = build(monkeypatch, arbitrary=True, network="", db_info=info_with("proxy"))
     client = FakeClient()
     service.phpmyadmin_login_credentials(site(), context(), client)
     assert client.logins == [("wp_user", SECRET, None)]

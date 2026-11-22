@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import ipaddress
 import json
 import os
 import re
@@ -11,7 +12,7 @@ import stat
 import subprocess
 import tarfile
 import time
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
@@ -23,6 +24,7 @@ from ..hardening.contracts import HardeningPolicy
 from ..symlinks import symlink_target
 from .docker_audit import _is_definitely_non_root_user
 from .source import _inside
+from .tenant_plan import TenantPlan, current_tenant_plan, service_limits
 from .transport import Runner
 from .types import (
     MANIFEST,
@@ -123,12 +125,22 @@ def _git_commit(root: Path) -> str:
     )
 
 
+def _is_loopback_host(value: str) -> bool:
+    try:
+        return ipaddress.ip_address(value).is_loopback
+    except ValueError:
+        return False
+
+
 def _override(
     data: dict[str, Any],
     project: str,
     non_root: bool,
     external_env: Path | None = None,
     image_tag: str = "latest",
+    plan: TenantPlan | None = None,
+    *,
+    ingress_publish: tuple[str, str, int, int] | None = None,
 ) -> str:
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", image_tag):
         raise AppDeployError("release image tag is invalid")
@@ -147,23 +159,81 @@ def _override(
             ).hexdigest()[:20]
             config["image"] = f"spanel-app-{image_key}:{image_tag}"
         if non_root:
-            source_caps = (
-                source_config.get("cap_drop")
-                if isinstance(source_config, dict) else None
-            )
-            source_security = (
-                source_config.get("security_opt")
-                if isinstance(source_config, dict) else None
-            )
-            if not source_caps:
-                config["cap_drop"] = ["ALL"]
-            source_has_nnp = isinstance(source_security, list) and any(
-                "no-new-privileges" in str(item).lower().replace(" ", "")
-                for item in source_security
-            )
-            if not source_has_nnp:
-                config["security_opt"] = ["no-new-privileges:true"]
+            # Runtime host-resource policy lives only in this override file;
+            # the developer's Compose is never rewritten.  These controls were
+            # previously injected into Compose by the retired hardener, and
+            # `check_isolation` still requires all of them after deployment.
+            source = source_config if isinstance(source_config, dict) else {}
+            raw_caps = source.get("cap_drop") or []
+            if isinstance(raw_caps, str):
+                raw_caps = [raw_caps]
+            caps = [str(item) for item in raw_caps]
+            if "ALL" not in {item.upper() for item in caps}:
+                caps.append("ALL")
+            config["cap_drop"] = caps
+            raw_security = source.get("security_opt") or []
+            if isinstance(raw_security, str):
+                raw_security = [raw_security]
+            security = [
+                str(item) for item in raw_security
+                if not any(
+                    key in str(item).lower().replace(" ", "")
+                    for key in ("no-new-privileges", "apparmor", "seccomp")
+                )
+            ]
+            security.extend((
+                "no-new-privileges:true",
+                "apparmor=docker-default",
+                "seccomp=builtin",
+            ))
+            config["security_opt"] = security
+            if not source.get("pids_limit"):
+                config["pids_limit"] = 256
+            if not source.get("mem_limit"):
+                config["mem_limit"] = "512m"
+            if not source.get("cpus"):
+                config["cpus"] = 1.0
         services[service] = config
+    if ingress_publish is not None:
+        service, host, host_port, target_port = ingress_publish
+        if service not in services:
+            raise AppDeployError("rootless ingress service is not in the release")
+        if not _is_loopback_host(host) or not 1 <= host_port <= 65535:
+            raise AppDeployError("rootless ingress publish address is invalid")
+        if not 1 <= target_port <= 65535:
+            raise AppDeployError("rootless ingress target port is invalid")
+        source_config = data["services"].get(service)
+        if isinstance(source_config, Mapping) and source_config.get("network_mode"):
+            raise AppDeployError(
+                "rootless ingress service uses network_mode; cannot publish"
+            )
+        ingress_network = "spanel-ingress"
+        current = services[service].get("networks")
+        if isinstance(current, Mapping):
+            names = [str(name) for name in current]
+        elif isinstance(current, list):
+            names = [str(name) for name in current]
+        else:
+            names = ["default"]
+        if ingress_network not in names:
+            names.append(ingress_network)
+        services[service]["networks"] = names
+        # The cell's rootlesskit builtin port driver binds the requested parent
+        # IP, so the service is reachable only on the cell's dedicated loopback.
+        # It cannot publish from an internal Docker network; the public ingress
+        # service gets a dedicated non-internal network while every other
+        # service stays on the internal release network.
+        services[service]["ports"] = [f"{host}:{host_port}:{target_port}"]
+    effective_plan = plan if plan is not None else current_tenant_plan()
+    if effective_plan is not None:
+        # A plan replaces the fixed defaults: containers are placed under the
+        # tenant slice and their limits are derived from the tenant aggregate.
+        # Without a plan this block is a no-op and the override is byte-identical
+        # to the previous behaviour (see test_no_invasive_hardening).
+        derived = service_limits(effective_plan, data["services"])
+        for service, config in services.items():
+            config["cgroup_parent"] = effective_plan.slice
+            config.update(derived.get(service, {}))
     output: dict[str, Any] = {"services": services}
     if data.get("volumes"):
         managed_volumes = {}
@@ -190,6 +260,11 @@ def _override(
     if not network_entries:
         network_entries["default"] = {
             "internal": True,
+            "labels": {OWNER_LABEL: project},
+        }
+    if ingress_publish is not None:
+        network_entries["spanel-ingress"] = {
+            "internal": False,
             "labels": {OWNER_LABEL: project},
         }
     output["networks"] = network_entries

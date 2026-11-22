@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import time
+import zipfile
 from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -25,6 +26,7 @@ from sqlalchemy.orm import Session
 from starlette.background import BackgroundTask
 
 from systutor.api.deps import get_db_session
+from systutor.contracts.container_runtime import ContainerRuntimeHandle
 from systutor.core.errors import AppError
 from systutor.core.lifecycle import ensure_session_factory
 from systutor.kernel.audit.service import record_audit
@@ -40,6 +42,11 @@ from .inspection import inspect_container
 from .models import HostingSite
 from .schemas import BackupExportResponse, BackupImportResponse
 from .settings import HostingSettings, docker_env, get_hosting_settings
+from .runtime import HostingRuntimeResolver
+from .runtime_backups import export_archive, restore_archive
+from .models import StaticProfile
+from .profiles import spec_from_row
+from .static import files_root_for
 
 logger = logging.getLogger(__name__)
 backup_router = APIRouter(prefix="/sites", tags=["hosting"])
@@ -55,6 +62,7 @@ class ExportResult:
 
 Runner = Callable[[list[str]], subprocess.CompletedProcess[str]]
 Inspector = Callable[..., dict | None]
+RuntimeResolver = Callable[[HostingSite], tuple[ContainerRuntimeHandle, str] | None]
 
 
 def _default_runner(
@@ -84,10 +92,12 @@ class BackupService:
         *,
         runner: Runner = _default_runner,
         inspector: Inspector = inspect_container,
+        runtime_resolver: RuntimeResolver | None = None,
     ) -> None:
         self.settings = settings or get_hosting_settings()
         self.runner = runner
         self.inspector = inspector
+        self.runtime_resolver = runtime_resolver
         self.root = Path(self.settings.backups_dir).expanduser().resolve()
 
     @property
@@ -156,10 +166,15 @@ class BackupService:
 
     def _require_running(self, site: HostingSite) -> dict:
         try:
-            info = self.inspector(
-                docker_env(self.settings),
-                site.container_name,
-                timeout=self.settings.command_timeout,
+            resolved = self.runtime_resolver(site) if self.runtime_resolver else None
+            info = (
+                resolved[0].inspect("container", site.container_name)
+                if resolved is not None
+                else self.inspector(
+                    docker_env(self.settings),
+                    site.container_name,
+                    timeout=self.settings.command_timeout,
+                )
             )
         except Exception as exc:
             raise AppError(
@@ -179,9 +194,11 @@ class BackupService:
 
     @contextmanager
     def _site_lock(self, site_id: str) -> Iterator[None]:
-        safe_id = site_id if re.fullmatch(r"[A-Za-z0-9_.-]+", site_id) else hashlib.sha256(
-            site_id.encode("utf-8")
-        ).hexdigest()
+        safe_id = (
+            site_id
+            if re.fullmatch(r"[A-Za-z0-9_.-]+", site_id)
+            else hashlib.sha256(site_id.encode("utf-8")).hexdigest()
+        )
         lock_path = self.locks / f"{safe_id}.lock"
         handle = lock_path.open("a+b")
         lock_path.chmod(0o600)
@@ -264,7 +281,9 @@ class BackupService:
         )
 
     def export(self, site: HostingSite, *, user_id: str, tenant_id: str) -> ExportResult:
-        self._require_local()
+        selected_runtime = self.runtime_resolver(site) if self.runtime_resolver else None
+        if selected_runtime is None or selected_runtime[0].runtime != "rootless":
+            self._require_local()
         backup_tickets.require_store()
         try:
             self.purge_expired()
@@ -274,6 +293,18 @@ class BackupService:
                 directory = self.exports / backup_id
                 _private_directory(directory)
                 try:
+                    resolved = selected_runtime
+                    if resolved is not None and resolved[0].runtime == "rootless":
+                        archive = export_archive(resolved[0], site, resolved[1], directory)
+                        payload = {
+                            "user_id": user_id,
+                            "tenant_id": tenant_id,
+                            "site_id": site.id,
+                            "backup_id": backup_id,
+                            "filename": archive.name,
+                        }
+                        ticket = backup_tickets.issue(payload, self.settings.backup_link_ttl)
+                        return ExportResult(ticket=ticket, filename=archive.name)
                     db_args, run_env = self._database_args(site, info)
                     argv = [
                         sys.executable,
@@ -385,7 +416,9 @@ class BackupService:
         confirmation: str,
         source: BinaryIO,
     ) -> None:
-        self._require_local()
+        selected_runtime = self.runtime_resolver(site) if self.runtime_resolver else None
+        if selected_runtime is None or selected_runtime[0].runtime != "rootless":
+            self._require_local()
         if not filename.lower().endswith(".zip"):
             raise AppError(
                 "Select a .zip file",
@@ -406,6 +439,17 @@ class BackupService:
                 self._require_running(site)
                 incoming = self.imports / f"{secrets.token_hex(16)}.zip"
                 self._write_upload(source, incoming)
+                resolved = selected_runtime
+                if resolved is not None and resolved[0].runtime == "rootless":
+                    try:
+                        restore_archive(resolved[0], site, resolved[1], incoming)
+                    except (ValueError, KeyError, zipfile.BadZipFile) as exc:
+                        raise AppError(
+                            "The backup is not valid for this site",
+                            status_code=422,
+                            code="hosting_backup_invalid",
+                        ) from exc
+                    return
                 previous_safety = {path.name for path in self.safety.iterdir()}
                 argv = [
                     sys.executable,
@@ -482,8 +526,18 @@ def initialize_backup_storage(settings: HostingSettings | None = None) -> None:
     service.purge_expired()
 
 
-def _service() -> BackupService:
-    return BackupService()
+def _service(request: Request, db: Session = Depends(get_db_session)) -> BackupService:
+    resolver = HostingRuntimeResolver(request.app, db)
+
+    def resolve(site: HostingSite):
+        if not getattr(request.app.state, "resource_runtime_registry_providers", None):
+            return None
+        runtime = resolver.resolve(site.tenant_id, site.kind, site.id)
+        profile = db.get(StaticProfile, site.profile_id) if site.profile_id else None
+        spec = spec_from_row(profile) if profile is not None else None
+        return runtime, files_root_for(site.kind, get_hosting_settings().files_root, spec)
+
+    return BackupService(runtime_resolver=resolve)
 
 
 def _audit(
@@ -579,9 +633,7 @@ def import_backup(
         raise
     _audit(db, request, site.id, context, "hosting.site.backup_imported", "success")
     response.headers["Cache-Control"] = "no-store"
-    return BackupImportResponse(
-        site_id=site.id, container_name=site.container_name, restored=True
-    )
+    return BackupImportResponse(site_id=site.id, container_name=site.container_name, restored=True)
 
 
 def _expired() -> HTTPException:

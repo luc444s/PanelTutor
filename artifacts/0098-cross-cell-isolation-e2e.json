@@ -1,0 +1,114 @@
+{
+  "cells": [
+    "cell-g",
+    "cell-h"
+  ],
+  "cleanup": {
+    "cell-g": "cleaned",
+    "cell-h": "cleaned"
+  },
+  "finished_at": "2026-11-18T02:09:56.197037+00:00",
+  "ok": true,
+  "started_at": "2026-11-18T02:09:52.719638+00:00",
+  "steps": {
+    "apparmor_cross_denied": {
+      "at": "2026-11-18T02:09:53.516877+00:00",
+      "detail": {
+        "cell-g": {
+          "confined_denied": true,
+          "plain_readable": true
+        },
+        "cell-h": {
+          "confined_denied": true,
+          "plain_readable": true
+        }
+      },
+      "ok": true
+    },
+    "cross_engine_id": {
+      "at": "2026-11-18T02:09:53.474680+00:00",
+      "detail": {
+        "cell-g->cell-h": "cat: /var/lib/spanel/cells/cell-h/engine-id: Permiso denegado",
+        "cell-h->cell-g": "cat: /var/lib/spanel/cells/cell-g/engine-id: Permiso denegado"
+      },
+      "ok": true
+    },
+    "cross_socket": {
+      "at": "2026-11-18T02:09:53.272984+00:00",
+      "detail": {
+        "cell-g->cell-h": "permission denied while trying to connect to the docker API at unix:///var/lib/spanel/cells/cell-h/docker.sock",
+        "cell-h->cell-g": "permission denied while trying to connect to the docker API at unix:///var/lib/spanel/cells/cell-g/docker.sock"
+      },
+      "ok": true
+    },
+    "daemon_confinement": {
+      "at": "2026-11-18T02:09:53.601679+00:00",
+      "detail": {
+        "cell-g": {
+          "confined": true,
+          "dockerd_pids": [
+            "3514497"
+          ],
+          "profiles": [
+            "spanel-cell-cell-g (enforce)"
+          ]
+        },
+        "cell-h": {
+          "confined": true,
+          "dockerd_pids": [
+            "3674694"
+          ],
+          "profiles": [
+            "spanel-cell-cell-h (enforce)"
+          ]
+        }
+      },
+      "ok": true
+    },
+    "failure_isolation": {
+      "at": "2026-11-18T02:09:53.685320+00:00",
+      "detail": {
+        "cell_g_leaked_resources": false,
+        "cell_h_canary_intact": true,
+        "failing_build_exit": 1
+      },
+      "ok": true
+    },
+    "preflight": {
+      "at": "2026-11-18T02:09:52.720394+00:00",
+      "detail": {
+        "nft_tables": [
+          "cell-g",
+          "cell-h"
+        ],
+        "own_sockets": {
+          "cell-g": "lucas-ThinkPad-E570",
+          "cell-h": "lucas-ThinkPad-E570"
+        }
+      },
+      "ok": true
+    },
+    "profile_rules": {
+      "at": "2026-11-18T02:09:53.600362+00:00",
+      "detail": {
+        "cell-g": {
+          "cross_cell_grants": 0,
+          "hard_denials": 2
+        },
+        "cell-h": {
+          "cross_cell_grants": 0,
+          "hard_denials": 2
+        }
+      },
+      "ok": true
+    },
+    "rollback_isolation": {
+      "at": "2026-11-18T02:09:54.789725+00:00",
+      "detail": {
+        "cross_cell_containers": 0,
+        "old_running_in_g": true
+      },
+      "ok": true
+    }
+  }
+}

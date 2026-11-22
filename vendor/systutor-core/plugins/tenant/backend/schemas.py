@@ -102,3 +102,27 @@ class TenantDomainsResponse(BaseModel):
 
 class AddTenantDomainRequest(BaseModel):
     domain: str
+
+
+class TenantResourceResponse(BaseModel):
+    kind: str
+    resource_id: str
+    name: str
+    container_name: str
+    domain: str | None
+    state: str
+    image: str
+    endpoint: str | None
+    runtime: str
+
+
+class TenantResourcesResponse(BaseModel):
+    resources: list[TenantResourceResponse]
+
+
+class TenantResourceActionResponse(BaseModel):
+    action: str
+    dry_run: bool
+    runtime: str
+    resource: TenantResourceResponse
+    result: dict[str, object] | None = None

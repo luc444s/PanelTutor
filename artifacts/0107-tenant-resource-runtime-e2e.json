@@ -1,0 +1,57 @@
+{
+  "spec": "0107-tenant-resource-runtime-and-inventory",
+  "date": "2026-11-18T19:35:30Z",
+  "result": "PASS",
+  "environment": {
+    "lab": "spanel.lab",
+    "host": "lucas@100.67.5.50 (lucas-ThinkPad-E570)",
+    "how_accessed": "SSH con sshpass -e desde Termux; imagen construida con el working tree bajo prueba y ejecutada como spanel-e2e-0107 en 127.0.0.1:3001, contra una clonación desechable spanel_e2e0107 de la BD real del lab. La app, BD, imagen y contenedores de prueba se eliminaron al terminar."
+  },
+  "checks": [
+    {
+      "name": "inventory_lists_all_kinds",
+      "command": "SPANEL_TENANT_RESOURCE_INVENTORY=true SPANEL_TENANTS_ROOTLESS=true; login admin real; GET http://127.0.0.1:3001/api/v1/plugins/tenant/tenants/658e5ca2-00a4-4672-b5c5-f093db3066fa/resources",
+      "output": "HTTP 200. Selección real de la respuesta: [{kind: wordpress, resource_id: 02e4b571-51ab-4ed9-9153-dc8a847c11e9, container_name: spanel-demowp-wp, runtime: rootful}, {kind: static, resource_id: e2e0107-static-a, container_name: e2e0107-static-a, runtime: rootful}, {kind: app, resource_id: 705cd067-aaa0-490c-aab0-5dd591a8fe1c:backend, container_name: app-545c26591a784efb93b6e6f7-backend-1, runtime: rootful}]. all_default_rootful=true. El estático fue desechable; WP y app ya existían en el inventario clonado del lab.",
+      "pass": true
+    },
+    {
+      "name": "runtime_persisted_and_flag_independent",
+      "command": "Dentro de spanel-e2e-0107: set_runtime(db, tenant_a, 'static', 'e2e0107-static-a', 'rootless'); commit; GET resources; luego recrear app con SPANEL_TENANTS_ROOTLESS=false y repetir GET",
+      "output": "Con SPANEL_TENANTS_ROOTLESS=true, GET devolvió runtime=rootless para e2e0107-static-a. Tras recrear el proceso con SPANEL_TENANTS_ROOTLESS=false: {SPANEL_TENANTS_ROOTLESS: false, resource: {kind: static, resource_id: e2e0107-static-a, container_name: e2e0107-static-a, runtime: rootless}}. El valor original false quedó restaurado.",
+      "pass": true
+    },
+    {
+      "name": "dry_run_does_not_mutate",
+      "command": "docker inspect e2e0107-static-a; GET .../resources/static/e2e0107-static-a; POST .../resources/static/e2e0107-static-a/actions/remove?dry_run=1; repetir GET e inspect y comparar",
+      "output": "HTTP 200; response={action: remove, dry_run: true, runtime: rootless, result: {dispatch: rootless}}. Antes y después: container id=f2f916f500d92a62d51fc8a11c76d6b6954e1816f731b826db5fe13a258e9f1c, status=running, restart_count=0, started_at=2026-11-18T19:29:13.164706481Z. La representación GET del recurso también fue idéntica. state_diff_empty=true.",
+      "pass": true
+    },
+    {
+      "name": "tenant_scope_isolation",
+      "command": "Login e2e0107a@lab.invalid; GET tenant B /resources y GET tenant B /resources/static/e2e0107-static-b; luego repetir listas A y B con admin core.platform.admin",
+      "output": "tenant_A_cross_list_B=404; tenant_A_cross_get_B=404; admin_list_A=200 (25 recursos); admin_list_B=200 (1 recurso static e2e0107-static-b). El usuario desechable recibió tenant.tenants.read en la BD clonada para que el 404 proviniera del scope y no de falta de permiso previa (403).",
+      "pass": true
+    },
+    {
+      "name": "flag_off_hides_surface",
+      "command": "Recrear app con SPANEL_TENANT_RESOURCE_INVENTORY=false; GET .../resources con admin; google-chrome --headless vía CDP, token real en localStorage, abrir http://127.0.0.1:3001/app/tenants y leer document.body.innerText; después restaurar flag=true",
+      "output": "API: {SPANEL_TENANT_RESOURCE_INVENTORY: false, status: 404, body: {detail: Not Found}}. DOM black-box: resources_action_visible=false; body='Tenants | Create tenant | ... Demo Tenant ... Domains | Users | ... SYSTUTOR ... Domains | Users' (sin Resources). Control previo con flag=true: resources_action_visible=true y ambos tenants mostraban 'Domains | Users | Resources'. La última recreación usó inventory=true.",
+      "pass": true
+    },
+    {
+      "name": "rollback_executed",
+      "command": "docker exec -i spanel-e2e-0107 python: cargar /app/plugins/tenant/migrations/004_tenant_resource_runtimes.py; SQLite en memoria; crear tenants/apps_applications/hosting_sites con marcadores; upgrade(e); insertar runtime; downgrade(e); inspeccionar; upgrade(e)",
+      "output": "revision=004_tenant_resource_runtimes. after_upgrade=[apps_applications, hosting_sites, tenant_resource_runtimes, tenants]; after_downgrade=[apps_applications, hosting_sites, tenants]; markers_after_downgrade={tenants: tenants-untouched, apps_applications: apps_applications-untouched, hosting_sites: hosting_sites-untouched}; after_reupgrade vuelve a incluir tenant_resource_runtimes; runtime_table_absent_after_down=true; protected_tables_intact=true.",
+      "pass": true
+    },
+    {
+      "name": "core_infra_untouched",
+      "command": "Antes y después: docker inspect con Python/Docker SDK; comparar State.Pid, State.Status y sha256(json sort_keys de Config) para Traefik, MariaDB, phpMyAdmin, PowerDNS auth+DB y Docker Mailserver",
+      "output": "unchanged=true. spanel-traefik-lab pid=3640546 config=033a38d96eb10828323a7223f08891053f1560028af00398cea40879eaedb5ec; spanel-lab-mariadb pid=214967 config=55ca896a836fa08bc23353a94facacd7e78e8b0f7d7339e12695c7561d724932; spanel-lab-phpmyadmin pid=215055 config=cf4524f935da4dfec7d084a2a420d687188630eb57d5062e050227771914318e; spanel-powerdns-lab-auth pid=2869309 config=4c4d64c22d4a269993a944ef200e61e72b548bd0a5fd7c9b5418e7eb5fe7f80b; spanel-powerdns-lab-postgres pid=2847729 config=4c06e818a329e668dea22376f10884923a4263b2a69e3968eb6138b069ed5834; spanel-mail pid=215326 config=d078d8c67f321aae0d2eb3551bb8d2895b7426b007b616a569f968aa7947e473. Todos status=running antes y después.",
+      "pass": true
+    }
+  ],
+  "gaps": [],
+  "rollback": "Se confirmó upgrade→downgrade→upgrade de 004 sobre SQLite en el host lab. Se comprobó además el rollback de superficie con inventory=false y se restauró true antes de retirar el despliegue E2E. La prueba usó una BD clonada y no ejecutó downgrade sobre la BD viva.",
+  "final_state": "Limpio: eliminados spanel-e2e-0107, e2e0107-static-a, e2e0107-static-b, la BD spanel_e2e0107, la imagen spanel-e2e-0107:latest y /var/tmp de la prueba. Verificación final: disposable_containers=0, test_db_absent, temp_source_absent, test_image_absent. No se eliminó ni modificó ningún contenedor/volumen rootful preexistente; los seis componentes Core siguen running con los mismos PID y hashes de Config."
+}

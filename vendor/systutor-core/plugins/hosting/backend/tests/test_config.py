@@ -10,6 +10,7 @@ import pytest
 
 from plugins.hosting.backend.config import (
     ENV_WHITELIST,
+    additional_networks,
     build_run_args,
     editable_env,
     env_of,
@@ -130,9 +131,7 @@ def test_site_dir_sanitiza_el_nombre() -> None:
 
 
 def test_build_run_args_reutiliza_volumen_y_labels() -> None:
-    args = build_run_args(
-        _inspect(), name="spanel-demo-wp", env_file="/opt/spanel/sites/x/wp.env"
-    )
+    args = build_run_args(_inspect(), name="spanel-demo-wp", env_file="/opt/spanel/sites/x/wp.env")
     assert args[:3] == ["-d", "--name", "spanel-demo-wp"]
     assert "--network" in args and "proxy" in args
     assert "--label" in args and "spanel.tenant=tenant-1" in args
@@ -158,3 +157,15 @@ def test_build_run_args_no_inventa_imagen() -> None:
     info["Image"] = ""
     with pytest.raises(Fallo, match="image"):
         build_run_args(info, name="spanel-demo-wp", env_file="/x/wp.env")
+
+
+def test_additional_networks_preserves_secondary_ingress_networks() -> None:
+    info = _inspect()
+    info["NetworkSettings"] = {
+        "Networks": {
+            "proxy": {"IPAddress": "172.18.0.2"},
+            "spanel-hosting": {"IPAddress": "172.19.0.2"},
+        }
+    }
+
+    assert additional_networks(info) == ("spanel-hosting",)

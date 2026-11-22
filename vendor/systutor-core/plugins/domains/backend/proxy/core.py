@@ -316,8 +316,15 @@ def render_site_yaml(
                 "servers": [{"url": f"http://{route.container}:{route.port}"}]
             }
         }
-    doc = {"http": {"routers": routers, "middlewares": middlewares, "services": services}}
-    body = yaml.safe_dump(doc, sort_keys=False, allow_unicode=True, default_flow_style=False)
+    http: dict[str, object] = {
+        "routers": routers,
+        "services": services,
+    }
+    if middlewares:
+        http["middlewares"] = middlewares
+    body = yaml.safe_dump(
+        {"http": http}, sort_keys=False, allow_unicode=True, default_flow_style=False
+    )
     return f"{MARKER}\n{body}"
 
 

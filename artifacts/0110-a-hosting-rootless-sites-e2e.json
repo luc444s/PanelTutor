@@ -1,0 +1,220 @@
+{
+  "checks": {
+    "finalize": {
+      "ok": true,
+      "result": {
+        "from_runtime": "rootful",
+        "kind": "wordpress",
+        "ok": true,
+        "operation_id": "a4472389-224d-450d-ae1b-c15d947a637b",
+        "rollback_available": false,
+        "site_id": "a72c50d6-3a50-402a-a82a-7e3f098f58c0",
+        "state": "finalized",
+        "steps": [
+          "inventory",
+          "backup_verified",
+          "candidate_verified",
+          "route_cutover",
+          "external_http_verified",
+          "rootful_retained",
+          "rootful_removed"
+        ],
+        "to_runtime": "rootless"
+      }
+    },
+    "isolation_and_limits": {
+      "cell_after": {
+        "apparmor": {
+          "effective": false,
+          "hash": "89127b2fd74d3b1612465705856b4c967fc12f0b999a6b0ced3be1ce8dd72cfa",
+          "profile": "spanel-cell-demo"
+        },
+        "cgroup_driver": "systemd",
+        "cgroup_path": "/user.slice/user-60070.slice/user@60070.service/user.slice/spanel-cell-demo.scope",
+        "gid_map": [],
+        "network_mode": "skuid",
+        "slug": "demo",
+        "socket_path": "/var/lib/spanel/cells/demo/docker.sock",
+        "state": "ready",
+        "uid": 60070,
+        "uid_map": []
+      },
+      "cell_before": {
+        "apparmor": {
+          "effective": false,
+          "hash": "89127b2fd74d3b1612465705856b4c967fc12f0b999a6b0ced3be1ce8dd72cfa",
+          "profile": "spanel-cell-demo"
+        },
+        "cgroup_driver": "systemd",
+        "cgroup_path": "/user.slice/user-60070.slice/user@60070.service/user.slice/spanel-cell-demo.scope",
+        "gid_map": [],
+        "network_mode": "skuid",
+        "slug": "demo",
+        "socket_path": "/var/lib/spanel/cells/demo/docker.sock",
+        "state": "ready",
+        "uid": 60070,
+        "uid_map": []
+      },
+      "core_unchanged": true,
+      "delta_denied": 0,
+      "ok": true,
+      "second_tenant_unchanged": true
+    },
+    "new_rootless_multi_host": {
+      "http": {
+        "new_static_1": {
+          "sha256": "370b493ab79871793e62b26090e162db7260ac1e597eb18a11b86faf08a82035",
+          "status": 200
+        },
+        "new_static_2": {
+          "sha256": "370b493ab79871793e62b26090e162db7260ac1e597eb18a11b86faf08a82035",
+          "status": 200
+        },
+        "new_wp": {
+          "sha256": "aa16ba5add1534ab8092590a24d7962099b1f6d7a83b54d59c0c3d822b835fea",
+          "status": 200
+        }
+      },
+      "ok": true,
+      "sites": {
+        "new_static_1": {
+          "container_name": "spanel-new-static-1-1795202067-web",
+          "domain": "a-1795202067.lab",
+          "id": "f2333beb-6d5f-441d-9245-5fb281a47a97",
+          "kind": "static",
+          "managed": true,
+          "profile": "nginx",
+          "status": "running",
+          "tenant_id": null,
+          "tenant_name": null
+        },
+        "new_static_2": {
+          "container_name": "spanel-new-static-2-1795202067-web",
+          "domain": "b-1795202067.lab",
+          "id": "7dea1913-9c4e-4d13-a654-be4f252cd7cd",
+          "kind": "static",
+          "managed": true,
+          "profile": "nginx",
+          "status": "running",
+          "tenant_id": null,
+          "tenant_name": null
+        },
+        "new_wp": {
+          "container_name": "spanel-new-wp-1795202067-wp",
+          "domain": "wp-1795202067.lab",
+          "id": "76f3c6f1-e90b-4d5b-88ef-32be7cddb2a0",
+          "kind": "wordpress",
+          "managed": true,
+          "profile": null,
+          "status": "running",
+          "tenant_id": null,
+          "tenant_name": null
+        }
+      }
+    },
+    "no_database_publish": {
+      "after": [
+        "LISTEN 0      4096                               127.0.0.1:3306  0.0.0.0:*"
+      ],
+      "before": [
+        "LISTEN 0      4096                               127.0.0.1:3306  0.0.0.0:*"
+      ],
+      "new": [],
+      "observation": "ss -ltnH",
+      "ok": true
+    },
+    "post_cutover_failure_rollback": {
+      "cleanup_operation": {
+        "error": "external HTTP was not ready before deadline: HTTP Error 502: Bad Gateway",
+        "from_runtime": "rootful",
+        "kind": "static",
+        "ok": true,
+        "operation_id": "44c422b2-4b23-48d0-a8fc-7095b4f5498d",
+        "rollback_available": false,
+        "site_id": "023395b5-d65c-4363-9adc-a76fbed2da0b",
+        "state": "rolled_back",
+        "steps": [
+          "inventory",
+          "backup_verified",
+          "candidate_verified",
+          "route_cutover",
+          "rollback_rootful"
+        ],
+        "to_runtime": "rootless"
+      },
+      "failed_operation": {
+        "error": "external HTTP was not ready before deadline: HTTP Error 502: Bad Gateway",
+        "from_runtime": "rootful",
+        "kind": "static",
+        "ok": false,
+        "operation_id": "44c422b2-4b23-48d0-a8fc-7095b4f5498d",
+        "rollback_available": false,
+        "site_id": "023395b5-d65c-4363-9adc-a76fbed2da0b",
+        "state": "failed",
+        "steps": [
+          "inventory",
+          "backup_verified",
+          "candidate_verified",
+          "route_cutover"
+        ],
+        "to_runtime": "rootless"
+      },
+      "ok": true
+    },
+    "rollback": {
+      "ok": true,
+      "result": {
+        "from_runtime": "rootful",
+        "kind": "static",
+        "ok": true,
+        "operation_id": "94180497-e44b-415b-8ef4-b316600ec0d4",
+        "rollback_available": false,
+        "site_id": "023395b5-d65c-4363-9adc-a76fbed2da0b",
+        "state": "rolled_back",
+        "steps": [
+          "inventory",
+          "backup_verified",
+          "candidate_verified",
+          "route_cutover",
+          "external_http_verified",
+          "rootful_retained",
+          "rollback_rootful"
+        ],
+        "to_runtime": "rootless"
+      }
+    },
+    "static_shadow_copy": {
+      "after": "b252f816726d0cde817db4815387bdefa9ce39f0447b9da5b341e6286fe29440",
+      "before": "b252f816726d0cde817db4815387bdefa9ce39f0447b9da5b341e6286fe29440",
+      "ok": true,
+      "operation_id": "94180497-e44b-415b-8ef4-b316600ec0d4"
+    },
+    "wordpress_shadow_copy": {
+      "after": "fcbc827bfaf6f22870b48eac345594e473e97c393c789860a78495d92f2b8eef",
+      "before": "fcbc827bfaf6f22870b48eac345594e473e97c393c789860a78495d92f2b8eef",
+      "ok": true,
+      "operation_id": "a4472389-224d-450d-ae1b-c15d947a637b",
+      "users_preserved": true
+    }
+  },
+  "cleanup": [
+    {
+      "ok": true,
+      "site_id": "76f3c6f1-e90b-4d5b-88ef-32be7cddb2a0"
+    },
+    {
+      "ok": true,
+      "site_id": "7dea1913-9c4e-4d13-a654-be4f252cd7cd"
+    },
+    {
+      "ok": true,
+      "site_id": "f2333beb-6d5f-441d-9245-5fb281a47a97"
+    }
+  ],
+  "cleanup_complete": true,
+  "errors": [],
+  "finished_at": 1795202377.494949,
+  "result": "PASS",
+  "spec": "0110-A",
+  "started_at": 1795202067.1320827
+}

@@ -45,7 +45,6 @@ class CreateSiteRequest(BaseModel):
             raise ValueError("Invalid profile")
         return value
 
-
     @field_validator("domain")
     @classmethod
     def valid_domain(cls, value: str) -> str:
@@ -130,6 +129,16 @@ class HostingSiteSummary(BaseModel):
 
 class HostingSiteListResponse(BaseModel):
     sites: list[HostingSiteSummary]
+
+
+class RootlessOperationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: str = Field(min_length=36, max_length=36)
+
+
+class RootlessFinalizeRequest(RootlessOperationRequest):
+    confirm_domain: str = Field(min_length=4, max_length=253)
 
 
 class BackupExportResponse(BaseModel):

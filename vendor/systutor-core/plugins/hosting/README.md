@@ -223,6 +223,60 @@ removed by the site deletion path.
 
 No secret is logged and the settings object is never returned by a route.
 
+## Rootless phpMyAdmin broker (0110-B)
+
+A rootless site keeps its MariaDB on an internal network of a separate Docker
+daemon. The shared Core phpMyAdmin never joins that network. For each authorized
+panel session Hosting asks the privileged host agent to create one ephemeral
+connector inside the cell and one listener on the Core network:
+
+```text
+browser -> Hosting proxy -> phpMyAdmin -> broker:port -> cell loopback -> site DB
+```
+
+The agent accepts only `db_relay_open/status/close/reconcile`, bound by HMAC to
+the tenant slug and by `SO_PEERCRED`. The request never carries a container,
+path, IP or port; the agent resolves the site from `hosting_sites` and inspects
+the rootless runtime again. `open` returns only `relay_id`, `broker_host`,
+`broker_port` and `expires_at`; the browser only ever receives a one-time ticket.
+
+A relay and its connector disappear on logout, session expiry, a failed login
+or `db-relay reconcile`. Expired relays are swept in the agent; a restart starts
+with an empty store and closes labelled connectors instead of reopening them.
+If the broker is disabled or unreachable, a rootless site fails closed with
+`409 hosting_phpmyadmin_unavailable`; there is no fallback to the host DB.
+
+Hosting settings:
+
+- `SPANEL_HOSTING_ROOTLESS_PMA_BROKER` (`true`): set `false` to fail closed
+  during rollback.
+- `SPANEL_PHPMYADMIN_SOURCE_IP`: effective IP of the Core phpMyAdmin container;
+  the broker allowlist denies everyone else (empty allowlist denies all).
+- `SPANEL_PLAN_AGENT_SOCKET` (`/run/spanel/plan-agent.sock`),
+  `SPANEL_PLAN_AGENT_TOKEN_FILE` (`/run/secrets/plan_agent_token`),
+  `SPANEL_PHPMYADMIN_BROKER_TIMEOUT` (10 s).
+
+Host-agent settings:
+
+- `SPANEL_DB_BROKER_BIND`, `SPANEL_DB_BROKER_SOURCES` (comma separated, no
+  wildcard), `SPANEL_DB_BROKER_PORTS` (`41000-41999`).
+- `SPANEL_PMA_CONNECTOR_IMAGE` (pinned by digest, mandatory),
+  `SPANEL_PMA_CONNECTOR_PORTS` (`42000-42999`),
+  `SPANEL_PMA_CONNECTOR_NETWORK` (cell network used to publish the connector
+  port; the site's own network is internal), `SPANEL_PMA_CONNECTOR_READ_ONLY`
+  (`true`; some rootless/AppArmor baselines reject a read-only rootfs).
+- `SYSTUTOR_DATABASE_URL`: read-only lookup used to resolve the site row inside
+  the agent.
+
+Operators diagnose relays without credentials or targets:
+
+```bash
+spanel-tenant db-relay list --slug <tenant> --json
+spanel-tenant db-relay status --slug <tenant> --relay <relay-id> --json
+spanel-tenant db-relay close --slug <tenant> --relay <relay-id> --json
+spanel-tenant db-relay reconcile --json
+```
+
 ## Rollback
 
 Disable the plugin: the routes and navigation disappear and the

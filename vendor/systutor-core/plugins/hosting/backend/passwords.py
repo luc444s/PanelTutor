@@ -46,10 +46,10 @@ def hash_valido(valor: str) -> bool:
 # `stream_get_contents("php://stdin")` receives a string where it expects a
 # resource.
 PHP_HASH_AUTOCOMPROBADO = (
-    '$p = trim(stream_get_contents(STDIN));'
+    "$p = trim(stream_get_contents(STDIN));"
     'if ($p === "") { fwrite(STDERR, "FAIL: the password is empty"); exit(1); }'
     "$h = wp_hash_password($p);"
-    'if (!wp_check_password($p, $h)) { fwrite(STDERR, '
+    "if (!wp_check_password($p, $h)) { fwrite(STDERR, "
     '"FAIL: the hash does not validate the password"); exit(1); }'
     "echo $h;"
 )

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -13,6 +14,9 @@ from plugins.tenant.backend.schemas import (
     TenantDomainItem,
     TenantDomainsResponse,
     TenantListResponse,
+    TenantResourceActionResponse,
+    TenantResourceResponse,
+    TenantResourcesResponse,
     TenantResponse,
     TenantUserResponse,
     TenantUsersResponse,
@@ -23,6 +27,7 @@ from plugins.tenant.backend.service import (
     assign_user_to_tenant,
     create_tenant,
     create_user_for_tenant,
+    get_runtime,
     get_site_suffix_for_tenant,
     get_tenant_by_id,
     list_managed_domains,
@@ -35,14 +40,20 @@ from plugins.tenant.backend.service import (
     update_tenant as update_tenant_settings,
 )
 from systutor.api.deps import get_db_session
+from systutor.contracts.resource_runtime import ManagedResource, list_resources
 from systutor.core.errors import AppError
-from systutor.kernel.auth.dependencies import require_permission
+from systutor.kernel.auth.dependencies import (
+    get_current_tenant_context,
+    require_permission,
+)
 from systutor.kernel.auth.models import User
 from systutor.kernel.auth.service import get_user_by_id
 from systutor.kernel.permissions.service import list_user_role_names
+from systutor.kernel.tenants.context import TenantContext
 from systutor.kernel.tenants.models import Tenant
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
+inventory_router = APIRouter(prefix="/tenants", tags=["tenant-resources"])
 
 
 def _user_response(db: Session, user: User) -> TenantUserResponse:
@@ -64,6 +75,211 @@ def _tenant_response(db: Session, tenant: Tenant) -> TenantResponse:
         domain=tenant.domain,
         site_suffix=get_site_suffix_for_tenant(db, tenant.id),
         is_active=tenant.is_active,
+    )
+
+
+def _resource_response(
+    db: Session, tenant_id: str, resource: ManagedResource
+) -> TenantResourceResponse:
+    return TenantResourceResponse(
+        **resource.__dict__,
+        runtime=get_runtime(db, tenant_id, resource.kind, resource.resource_id),
+    )
+
+
+def _resource_scope(context: TenantContext, tenant_id: str) -> None:
+    if not context.is_platform and tenant_id != context.current_tenant_id:
+        raise HTTPException(status_code=404, detail="Resource not found")
+
+
+def _find_resource(
+    request: Request,
+    db: Session,
+    tenant_id: str,
+    kind: str,
+    resource_id: str,
+) -> ManagedResource:
+    for resource in list_resources(request.app, db, tenant_id):
+        if resource.kind == kind and resource.resource_id == resource_id:
+            return resource
+    raise HTTPException(status_code=404, detail="Resource not found")
+
+
+def _require_resource_permission(
+    context: TenantContext, kind: str, action: str
+) -> None:
+    if kind == "app":
+        permission = "apps.applications.manage"
+        platform_only = False
+    else:
+        permission = "hosting.sites.delete" if action == "remove" else "hosting.sites.manage"
+        platform_only = action == "remove"
+    if not context.has_permission(permission) or (platform_only and not context.is_platform):
+        raise HTTPException(status_code=403, detail="Permission denied")
+
+
+def _dispatch_rootful(
+    request: Request,
+    db: Session,
+    context: TenantContext,
+    user: User,
+    resource: ManagedResource,
+    action: str,
+) -> dict[str, object]:
+    if resource.kind == "app":
+        from plugins.apps.backend.router import application_action
+        from plugins.apps.backend.schemas import ActionRequest
+
+        application_id, service = resource.resource_id.split(":", 1)
+        mapped = "down" if action == "remove" else action
+        operation = application_action(
+            application_id,
+            mapped,
+            request,
+            ActionRequest(service=None if mapped == "down" else service),
+            None,
+            db,
+            context,
+            user,
+        )
+        return operation.model_dump()
+
+    from plugins.hosting.backend.models import HostingSite
+    from plugins.hosting.backend.service import HostingService
+
+    site = db.scalar(
+        select(HostingSite).where(
+            HostingSite.id == resource.resource_id,
+            HostingSite.tenant_id == context.current_tenant_id
+            if not context.is_platform
+            else HostingSite.tenant_id.is_not(None),
+        )
+    )
+    if site is None:
+        raise HTTPException(status_code=404, detail="Resource not found")
+    service = HostingService(db)
+    if action == "remove":
+        service.delete_site(site, context, app=request.app)
+        db.commit()
+        return {"status": "removed"}
+    result = getattr(service, f"{action}_site")(site, context)
+    db.commit()
+    return result.model_dump()
+
+
+def _dispatch_rootless(
+    request: Request,
+    db: Session,
+    tenant_id: str,
+    resource: ManagedResource,
+    action: str,
+) -> dict[str, object]:
+    from plugins.apps.backend.runtime.tenant_runtime import (
+        TenantRuntimeRegistry,
+        tenant_slug,
+    )
+
+    registry = getattr(request.app.state, "tenant_runtime_registry", None)
+    if registry is None:
+        registry = TenantRuntimeRegistry()
+    slug = tenant_slug(db, tenant_id)
+    runtime = registry.for_tenant(tenant_id, slug)
+    verb = "rm" if action == "remove" else action
+    result = runtime.exec_probe(slug, ["docker", "container", verb, resource.container_name])
+    return {
+        "status": "dispatched",
+        "returncode": getattr(result, "returncode", 0),
+    }
+
+
+@inventory_router.get("/{tenant_id}/resources", response_model=TenantResourcesResponse)
+def list_tenant_resources(
+    tenant_id: str,
+    request: Request,
+    db: Session = Depends(get_db_session),
+    context: TenantContext = Depends(get_current_tenant_context),
+    _current_user: User = Depends(require_permission("tenant.tenants.read")),
+) -> TenantResourcesResponse:
+    _resource_scope(context, tenant_id)
+    if db.get(Tenant, tenant_id) is None:
+        raise HTTPException(status_code=404, detail="Tenant not found")
+    return TenantResourcesResponse(
+        resources=[
+            _resource_response(db, tenant_id, resource)
+            for resource in list_resources(request.app, db, tenant_id)
+        ]
+    )
+
+
+@inventory_router.get(
+    "/{tenant_id}/resources/{kind}/{resource_id}",
+    response_model=TenantResourceResponse,
+)
+def get_tenant_resource(
+    tenant_id: str,
+    kind: str,
+    resource_id: str,
+    request: Request,
+    db: Session = Depends(get_db_session),
+    context: TenantContext = Depends(get_current_tenant_context),
+    _current_user: User = Depends(require_permission("tenant.tenants.read")),
+) -> TenantResourceResponse:
+    _resource_scope(context, tenant_id)
+    return _resource_response(
+        db, tenant_id, _find_resource(request, db, tenant_id, kind, resource_id)
+    )
+
+
+@inventory_router.post(
+    "/{tenant_id}/resources/{kind}/{resource_id}/actions/{action}",
+    response_model=TenantResourceActionResponse,
+)
+def act_on_tenant_resource(
+    tenant_id: str,
+    kind: str,
+    resource_id: str,
+    action: str,
+    request: Request,
+    dry_run: int = Query(default=0),
+    db: Session = Depends(get_db_session),
+    context: TenantContext = Depends(get_current_tenant_context),
+    current_user: User = Depends(require_permission("tenant.tenants.manage")),
+) -> TenantResourceActionResponse:
+    _resource_scope(context, tenant_id)
+    if action not in {"start", "stop", "restart", "remove"}:
+        raise HTTPException(status_code=404, detail="Action not found")
+    resource = _find_resource(request, db, tenant_id, kind, resource_id)
+    _require_resource_permission(context, kind, action)
+    dispatch_context = context
+    if context.is_platform and context.current_tenant_id != tenant_id:
+        dispatch_context = TenantContext(
+            current_tenant_id=tenant_id,
+            current_branch_id=context.current_branch_id,
+            current_user_id=context.current_user_id,
+            current_permissions=context.current_permissions,
+            current_warehouse_ids=context.current_warehouse_ids,
+        )
+    runtime = get_runtime(db, tenant_id, kind, resource_id)
+    response_resource = _resource_response(db, tenant_id, resource)
+    if dry_run == 1:
+        return TenantResourceActionResponse(
+            action=action,
+            dry_run=True,
+            runtime=runtime,
+            resource=response_resource,
+            result={"dispatch": runtime},
+        )
+    result = (
+        _dispatch_rootful(request, db, dispatch_context, current_user, resource, action)
+        if runtime == "rootful"
+        else _dispatch_rootless(request, db, tenant_id, resource, action)
+    )
+    return TenantResourceActionResponse(
+        action=action,
+        dry_run=False,
+        runtime=runtime,
+        resource=response_resource,
+        result=result,
     )
 
 

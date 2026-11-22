@@ -18,6 +18,14 @@ English | [Español](README.es.md)
 - **Database access**: site-specific credential and phpMyAdmin launch, without exposing it to the Internet
 - **Audit**: Event log for traceability
 
+## Apps deployment model
+
+Apps are deployed **as delivered**: PanelTutor does not rewrite Dockerfiles,
+Compose files, users, entrypoints, commands or volumes. Host-resource security
+checks remain blocking (Docker socket, sensitive binds, host namespaces,
+privilege escalation) and releases are signed snapshots of the original source.
+See [Apps without invasive hardening](docs/apps-sin-hardening-invasivo.md).
+
 ## Architecture
 
 ```

@@ -36,6 +36,7 @@ from .releases import (
     release_store_root,
     verify_release,
 )
+from .router_plans import router as plans_router
 from .schemas import (
     ActionRequest,
     ApplicationCreate,
@@ -59,6 +60,7 @@ from .states import StateUnavailable
 from .tenant_environment import save_tenant_environment, saved_tenant_environment
 
 router = APIRouter(tags=["apps"])
+router.include_router(plans_router)
 
 
 def _resources(request: Request):

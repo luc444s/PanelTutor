@@ -1,0 +1,93 @@
+{
+  "artifact": "0103-cli-e2e-after-fix",
+  "scope": "laboratorio: celda desechable; sin workarounds; NO se tocaron cell-g, cell-h, Traefik, phpMyAdmin, MariaDB ni WordPress",
+  "slug": "cell-e2e-fix1",
+  "uid": 60019,
+  "fixes_verified": [
+    "provision levanta el daemon rootless sin runuser manual",
+    "plan verify usa el daemon root del host y la ruta real del slice",
+    "plan verify pasa tras import, tras set y tras reinicio de user@"
+  ],
+  "steps": {
+    "doctor": {
+      "rc": 0,
+      "stdout": "{\"capabilities\": {\"apparmor_enabled\": {\"detail\": \"AppArmor enabled in kernel\", \"ok\": true}, \"apparmor_parser\": {\"detail\": \"apparmor_parser on PATH\", \"ok\": true}, \"kernel_cgroup2\": {\"detail\": \"cgroup v2 mounted\", \"ok\": true}, \"nftables_skuid\": {\"detail\": \"network isolation mode=skuid\", \"ok\": true}, \"rootless_docker\": {\"detail\": \"dockerd-rootless.sh on PATH\", \"ok\": true}, \"subuid_range_free\": {\"detail\": \"free subuid/subgid block\", \"ok\": true}, \"systemd_delegate\": {\"detail\": \"Delegate=yes for user units\", \"ok\": true}}, \"ready\": true}\n",
+      "stderr": ""
+    },
+    "import_legacy": {
+      "rc": 0,
+      "stdout": "{\"cache_only\": true, \"imported\": [{\"cgroup_path\": \"/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice\", \"dropin\": \"/etc/systemd/system/user@60019.service.d/tenant-plan.conf\", \"plan\": {\"cpus\": 0.5, \"memory\": \"256M\", \"pids\": 128}, \"slice\": \"tenant-cell-e2e-fix1.slice\", \"slug\": \"cell-e2e-fix1\", \"uid\": 60019}], \"source\": \"/var/tmp/spanel-e2e-0102/legacy-cell-e2e-fix1.json\"}\n",
+      "stderr": ""
+    },
+    "manager_after_restart": {
+      "rc": 0,
+      "stdout": "Slice=tenant-cell-e2e-fix1.slice\nControlGroup=/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice/user@60019.service\n",
+      "stderr": ""
+    },
+    "manager_restored": {
+      "rc": 0,
+      "stdout": "Slice=user-60019.slice\n",
+      "stderr": ""
+    },
+    "plan_remove": {
+      "rc": 0,
+      "stdout": "{\"removed\": true, \"restored_slice\": \"user-60019.slice\", \"slug\": \"cell-e2e-fix1\"}\n",
+      "stderr": ""
+    },
+    "plan_set": {
+      "rc": 0,
+      "stdout": "{\"cgroup_path\": \"/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice\", \"dropin\": \"/etc/systemd/system/user@60019.service.d/tenant-plan.conf\", \"plan\": {\"cpus\": 0.75, \"memory\": \"384M\", \"pids\": 96}, \"slice\": \"tenant-cell-e2e-fix1.slice\", \"slug\": \"cell-e2e-fix1\", \"uid\": 60019}\n",
+      "stderr": ""
+    },
+    "provision": {
+      "rc": 0,
+      "stdout": "{\"apparmor\": {\"effective\": true, \"hash\": \"8adf94af9f5113f5290e8b1712cc86c80ade968af8e2c630d320a3a5f5d8770c\", \"profile\": \"spanel-cell-cell-e2e-fix1\"}, \"cgroup_driver\": \"systemd\", \"cgroup_path\": \"/user.slice/user-60019.slice/user@60019.service/user.slice/spanel-cell-cell-e2e-fix1.scope\", \"gid_map\": [], \"network_mode\": \"skuid\", \"slug\": \"cell-e2e-fix1\", \"socket_path\": \"/var/lib/spanel/cells/cell-e2e-fix1/docker.sock\", \"state\": \"ready\", \"uid\": 60019, \"uid_map\": []}\n",
+      "stderr": "useradd warning: spanel-cell-e2e-fix1's uid 60019 is greater than SYS_UID_MAX 999\nCreated symlink /home/spanel-cell-e2e-fix1/.config/systemd/user/default.target.wants/spanel-cell-cell-e2e-fix1.service → /etc/xdg/systemd/user/spanel-cell-cell-e2e-fix1.service.\n"
+    },
+    "show_after_import": {
+      "rc": 0,
+      "stdout": "{\"cgroup_path\": \"/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice\", \"dropin\": \"/etc/systemd/system/user@60019.service.d/tenant-plan.conf\", \"plan\": {\"cpus\": 0.5, \"memory\": \"256M\", \"pids\": 128}, \"slice\": \"tenant-cell-e2e-fix1.slice\", \"slug\": \"cell-e2e-fix1\", \"uid\": 60019}\n",
+      "stderr": ""
+    },
+    "show_after_remove": {
+      "rc": 2,
+      "stdout": "{\"error\": \"cell-e2e-fix1\", \"verb\": \"plan_show\"}\n",
+      "stderr": ""
+    },
+    "show_after_set": {
+      "rc": 0,
+      "stdout": "{\"cgroup_path\": \"/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice\", \"dropin\": \"/etc/systemd/system/user@60019.service.d/tenant-plan.conf\", \"plan\": {\"cpus\": 0.75, \"memory\": \"384M\", \"pids\": 96}, \"slice\": \"tenant-cell-e2e-fix1.slice\", \"slug\": \"cell-e2e-fix1\", \"uid\": 60019}\n",
+      "stderr": ""
+    },
+    "show_before": {
+      "rc": 2,
+      "stdout": "{\"error\": \"cell-e2e-fix1\", \"verb\": \"plan_show\"}\n",
+      "stderr": ""
+    },
+    "slice_props": {
+      "rc": 0,
+      "stdout": "unit:\nMemoryMax=402653184\nTasksMax=96\ncgroup=/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice\nmemory.max=402653184\ncpu.max=75000 100000\npids.max=96\n",
+      "stderr": ""
+    },
+    "socket_after_provision": {
+      "rc": 0,
+      "stdout": "",
+      "stderr": ""
+    },
+    "verify_after_restart": {
+      "rc": 0,
+      "stdout": "{\"cgroup_path\": \"/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice\", \"evidence\": {\"cgroup_path\": \"/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice\", \"cpu_delta_usec\": 3818251, \"cpu_max\": \"75000 100000\", \"expected\": {\"cpu_max\": \"75000 100000\", \"memory_max\": \"402653184\", \"pids_max\": \"96\"}, \"memory_events\": \"low 0\\nhigh 0\\nmax 0\\noom 0\\noom_kill 0\\noom_group_kill 0\\nsock_throttled 0\", \"memory_max\": \"402653184\", \"memory_throttled\": false, \"ok\": true, \"pids_max\": \"96\", \"rootful\": {\"container_cgroup\": \"/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice/docker-0666d7486ba38f363cd19c65d3bfdf9b583e474fe9c78a633afc8cd02064464e.scope\", \"container_pid\": 348729}, \"rootless\": {\"user_manager_cgroup\": \"/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice/user@60019.service/init.scope\"}, \"slice\": \"tenant-cell-e2e-fix1.slice\", \"slug\": \"cell-e2e-fix1\"}, \"ok\": true, \"plan\": {\"cpus\": 0.75, \"memory\": \"384M\", \"pids\": 96}, \"slice\": \"tenant-cell-e2e-fix1.slice\", \"slug\": \"cell-e2e-fix1\"}\n",
+      "stderr": "Running as unit: run-rc34ec29e9e264bd3bd2d219d96d6317c.scope; invocation ID: c2fbe77cba0a48b6985f524d4a1c5160\n"
+    },
+    "verify_after_set": {
+      "rc": 0,
+      "stdout": "{\"cgroup_path\": \"/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice\", \"evidence\": {\"cgroup_path\": \"/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice\", \"cpu_delta_usec\": 3840940, \"cpu_max\": \"75000 100000\", \"expected\": {\"cpu_max\": \"75000 100000\", \"memory_max\": \"402653184\", \"pids_max\": \"96\"}, \"memory_events\": \"low 0\\nhigh 0\\nmax 0\\noom 0\\noom_kill 0\\noom_group_kill 0\\nsock_throttled 0\", \"memory_max\": \"402653184\", \"memory_throttled\": false, \"ok\": true, \"pids_max\": \"96\", \"rootful\": {\"container_cgroup\": \"/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice/docker-61e80dbf48f33b1a20ee0a7ea7a56546e2b9483198200c4f914f37089604d127.scope\", \"container_pid\": 347631}, \"rootless\": {\"user_manager_cgroup\": \"/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice/user@60019.service/init.scope\"}, \"slice\": \"tenant-cell-e2e-fix1.slice\", \"slug\": \"cell-e2e-fix1\"}, \"ok\": true, \"plan\": {\"cpus\": 0.75, \"memory\": \"384M\", \"pids\": 96}, \"slice\": \"tenant-cell-e2e-fix1.slice\", \"slug\": \"cell-e2e-fix1\"}\n",
+      "stderr": "Running as unit: run-r4cb3c8c597a64a0ea919d7056898a3cf.scope; invocation ID: 1d66ae350ea8453ea17ca91af8df86b9\n"
+    },
+    "verify_import": {
+      "rc": 0,
+      "stdout": "{\"cgroup_path\": \"/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice\", \"evidence\": {\"cgroup_path\": \"/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice\", \"cpu_delta_usec\": 3106735, \"cpu_max\": \"50000 100000\", \"expected\": {\"cpu_max\": \"50000 100000\", \"memory_max\": \"268435456\", \"pids_max\": \"128\"}, \"memory_events\": \"low 0\\nhigh 0\\nmax 0\\noom 0\\noom_kill 0\\noom_group_kill 0\\nsock_throttled 0\", \"memory_max\": \"268435456\", \"memory_throttled\": false, \"ok\": true, \"pids_max\": \"128\", \"rootful\": {\"container_cgroup\": \"/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice/docker-62756b4122c027fc556d70f74de375133589c33a3a714a10a05884dfa5f9032d.scope\", \"container_pid\": 346249}, \"rootless\": {\"user_manager_cgroup\": \"/tenant.slice/tenant-cell.slice/tenant-cell-e2e.slice/tenant-cell-e2e-fix1.slice/user@60019.service/init.scope\"}, \"slice\": \"tenant-cell-e2e-fix1.slice\", \"slug\": \"cell-e2e-fix1\"}, \"ok\": true, \"plan\": {\"cpus\": 0.5, \"memory\": \"256M\", \"pids\": 128}, \"slice\": \"tenant-cell-e2e-fix1.slice\", \"slug\": \"cell-e2e-fix1\"}\n",
+      "stderr": "Running as unit: run-r98f4da6c2a694aac9b61980ba295b974.scope; invocation ID: b00d20eb0e374027b494e1d6ebe54496\n"
+    }
+  }
+}

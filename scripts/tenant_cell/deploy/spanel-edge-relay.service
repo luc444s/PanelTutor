@@ -1,0 +1,36 @@
+[Unit]
+Description=Spanel unprivileged edge relay (rootless cell routes)
+Documentation=man:systemd.service(5)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# A.SPEC 0104: the relay runs as the SAME uid Traefik already has in nft skuid
+# (1000 by default). Replace the placeholder once per host. No Docker socket,
+# host or cell, is mounted here or in Traefik.
+User=<SPANEL_TRAEFIK_UID>
+Group=<SPANEL_TRAEFIK_UID>
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+ReadOnlyPaths=/var/lib/spanel
+ReadWritePaths=/run/spanel
+RestrictAddressFamilies=AF_INET AF_UNIX
+RestrictSUIDSGID=true
+# Host-only gate: the unprivileged app container never starts this unit.
+Environment=SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1
+Environment=SPANEL_EDGE_RELAY_BIND=172.18.0.1
+Environment=SPANEL_EDGE_RELAY_SOCKET=/run/spanel/edge-relay.sock
+# Optional override: SPANEL_EDGE_RELAY_SOURCES=<traefik-ip> (detected from the
+# proxy network when unset). Never a wildcard: an empty allowlist denies all.
+RuntimeDirectory=spanel
+RuntimeDirectoryMode=0750
+ExecStart=/usr/bin/python3 /opt/spanel/scripts/spanel_tenant.py edge-relay --data-root /var/lib/spanel
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
