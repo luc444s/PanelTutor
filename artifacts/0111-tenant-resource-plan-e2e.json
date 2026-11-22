@@ -1,0 +1,167 @@
+{
+  "spec": "0111",
+  "title": "Tenant resource plan UI and informational host capacity",
+  "result": "PASS",
+  "ok": true,
+  "environment": {
+    "host": "spanel.lab",
+    "access": "lucas@100.67.5.50",
+    "deployment_root": "/home/lucas/spanel-0111-test",
+    "app_url": "https://spanel.lab",
+    "app_container": "spanel-app-1",
+    "plan_agent": "spanel-plan-agent.service",
+    "plan_agent_root": "/home/lucas/spanel-0111-test",
+    "database": "spanel-postgres-1/sysadmin",
+    "tenant": {
+      "id": "658e5ca2-00a4-4672-b5c5-f093db3066fa",
+      "slug": "demo",
+      "name": "Demo Tenant"
+    }
+  },
+  "migration": {
+    "plugin": "apps",
+    "version": "008_add_tenant_plan_storage",
+    "applied_by": "systutor-core plugin migration runtime",
+    "alembic_cli": false,
+    "storage_bytes_column": true
+  },
+  "host_capacity": {
+    "memory_bytes": 12436365312,
+    "cpus": 4.0,
+    "storage_bytes": 92911968256,
+    "storage_available_bytes": 29074972672,
+    "data_root": "/var/lib/spanel",
+    "source": "host"
+  },
+  "checks": [
+    {
+      "id": "capacity_endpoint",
+      "pass": true,
+      "http": 200,
+      "path": "GET /api/v1/plugins/apps/plan/capacity?tenant_id=...",
+      "observed": "host totals from the real host, allocated sum 0 before any plan"
+    },
+    {
+      "id": "plan_set_with_storage",
+      "pass": true,
+      "http": 201,
+      "request": {
+        "memory_bytes": 2147483648,
+        "cpus": 1,
+        "pids": 256,
+        "storage_bytes": 10737418240
+      },
+      "response": {
+        "status": "applied",
+        "storage_bytes": 10737418240
+      }
+    },
+    {
+      "id": "cgroup_applied_in_place",
+      "pass": true,
+      "observed": {
+        "slice": "user-60070.slice",
+        "control_group": "/user.slice/user-60070.slice/user@60070.service",
+        "memory_max": "2147483648",
+        "cpu_max": "100000 100000",
+        "pids_max": "256"
+      },
+      "note": "systemctl show reported the limits on the existing user manager; the host payload never included storage."
+    },
+    {
+      "id": "overcommit_accepted",
+      "pass": true,
+      "http": 201,
+      "request": {
+        "memory_bytes": 68719476736,
+        "cpus": 8,
+        "pids": 1024,
+        "storage_bytes": 322122547200
+      },
+      "observed": {
+        "status": "applied",
+        "allocated_memory_bytes": 68719476736,
+        "host_memory_bytes": 12436365312,
+        "ratio": 5.53,
+        "rejected": false,
+        "warning": false
+      },
+      "note": "The plan is accepted and persisted; the API/UI do not reject or warn about overcommit."
+    },
+    {
+      "id": "plan_delete",
+      "pass": true,
+      "http": 200,
+      "response": {
+        "removed": true,
+        "restored_slice": "user-60070.slice",
+        "slug": "demo"
+      },
+      "after": {
+        "plan": null,
+        "allocated": {
+          "memory_bytes": 0,
+          "cpus": 0,
+          "pids": 0,
+          "storage_bytes": 0
+        }
+      }
+    },
+    {
+      "id": "ui_served",
+      "pass": true,
+      "observed": {
+        "root_http": 200,
+        "health_http": 200,
+        "asset": "/assets/index-D0mJJIiz.js",
+        "strings": [
+          "Capacidad del host",
+          "Plan del tenant",
+          "Guardar plan",
+          "Inventario",
+          "Recursos"
+        ]
+      }
+    },
+    {
+      "id": "logs_no_500",
+      "pass": true,
+      "observed": "0 responses with status_code=500 in spanel-app-1"
+    },
+    {
+      "id": "core_untouched",
+      "pass": true,
+      "observed": [
+        "spanel-traefik-lab",
+        "spanel-lab-mariadb",
+        "spanel-lab-phpmyadmin",
+        "spanel-powerdns-lab-auth",
+        "spanel-powerdns-lab-postgres",
+        "spanel-mail"
+      ],
+      "note": "All core containers remained running with the same uptime; no config or restart."
+    }
+  ],
+  "gaps": [
+    {
+      "id": "0111-E2E-G1",
+      "what": "POST /plan/verify returns ok=false on the demo cell",
+      "why": "Pre-existing plan probe (A.SPEC 0108) does not observe the rootless workload on the demo cell: cpu_delta_usec=0 and memory_throttled=false, while MemoryMax/CPUQuota/TasksMax are correctly applied.",
+      "scope": "outside 0111 (verify was not changed); same result with the CLI plan probe",
+      "status": "known lab probe gap"
+    },
+    {
+      "id": "0111-E2E-G2",
+      "what": "Frontend vitest for GiB helpers not added",
+      "why": "change_surface does not allow a new frontend test file; helpers are exported and the TypeScript/Vite build passes.",
+      "status": "documented"
+    }
+  ],
+  "deployment_note": "The lab was not fast-forwarded in place because ~/mailadmin was on main with unrelated local changes and ~/mailadmin-remove-hardener had uncommitted work. The pushed commit e9dda25 was deployed from a clean git worktree at /home/lucas/spanel-0111-test; the plan-agent unit points to that worktree for this test.",
+  "repo": {
+    "branch": "remove-hardener",
+    "commit": "e9dda25",
+    "pushed": true
+  },
+  "finished_at": "2026-11-22T03:21:00Z"
+}
