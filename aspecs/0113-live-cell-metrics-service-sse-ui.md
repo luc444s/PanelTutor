@@ -363,16 +363,16 @@ structural_constraints:
 
 ## Definition of Done
 
-- [ ] Objetivo satisfecho
-- [ ] Scope respetado
-- [ ] Contrato satisfecho
-- [ ] Verdad falsable e independiente disponible ahora (SSE con samples reales)
-- [ ] Invariantes preservados
-- [ ] Verificación Rust/backend/frontend ejecutada
-- [ ] Rollback honesto (parar daemon, retirar montaje, revertir router/UI)
-- [ ] Checks de composición ejecutados
-- [ ] Sin cambios no relacionados
-- [ ] Restricciones estructurales respetadas
-- [ ] Trazabilidad establecida
-- [ ] E2E black-box en laboratorio con SSE y carga real
-- [ ] Core intacto
+- [x] Objetivo satisfecho
+- [x] Scope respetado
+- [x] Contrato satisfecho
+- [x] Verdad falsable e independiente disponible ahora (SSE con samples reales)
+- [x] Invariantes preservados
+- [x] Verificación Rust/backend/frontend ejecutada
+- [x] Rollback honesto (parar daemon, retirar montaje, revertir router/UI)
+- [x] Checks de composición ejecutados
+- [x] Sin cambios no relacionados
+- [x] Restricciones estructurales respetadas
+- [x] Trazabilidad establecida
+- [x] E2E black-box en laboratorio con SSE y carga real
+- [x] Core intacto
