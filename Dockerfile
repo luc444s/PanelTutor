@@ -1,5 +1,5 @@
 # ── Stage 1: Build frontend ──
-FROM node:20-slim AS frontend-build
+FROM node:24-slim AS frontend-build
 
 WORKDIR /app
 
@@ -7,7 +7,7 @@ COPY apps/web/package.json apps/web/package-lock.json* ./apps/web/
 COPY vendor/ ./vendor/
 
 WORKDIR /app/apps/web
-RUN npm install --prefer-offline
+RUN npm ci --prefer-offline --no-audit --no-fund
 
 COPY apps/web/ ./
 RUN npm run build
