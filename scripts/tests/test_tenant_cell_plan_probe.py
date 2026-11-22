@@ -59,6 +59,39 @@ def test_materializer_probe_and_verify_remain_callable(tmp_path: Path, monkeypat
     assert service.verify("acme")["ok"] is True
 
 
+def test_probe_surfaces_the_evidence_error_to_the_backend(
+    tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv(plans.MUTATION_GATE, "1")
+    alloc.allocate(tmp_path, "acme")
+    alloc.update_allocation(tmp_path, "acme", state="ready", cgroup_driver="systemd")
+    plans.save_plans(tmp_path, {
+        "version": plans.PLAN_VERSION,
+        "plans": {
+            "acme": {
+                "slug": "acme",
+                "uid": 60000,
+                "plan": {"memory": "256M", "cpus": 0.5, "pids": 128},
+            }
+        },
+    })
+
+    class Executor:
+        def run_plan_probe(self, slug, uid, plan, memory_mb=64, seconds=3):
+            return {
+                "ok": False,
+                "error": "cpu accounting shows no usage under load",
+                "slice": f"user-{uid}.slice",
+                "owner_uid": str(uid),
+            }
+
+    service = materializer.PlanMaterializer(Executor(), tmp_path, probe=object())
+    result = service.verify("acme")
+    assert result["ok"] is False
+    assert result["error"] == "cpu accounting shows no usage under load"
+
+
+
 class ProbeService:
     def __init__(self, ok: bool) -> None:
         self.ok = ok

@@ -163,7 +163,7 @@ class PlanMaterializer:
             verb="plan_verify",
             exit_code=0 if ok else 1,
         )
-        return {
+        result = {
             "slug": slug,
             "ok": ok,
             "slice": evidence.get("slice", plans.user_slice(uid)),
@@ -173,6 +173,12 @@ class PlanMaterializer:
             "plan": effective,
             "evidence": evidence,
         }
+        # The backend stores ``result["error"]`` in the plan row.  Without this
+        # the UI kept the opaque "kernel evidence differs" even though the probe
+        # knew which check failed.
+        if evidence.get("error"):
+            result["error"] = str(evidence["error"])[:400]
+        return result
 
     def reconcile(self, desired: list[dict[str, Any]]) -> dict[str, Any]:
         """Repair host state to match ``desired`` plans coming from the DB.
