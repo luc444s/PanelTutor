@@ -218,7 +218,8 @@ Cada línea debe ser un `event: metrics` con `ts_ms`, `memory`, `cpu` y `pids`.
 Si el listado de Hosting falla, normalmente es que el contenedor no ve el
 registro de celdas o el dockerd de una celda rootless. El compose nuevo monta:
 
-- `/var/lib/spanel/registry.json` en solo lectura;
+- `/var/lib/spanel` completo en solo lectura (el `registry.json` se reemplaza
+  de forma atómica, así que montar solo el fichero dejaría datos obsoletos);
 - `/var/lib/spanel/cells` con escritura (estado privado por uid de celda);
 - `SPANEL_TENANTS_ROOTLESS=true` y `SPANEL_TENANTS_DATA_ROOT=/var/lib/spanel`.
 

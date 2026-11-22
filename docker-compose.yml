@@ -48,11 +48,12 @@ services:
         read_only: true
         bind:
           create_host_path: false
-      # A.SPEC 0110: registry.json is read-only; /var/lib/spanel/cells must be
-      # writable because hosting stores private state owned by each cell uid.
+      # A.SPEC 0110: the whole data root is visible read-only because
+      # registry.json is replaced atomically (a file bind mount would go
+      # stale); only /var/lib/spanel/cells is writable for per-cell state.
       - type: bind
-        source: ${SPANEL_TENANTS_REGISTRY:-/var/lib/spanel/registry.json}
-        target: /var/lib/spanel/registry.json
+        source: ${SPANEL_TENANTS_DATA_ROOT_HOST:-/var/lib/spanel}
+        target: /var/lib/spanel
         read_only: true
         bind:
           create_host_path: false
@@ -108,8 +109,8 @@ services:
         bind:
           create_host_path: false
       - type: bind
-        source: ${SPANEL_TENANTS_REGISTRY:-/var/lib/spanel/registry.json}
-        target: /var/lib/spanel/registry.json
+        source: ${SPANEL_TENANTS_DATA_ROOT_HOST:-/var/lib/spanel}
+        target: /var/lib/spanel
         read_only: true
         bind:
           create_host_path: false
