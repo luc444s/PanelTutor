@@ -8,6 +8,7 @@ the CLI on the lab host; it never mutates anything.
 from __future__ import annotations
 
 import os
+import pwd
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
@@ -157,8 +158,10 @@ class HostProbe:
         env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
         env["DBUS_SESSION_BUS_ADDRESS"] = f"unix:path=/run/user/{uid}/bus"
         try:
+            user = pwd.getpwuid(uid).pw_name
             result = subprocess.run(
                 [
+                    "runuser", "-u", user, "--",
                     "systemctl", "--user", "show", "-p", "MainPID", "--value",
                     f"spanel-cell-{slug}",
                 ],
@@ -168,28 +171,36 @@ class HostProbe:
                 check=False,
             )
             return int(result.stdout.strip())
-        except (ValueError, OSError):
+        except (KeyError, ValueError, OSError):
             return 0
 
     def daemon_pid(self, main_pid: int) -> int:
-        """Resolve the dockerd child of rootlesskit's MainPID.
+        """Resolve the dockerd descendant of rootlesskit's MainPID.
 
         systemd reports the rootlesskit parent, whose uid_map is the identity
-        map.  The real per-cell mapping lives in the dockerd child, so evidence
-        must be read from there.
+        map. RootlessKit inserts another helper process before dockerd, so walk
+        descendants and match the process name rather than its argument text.
         """
         if main_pid <= 0:
             return 0
-        children = _path_text(
+        queue = _path_text(
             Path(f"/proc/{main_pid}/task/{main_pid}/children")
         ).split()
-        for child in children:
-            cmdline = _path_text(Path(f"/proc/{child}/cmdline")).replace("\0", " ")
-            if "dockerd" in cmdline:
-                try:
-                    return int(child)
-                except ValueError:
-                    continue
+        seen: set[int] = set()
+        while queue:
+            raw_pid = queue.pop(0)
+            try:
+                pid = int(raw_pid)
+            except ValueError:
+                continue
+            if pid in seen:
+                continue
+            seen.add(pid)
+            if _path_text(Path(f"/proc/{pid}/comm")).strip() == "dockerd":
+                return pid
+            queue.extend(
+                _path_text(Path(f"/proc/{pid}/task/{pid}/children")).split()
+            )
         return main_pid
 
     def read_uid_map(self, pid: int) -> list[dict[str, int]]:

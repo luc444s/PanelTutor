@@ -291,7 +291,7 @@ class PmaClient:
             return cookies
         except (ValueError, UnicodeError) as exc:
             raise AppError(
-                "Could not sign in to phpMyAdmin",
+                f"Could not sign in to phpMyAdmin: {exc}",
                 status_code=502,
                 code="hosting_phpmyadmin_login_failed",
             ) from exc

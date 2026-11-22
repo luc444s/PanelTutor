@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib.util
 import json
 import signal
+import subprocess
 import sys
 from pathlib import Path
 
@@ -51,6 +52,32 @@ def test_redaction_without_registry_still_hides_key_value_pairs() -> None:
     assert "s3cret" not in rendered
     assert "abc123" not in rendered
     assert '"id": "ok"' in rendered
+
+
+def test_wp_request_turns_timeout_into_retryable_status() -> None:
+    class TimeoutOpener:
+        def open(self, request, timeout):
+            raise TimeoutError("slow wp-admin")
+
+    assert e2e.wp_request(
+        None, TimeoutOpener(), "wp.example.lab", "/wp-admin/", timeout=1
+    ) == (0, b"", {})
+
+
+def test_external_probe_wraps_socket_timeout(monkeypatch, tmp_path: Path) -> None:
+    cfg = e2e.Config(
+        stage=tmp_path,
+        slug="timeout",
+        evidence_path=tmp_path / "evidence.json",
+    )
+    monkeypatch.setattr(
+        e2e.urllib.request,
+        "urlopen",
+        lambda *args, **kwargs: (_ for _ in ()).throw(TimeoutError("slow route")),
+    )
+
+    with pytest.raises(e2e.HarnessError, match="external probe"):
+        e2e.external_probe(cfg, "static-timeout.lab", deadline=0)
 
 
 def test_journal_is_atomic_and_resume_validates_identity(tmp_path: Path) -> None:
@@ -231,3 +258,37 @@ def test_script_never_invokes_alembic_cli() -> None:
     assert "alembic upgrade" not in lowered
     assert "alembic revision" not in lowered
     assert "--autogenerate" not in lowered
+
+
+def test_pma_source_is_resolved_on_its_actual_network(tmp_path: Path, monkeypatch) -> None:
+    live_env = tmp_path / "live.env"
+    live_env.write_text(
+        "SPANEL_PHPMYADMIN_INTERNAL_URL=http://spanel-lab-phpmyadmin:8080\n"
+    )
+    cfg = e2e.Config(
+        tmp_path / "stage", "e2e0110c", tmp_path / "evidence.json", live_env=live_env
+    )
+    payload = json.dumps(
+        [{"NetworkSettings": {"Networks": {"mariadb_internal": {"IPAddress": "172.24.0.3"}}}}]
+    )
+    monkeypatch.setattr(
+        e2e,
+        "docker",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, payload, ""),
+    )
+
+    assert e2e.resolve_pma_source_ip(cfg) == "172.24.0.3"
+
+
+def test_pg_host_is_resolved_on_its_actual_network(tmp_path: Path, monkeypatch) -> None:
+    cfg = e2e.Config(tmp_path / "stage", "e2e0110c", tmp_path / "evidence.json")
+    payload = json.dumps(
+        [{"NetworkSettings": {"Networks": {"spanel_default": {"IPAddress": "192.168.32.4"}}}}]
+    )
+    monkeypatch.setattr(
+        e2e,
+        "docker",
+        lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, payload, ""),
+    )
+
+    assert e2e.resolve_pg_host(cfg) == "192.168.32.4"

@@ -252,6 +252,8 @@ def test_render_profile_keeps_capabilities_ptrace_and_mounts_scoped() -> None:
         in profile
     )
     assert "pivot_root /var/lib/spanel/cells/acme/**," in profile
+    assert "mount options=(rw, rprivate) -> /.pivot_root*/," in profile
+    assert "umount /.pivot_root*/," in profile
     # No wildcard that allows mounting over another cell or the host.
     assert "mount /** -> /," not in profile
     assert "/var/lib/spanel/cells/other" not in profile

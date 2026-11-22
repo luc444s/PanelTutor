@@ -926,6 +926,7 @@ class HostingService:
         pma_session_id: str,
     ) -> dict[str, str] | None:
         """Open the ephemeral rootless relay; rootful sites keep the old path."""
+        self._require_wordpress(site)
         runtime = self._runtime_for(site)
         if runtime is None or runtime.runtime != "rootless":
             return None

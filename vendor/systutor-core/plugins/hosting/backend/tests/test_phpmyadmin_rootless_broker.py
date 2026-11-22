@@ -52,7 +52,7 @@ def test_rootless_relay_uses_the_cell_slug_and_returns_only_host_port(monkeypatc
     service = service_with(settings)
     service._audit_site = lambda *args, **kwargs: None
     monkeypatch.setattr(service, "_runtime_for", lambda site: rootless_runtime())
-    site = SimpleNamespace(id="site-1", tenant_id="tenant-1")
+    site = SimpleNamespace(id="site-1", tenant_id="tenant-1", kind="wordpress")
     relay = service.phpmyadmin_relay_server(site, SimpleNamespace(), "session-1")
     assert relay == {
         "relay_id": "pma-abc",
@@ -73,7 +73,7 @@ def test_rootful_site_keeps_the_legacy_path(monkeypatch) -> None:
     monkeypatch.setattr(
         service, "_runtime_for", lambda site: SimpleNamespace(runtime="rootful")
     )
-    site = SimpleNamespace(id="s", tenant_id="t")
+    site = SimpleNamespace(id="s", tenant_id="t", kind="wordpress")
     assert service.phpmyadmin_relay_server(site, SimpleNamespace(), "x") is None
 
 
@@ -82,7 +82,7 @@ def test_disabled_broker_fails_closed(monkeypatch) -> None:
         HostingSettings(phpmyadmin_rootless_broker=False, phpmyadmin_arbitrary=True)
     )
     monkeypatch.setattr(service, "_runtime_for", lambda site: rootless_runtime())
-    site = SimpleNamespace(id="s", tenant_id="t")
+    site = SimpleNamespace(id="s", tenant_id="t", kind="wordpress")
     with pytest.raises(AppError) as exc:
         service.phpmyadmin_relay_server(site, SimpleNamespace(), "x")
     assert exc.value.code == "hosting_phpmyadmin_unavailable"
@@ -93,10 +93,32 @@ def test_rootless_requires_arbitrary_server_mode(monkeypatch) -> None:
         HostingSettings(phpmyadmin_rootless_broker=True, phpmyadmin_arbitrary=False)
     )
     monkeypatch.setattr(service, "_runtime_for", lambda site: rootless_runtime())
-    site = SimpleNamespace(id="s", tenant_id="t")
+    site = SimpleNamespace(id="s", tenant_id="t", kind="wordpress")
     with pytest.raises(AppError) as exc:
         service.phpmyadmin_relay_server(site, SimpleNamespace(), "x")
     assert exc.value.code == "hosting_phpmyadmin_unavailable"
+
+
+def test_static_site_is_rejected_before_opening_a_relay(monkeypatch) -> None:
+    service = service_with(
+        HostingSettings(phpmyadmin_rootless_broker=True, phpmyadmin_arbitrary=True)
+    )
+    monkeypatch.setattr(
+        service,
+        "_runtime_for",
+        lambda site: pytest.fail("runtime must not be resolved for a static site"),
+    )
+
+    with pytest.raises(AppError) as exc:
+        service.phpmyadmin_relay_server(
+            SimpleNamespace(
+                id="s", tenant_id="t", kind="static", container_name="spanel-static-web"
+            ),
+            SimpleNamespace(),
+            "x",
+        )
+
+    assert exc.value.code == "hosting_site_wrong_kind"
 
 
 def test_login_with_relay_server_skips_the_rootful_database_network(monkeypatch) -> None:

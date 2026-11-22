@@ -384,10 +384,10 @@ class Config:
         default_factory=lambda: os.getenv("SPANEL_E2E_HOSTING_NETWORK", "proxy")
     )
     pma_source_ip: str = field(
-        default_factory=lambda: os.getenv("SPANEL_E2E_PMA_SOURCE_IP", "172.25.0.1")
+        default_factory=lambda: os.getenv("SPANEL_E2E_PMA_SOURCE_IP", "")
     )
     pg_host: str = field(
-        default_factory=lambda: os.getenv("SPANEL_E2E_PG_HOST", "192.168.32.2")
+        default_factory=lambda: os.getenv("SPANEL_E2E_PG_HOST", "")
     )
     pma_network: str = field(
         default_factory=lambda: os.getenv("SPANEL_E2E_PMA_NETWORK", "mariadb_internal")
@@ -829,6 +829,7 @@ def external_probe(
             urllib.error.HTTPError,
             urllib.error.URLError,
             http.client.HTTPException,
+            TimeoutError,
         ) as exc:
             if time.monotonic() >= deadline_at:
                 if isinstance(exc, urllib.error.HTTPError):
@@ -1170,13 +1171,14 @@ def remove_cell_leftovers(slug: str) -> list[str]:
 
 
 def agent_env(cfg: Config) -> dict[str, str]:
+    pma_source_ip = resolve_pma_source_ip(cfg)
     env = {
         "PYTHONPATH": f"{cfg.stage / 'pylibs'}:{cfg.stage / 'scripts'}",
         "SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS": "1",
         "SPANEL_EDGE_RELAY_BIND": cfg.relay_bind,
         "SPANEL_EDGE_RELAY_SOURCES": cfg.relay_source,
-        "SPANEL_DB_BROKER_SOURCES": cfg.pma_source_ip,
-        "SPANEL_DB_BROKER_BIND": cfg.pma_source_ip,
+        "SPANEL_DB_BROKER_SOURCES": pma_source_ip,
+        "SPANEL_DB_BROKER_BIND": cfg.relay_bind,
         # El runtime rootless del lab no permite remontar el rootfs como
         # readonly (AppArmor); el connector sigue sin privilegios y efímero.
         "SPANEL_PMA_CONNECTOR_READ_ONLY": "false",
@@ -1195,11 +1197,60 @@ def agent_env(cfg: Config) -> dict[str, str]:
             elif line.startswith("SYSTUTOR_REDIS_URL="):
                 env["SYSTUTOR_REDIS_URL"] = line.split("=", 1)[1].strip()
     url = env.get("SYSTUTOR_DATABASE_URL", "")
-    if url and cfg.pg_host:
+    pg_host = resolve_pg_host(cfg)
+    if url and pg_host:
         env["SYSTUTOR_DATABASE_URL"] = url.replace(
-            "@spanel-postgres-1:", f"@{cfg.pg_host}:"
+            f"@{cfg.live_pg}:", f"@{pg_host}:"
         )
     return env
+
+
+def resolve_pma_source_ip(cfg: Config) -> str:
+    """Resolve the address phpMyAdmin really uses to reach the host broker."""
+    if cfg.pma_source_ip:
+        return cfg.pma_source_ip
+    values: dict[str, str] = {}
+    if cfg.live_env.exists():
+        for raw in cfg.live_env.read_text(encoding="utf-8").splitlines():
+            line = raw.strip()
+            if line and not line.startswith("#") and "=" in line:
+                key, value = line.split("=", 1)
+                values[key.strip()] = value.strip().strip('"').strip("'")
+    internal = values.get("SPANEL_PHPMYADMIN_INTERNAL_URL", "")
+    container = urllib.parse.urlsplit(internal).hostname
+    if not container:
+        raise Precondition("cannot resolve the phpMyAdmin container from the live env")
+    inspected = docker(cfg, "inspect", container, check=False)
+    if inspected.returncode:
+        raise Precondition(f"cannot inspect phpMyAdmin container {container}")
+    try:
+        rows = json.loads(inspected.stdout)
+        network = rows[0]["NetworkSettings"]["Networks"][cfg.pma_network]
+        source_ip = str(network["IPAddress"]).strip()
+    except (IndexError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise Precondition(
+            f"phpMyAdmin has no address on {cfg.pma_network}"
+        ) from exc
+    if not source_ip:
+        raise Precondition(f"phpMyAdmin has no address on {cfg.pma_network}")
+    return source_ip
+
+
+def resolve_pg_host(cfg: Config) -> str:
+    """Resolve PostgreSQL's current bridge address for host-side agents."""
+    if cfg.pg_host:
+        return cfg.pg_host
+    inspected = docker(cfg, "inspect", cfg.live_pg, check=False)
+    if inspected.returncode:
+        raise Precondition(f"cannot inspect PostgreSQL container {cfg.live_pg}")
+    try:
+        rows = json.loads(inspected.stdout)
+        host = str(rows[0]["NetworkSettings"]["Networks"][cfg.network]["IPAddress"]).strip()
+    except (IndexError, KeyError, TypeError, json.JSONDecodeError) as exc:
+        raise Precondition(f"PostgreSQL has no address on {cfg.network}") from exc
+    if not host:
+        raise Precondition(f"PostgreSQL has no address on {cfg.network}")
+    return host
 
 
 def start_process(
@@ -1276,6 +1327,15 @@ def wait_listener(address: str, port: int, timeout: float = 90.0) -> str:
     raise Precondition(f"no listener on {needle}")
 
 
+def require_live_process(pid: int, name: str) -> None:
+    try:
+        state = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8").split()[2]
+    except (OSError, IndexError):
+        state = ""
+    if state in {"", "Z"}:
+        raise Precondition(f"{name} exited before becoming ready")
+
+
 def prepare_agents(cfg: Config, cells: list[str], evidence: Evidence) -> None:
     token = cfg.stage / "plan_agent_token"
     if not token.exists():
@@ -1292,6 +1352,11 @@ def prepare_agents(cfg: Config, cells: list[str], evidence: Evidence) -> None:
     )
     runtime = cfg.stage / "runtime"
     runtime.mkdir(parents=True, exist_ok=True)
+    # edge-relay runs as the Traefik uid and must traverse the disposable
+    # stage to import tenant_cell; secrets remain individually mode 0600.
+    run(["chmod", "a+rx", str(cfg.stage)], check=False)
+    for path in (cfg.stage / "scripts", cfg.stage / "pylibs"):
+        run(["chmod", "-R", "a+rX", str(path)], check=False)
     run(["chmod", "-R", "a+rX", str(cfg.stage / "relay-data")], check=False)
     # The relay runs as uid 1000 and needs to create its socket there.
     run(["chown", "-R", "1000:1000", str(runtime)], check=False)
@@ -1321,6 +1386,7 @@ def prepare_agents(cfg: Config, cells: list[str], evidence: Evidence) -> None:
         "SPANEL_EDGE_RELAY_SOCKET": str(runtime / "edge-relay.sock"),
         "SPANEL_TRAEFIK_UID": "1000",
     }
+    (runtime / "edge-relay.sock").unlink(missing_ok=True)
     start_process(
         cfg,
         "edge-relay",
@@ -1336,8 +1402,12 @@ def prepare_agents(cfg: Config, cells: list[str], evidence: Evidence) -> None:
         relay_env,
         uid=1000,
     )
+    wait_socket(runtime / "edge-relay.sock")
     primary = allocation(cells[0])
     wait_listener(cfg.relay_bind, 40000 + int(primary["index"]))
+    require_live_process(
+        int((runtime / "edge-relay.pid").read_text(encoding="utf-8")), "edge-relay"
+    )
     evidence.data["environment"]["agents"] = {
         "plan_agent_socket": "/run/spanel/plan-agent.sock",
         "edge_relay_bind": cfg.relay_bind,
@@ -1385,7 +1455,7 @@ def write_runtime_env(cfg: Config) -> tuple[Path, dict[str, str]]:
     values["SPANEL_HOSTING_TRAEFIK"] = values.get("SPANEL_HOSTING_TRAEFIK", "true")
     values["SPANEL_HOSTING_NETWORK"] = cfg.hosting_network
     values["SPANEL_PHPMYADMIN_ARBITRARY"] = "true"
-    values["SPANEL_PHPMYADMIN_SOURCE_IP"] = cfg.pma_source_ip
+    values["SPANEL_PHPMYADMIN_SOURCE_IP"] = resolve_pma_source_ip(cfg)
     values.setdefault("SPANEL_HOSTING_WP_IMAGE", "wordpress:latest")
     values.setdefault("SPANEL_HOSTING_DB_IMAGE", "mariadb:11")
     values.setdefault("SPANEL_HOSTING_STATIC_IMAGE", "nginx:alpine")
@@ -1459,7 +1529,7 @@ def start_stack(cfg: Config, runtime_env: Path, *, rootless: bool) -> None:
         "-e",
         f"SPANEL_PHPMYADMIN_ARBITRARY={'true' if rootless else 'false'}",
         "-e",
-        f"SPANEL_PHPMYADMIN_SOURCE_IP={cfg.pma_source_ip}",
+        f"SPANEL_PHPMYADMIN_SOURCE_IP={resolve_pma_source_ip(cfg)}",
         *_mounts(cfg),
     ]
     docker(
@@ -1635,6 +1705,12 @@ def wp_request(
             return response.status, response.read(), dict(response.headers.items())
     except urllib.error.HTTPError as exc:
         return exc.code, exc.read(), dict(exc.headers.items())
+    except (urllib.error.URLError, TimeoutError, http.client.HTTPException):
+        # WordPress can briefly exceed the per-request deadline after a DB
+        # restore or container restart. Callers already perform bounded retries;
+        # represent a transient transport failure as an unavailable response
+        # instead of aborting the entire closure ceremony.
+        return 0, b"", {}
 
 
 def wp_login(cfg: Config, domain: str, user: str, password: str) -> dict[str, Any]:
@@ -1670,7 +1746,11 @@ def wp_login(cfg: Config, domain: str, user: str, password: str) -> dict[str, An
     logged = any("wordpress_logged_in" in item.name for item in jar)
     admin_status = 0
     if logged:
-        admin_status, _, _ = wp_request(cfg, opener, domain, "/wp-admin/")
+        for _attempt in range(6):
+            admin_status, _, _ = wp_request(cfg, opener, domain, "/wp-admin/")
+            if admin_status == 200:
+                break
+            time.sleep(3)
     return {
         "ok": bool(logged) and admin_status == 200,
         "stage": "dashboard",
@@ -1679,6 +1759,13 @@ def wp_login(cfg: Config, domain: str, user: str, password: str) -> dict[str, An
         "cookie": cookies,
         "cookie_names": sorted(item.name for item in jar),
     }
+
+
+def header_value(headers: dict[str, str], name: str) -> str:
+    wanted = name.casefold()
+    return next(
+        (str(value) for key, value in headers.items() if key.casefold() == wanted), ""
+    )
 
 
 def fm_base(site_id: str) -> str:
@@ -2114,10 +2201,11 @@ def phase_setup(cfg: Config, ev: Evidence, journal: Journal) -> None:
     for slug in cells:
         journal.data.setdefault("cells", {})[slug] = provision_cell(cfg, slug)
         ev.data["repairs"].append({"action": "provision_cell", "slug": slug})
+    runtime_env, _values = write_runtime_env(cfg)
     # Agents (and their token/socket) must exist before the API container
     # mounts them; otherwise Docker would create a directory at the token path.
+    # Write app.env first so the host broker resolves sites in the disposable DB.
     prepare_agents(cfg, cells, ev)
-    runtime_env, _values = write_runtime_env(cfg)
     start_stack(cfg, runtime_env, rootless=False)
     migrate_clone_kernel(cfg, ev)
     admin = admin_login(cfg, ev.redactor)
@@ -2586,8 +2674,12 @@ def check_backup_wordpress(
         "A authenticates and B fails after restore; marker A reappears",
         {
             "login_a_before": login_a_before.get("ok"),
+            "login_a_before_status": login_a_before.get("status"),
+            "login_a_before_admin_status": login_a_before.get("admin_status"),
             "import_status": status,
             "login_a": login_a.get("ok"),
+            "login_a_status": login_a.get("status"),
+            "login_a_admin_status": login_a.get("admin_status"),
             "login_b": login_b.get("ok"),
             "marker_a": marker.get("matches"),
             "bytes": len(payload),
@@ -2697,7 +2789,7 @@ def check_wordpress(
             "config_keys": sorted(config.get("editable_keys", []))[:5],
             "patched_debug": patched.get("editable_env", {}).get("WP_DEBUG"),
             "rejected_db_key_status": rejected_status,
-            "db_no_store": db_headers.get("Cache-Control", ""),
+            "db_no_store": header_value(db_headers, "Cache-Control"),
             "database": database.get("database"),
             "users": len(users.get("users", [])),
             "explicit_generated": explicit.get("generated"),
@@ -2721,7 +2813,7 @@ def check_wordpress(
         passed=(
             patched.get("editable_env", {}).get("WP_DEBUG") == "false"
             and rejected_status == 422
-            and str(db_headers.get("Cache-Control", "")).startswith("no-store")
+            and header_value(db_headers, "Cache-Control").startswith("no-store")
             and explicit.get("generated") is False
             and explicit_login.get("ok") is True
             and bool(generated_password)
@@ -3130,7 +3222,9 @@ def start_agent_relay(cfg: Config) -> None:
         "SPANEL_EDGE_RELAY_SOCKET": str(cfg.stage / "runtime" / "edge-relay.sock"),
         "SPANEL_TRAEFIK_UID": "1000",
     }
-    start_process(
+    socket_path = cfg.stage / "runtime" / "edge-relay.sock"
+    socket_path.unlink(missing_ok=True)
+    pid = start_process(
         cfg,
         "edge-relay",
         [
@@ -3145,8 +3239,10 @@ def start_agent_relay(cfg: Config) -> None:
         relay_env,
         uid=1000,
     )
+    wait_socket(socket_path)
     primary = allocation(cfg.slug)
     wait_listener(cfg.relay_bind, 40000 + int(primary["index"]))
+    require_live_process(pid, "edge-relay")
 
 
 # ---------------------------------------------------------------------------
@@ -3167,11 +3263,14 @@ def phase_attest(cfg: Config, ev: Evidence, journal: Journal) -> None:
     }
     uid = int(allocation(cfg.slug)["uid"])
     limits = cgroup_limits(uid, slug=cfg.slug)
-    pid_result = run(
-        ["systemctl", "show", "-p", "MainPID", "--value", f"spanel-cell-{cfg.slug}"],
-        check=False,
-    )
-    pid = pid_result.stdout.strip()
+    from tenant_cell.doctor import HostProbe
+
+    probe = HostProbe()
+    main_pid = probe.service_main_pid(cfg.slug)
+    if main_pid <= 0:
+        main_pid = probe.user_service_main_pid(cfg.slug, uid)
+    daemon_pid = probe.daemon_pid(main_pid)
+    pid = str(daemon_pid) if daemon_pid > 0 else ""
     uid_map = ""
     netns_differs = False
     if pid.isdigit() and int(pid) > 0:
@@ -3201,13 +3300,24 @@ def phase_attest(cfg: Config, ev: Evidence, journal: Journal) -> None:
         except json.JSONDecodeError:
             labels[kind] = {}
     ingress = cell_docker(
-        cfg, cfg.slug, "ps", "-a", "--format", "{{.Names}} {{json .Config.Labels}}",
+        cfg, cfg.slug, "ps", "-a", "--format", "{{.Names}}",
         "--filter", "label=spanel.role=cell-infra", check=False,
     )
-    ingress_text = ingress.stdout.strip()
+    ingress_names = [name for name in ingress.stdout.splitlines() if name]
+    ingress_labels: dict[str, str] = {}
+    if ingress_names:
+        inspected = cell_docker(
+            cfg, cfg.slug, "inspect", "-f", "{{json .Config.Labels}}",
+            ingress_names[0], check=False,
+        )
+        try:
+            ingress_labels = json.loads(inspected.stdout or "{}")
+        except json.JSONDecodeError:
+            ingress_labels = {}
+    ingress_text = " ".join(ingress_names)
     ingress_ok = (
         "spanel-cell-ingress" in ingress_text
-        and '"spanel.role":"cell-infra"' in ingress_text
+        and ingress_labels.get("spanel.role") == "cell-infra"
     )
     scope = str(limits.get("scope", ""))
     cgroup_scope_ok = (
@@ -3251,11 +3361,12 @@ def phase_attest(cfg: Config, ev: Evidence, journal: Journal) -> None:
         "docker_info_rootless": "rootless" in (docker_info.stdout + docker_info.stderr).lower(),
         "cell_containers": sorted(cell_names),
         "labels": labels,
-        "ingress": ingress_text,
+        "ingress": {"names": ingress_names, "labels": ingress_labels},
         "ingress_ok": ingress_ok,
         "edge_relay_listening": edge_relay_listening,
         "cgroup_scope": scope,
         "cgroup_scope_ok": cgroup_scope_ok,
+        "main_pid": main_pid,
         "dockerd_pid": pid,
         "uid_map": uid_map,
         "uid_map_non_identity": is_non_identity_uid_map(uid_map),
@@ -3287,8 +3398,11 @@ def phase_attest(cfg: Config, ev: Evidence, journal: Journal) -> None:
             and site_containers.issubset(cell_names)
             and not (site_containers & rootful_names)
             and all(
-                labels.get(kind, {}).get("spanel.tenant")
-                and labels.get(kind, {}).get("spanel.site") == sites[kind]
+                labels.get(kind, {}).get("spanel.tenant") == tenant_id
+                and labels.get(kind, {}).get("spanel.site")
+                == journal.data["fixtures"]["sites"][kind]["container_name"]
+                .removeprefix("spanel-")
+                .removesuffix("-web" if kind == "static" else "-wp")
                 and labels.get(kind, {}).get("spanel.managed") == "true"
                 for kind in sites
             )
@@ -3769,4 +3883,3 @@ def _safe_api(cfg: Config, redactor: Redactor) -> Api | None:
 
 if __name__ == "__main__":
     raise SystemExit(main())
-

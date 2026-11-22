@@ -146,6 +146,8 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   mount options=(rw, private) -> /,
   mount options=(rw, private) -> /var/lib/spanel/cells/{slug}/**,
   mount options=(rw, rprivate) -> /var/lib/spanel/cells/{slug}/**,
+  # dockerd temporarily parks the old root at this namespace-local path.
+  mount options=(rw, rprivate) -> /.pivot_root*/,
   mount options=(rw, rslave) -> /,
   mount options=(rw, rslave) -> /var/lib/spanel/cells/{slug}/**,
   mount options in (ro, rw, bind, rbind, remount, nosuid, nodev, noexec, rslave) /var/lib/spanel/cells/{slug}/** -> /var/lib/spanel/cells/{slug}/**,
@@ -213,6 +215,7 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   mount options=(ro, nosuid, nodev, noexec, remount, bind) /** -> /proc/**,
   remount options=(ro, nosuid, nodev, noexec, bind) /proc/**,
   umount /,
+  umount /.pivot_root*/,
   umount /run/.ro*/**,
   pivot_root /var/lib/spanel/cells/{slug}/**,
   umount /var/lib/spanel/cells/{slug}/**,

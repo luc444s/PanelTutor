@@ -11,6 +11,7 @@ import os
 import socket
 import sys
 import threading
+import time
 import urllib.request
 from pathlib import Path
 from types import SimpleNamespace
@@ -190,6 +191,38 @@ def test_relay_forwards_the_exact_body_both_ways_and_filters_sources() -> None:
     finally:
         allowed.close()
         denied.close()
+        upstream.shutdown()
+        upstream.server_close()
+
+
+def test_connect_timeout_does_not_truncate_a_slow_response() -> None:
+    class SlowHandler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            time.sleep(0.15)
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(BODY)))
+            self.end_headers()
+            self.wfile.write(BODY)
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    upstream = http.server.ThreadingHTTPServer(("127.0.0.1", 0), SlowHandler)
+    threading.Thread(target=upstream.serve_forever, daemon=True).start()
+    relay_port = _free_port()
+    service = relay.TCPRelay(
+        "127.0.0.1", ("127.0.0.1",), connect_timeout=0.05
+    )
+    try:
+        service.apply(
+            _endpoint("slow", relay_port, int(upstream.server_address[1]))
+        )
+        with urllib.request.urlopen(
+            f"http://127.0.0.1:{relay_port}/", timeout=2
+        ) as reply:
+            assert reply.read() == BODY
+    finally:
+        service.close()
         upstream.shutdown()
         upstream.server_close()
 

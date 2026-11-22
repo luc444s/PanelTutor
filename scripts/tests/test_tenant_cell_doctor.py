@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 if str(ROOT) not in sys.path:
@@ -118,6 +119,46 @@ def test_report_is_json_serializable() -> None:
     assert set(payload["capabilities"]) == set(doctor_mod.CAPABILITIES)
     assert "ok" in payload["capabilities"]["kernel_cgroup2"]
     assert "detail" in payload["capabilities"]["kernel_cgroup2"]
+
+
+def test_user_service_main_pid_runs_as_cell_user(monkeypatch) -> None:
+    observed: dict[str, object] = {}
+
+    monkeypatch.setattr(
+        doctor_mod.pwd, "getpwuid", lambda uid: SimpleNamespace(pw_name="spanel-demo")
+    )
+
+    def fake_run(argv, **kwargs):
+        observed["argv"] = argv
+        observed["env"] = kwargs["env"]
+        return SimpleNamespace(stdout="4321\n")
+
+    monkeypatch.setattr(doctor_mod.subprocess, "run", fake_run)
+
+    assert doctor_mod.HostProbe().user_service_main_pid("demo", 60070) == 4321
+    assert observed["argv"] == [
+        "runuser", "-u", "spanel-demo", "--",
+        "systemctl", "--user", "show", "-p", "MainPID", "--value",
+        "spanel-cell-demo",
+    ]
+    assert observed["env"]["XDG_RUNTIME_DIR"] == "/run/user/60070"
+    assert observed["env"]["DBUS_SESSION_BUS_ADDRESS"] == (
+        "unix:path=/run/user/60070/bus"
+    )
+
+
+def test_daemon_pid_walks_through_rootlesskit_helper(monkeypatch) -> None:
+    files = {
+        "/proc/100/task/100/children": "200",
+        "/proc/200/comm": "rootlesskit\n",
+        "/proc/200/task/200/children": "300",
+        "/proc/300/comm": "dockerd\n",
+    }
+    monkeypatch.setattr(
+        doctor_mod, "_path_text", lambda path: files.get(str(path), "")
+    )
+
+    assert doctor_mod.HostProbe().daemon_pid(100) == 300
 
 
 def test_doctor_cli_json_honors_injected_probe(monkeypatch) -> None:

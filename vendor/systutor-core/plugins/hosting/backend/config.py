@@ -203,6 +203,15 @@ def build_run_args(info: dict, *, name: str, env_file: str) -> list[str]:
     return args
 
 
+def additional_networks(info: dict) -> tuple[str, ...]:
+    """Networks that must be reattached after recreating the container."""
+    host = _mapping(info.get("HostConfig"))
+    primary = str(host.get("NetworkMode") or "").strip()
+    settings = _mapping(info.get("NetworkSettings"))
+    networks = _mapping(settings.get("Networks"))
+    return tuple(sorted(str(name) for name in networks if str(name) != primary))
+
+
 class HostingConfig:
     """The canonical, non-secret view of a site's configuration."""
 
@@ -294,12 +303,15 @@ class RawAdapter:
             escribir_archivo_remoto_en(self.env, path, render_env(env))
 
         args = build_run_args(info, name=site.container_name, env_file=path)
+        extra_networks = additional_networks(info)
         try:
             self.provisioner.command("rm", "-f", site.container_name)
         except Fallo as exc:
             if "No such" not in str(exc) and "no such" not in str(exc):
                 raise
         self.provisioner.command("run", *args)
+        for network in extra_networks:
+            self.provisioner.command("network", "connect", network, site.container_name)
         return self.read_config(site)
 
     def rotate_salts(self, site: HostingSite) -> None:

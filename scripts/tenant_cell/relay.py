@@ -302,6 +302,10 @@ class TCPRelay:
             upstream = socket.create_connection(
                 (target.host, target.port), timeout=self.connect_timeout
             )
+            # ``connect_timeout`` bounds only the TCP handshake. Keeping it on
+            # the established socket truncates any response whose first byte
+            # takes longer (for example a cold WordPress dashboard).
+            upstream.settimeout(None)
         except OSError:
             client.close()
             return

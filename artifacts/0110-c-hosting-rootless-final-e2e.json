@@ -1,0 +1,1213 @@
+{
+  "baseline": {
+    "core": {
+      "spanel-lab-mariadb": "508d2431356e63160af45e69d00724620bfa135f19cb7ef29ca49f7762c85d01 running",
+      "spanel-lab-phpmyadmin": "440df56bd71aa0e95fc119906989f83d9ead4a5605bdcecf53f8b9ac79bf772e running",
+      "spanel-mail": "788d1ea7873899bac07bf83aa49d256de3ed731573a6185a8f44bd69c8b3883f running",
+      "spanel-powerdns-lab-auth": "bf2c8f723a2d572544ba9f313649c6c00710c8d8d2c88ae44474ac1fe497763f running",
+      "spanel-powerdns-lab-postgres": "9f0f6674c12fe86ec9da7f49b9e7583560fa7d70216361767a04bacbe32105d6 running",
+      "spanel-traefik-lab": "53e2009a35a6544de59a443e41dc149f0470a62c1b6552a1ebadcce9f1afc1c7 running"
+    },
+    "db_3306": [
+      "LISTEN 0      4096                               127.0.0.1:3306  0.0.0.0:*"
+    ],
+    "deny_since": 1795234309.921474,
+    "other_tenants": {
+      "cell-e2e-0104a": "7e8268d3884cd22c12e7570ff9ff2b74f61655d645c7ec26ee0e710f83c334b7",
+      "cell-e2e-0104b": "22f2d05ad4501bae19e665549dfb59bec76fa02e03eaa7976075ae49b2079760",
+      "cell-e2e-0105r8gitea": "d8c91f81fff30f1f736c640945d1bcb62552351afde4e14fefb3c1f0904c9827",
+      "cell-e2e-0105r8nginx": "e1dc0b47a7d9e1a1b8d9abb84e74770bed75086a9661edccf855561fa6e31892",
+      "cell-e2e-0105r8php": "ef199cd4f785ee019428a2e04d74e2080611f8f520640b43751a69ee0c2baaa0",
+      "cell-e2e-0105r8spa": "fa733e07be61bf6938fadfcbe7a8d357e6e8d37bcb8ddd6ca39d4550fdcb165f",
+      "cell-e2e-0105r9db": "ddf476294aa53402c8e65c249bed7917a0dcc3c0ed8743edccadbfea156c3e28",
+      "cell-e2e-0105r9gitea": "b93f1af337b7b3609fa63a337b570f445adcd0d9737383a4003c1d754cc6076b",
+      "cell-e2e-0105r9nginx": "cf5900be4a2d8b500ee9f61080de3c25ac40ec583ab5666730dd681e56a2a5c4",
+      "cell-e2e-0105r9php": "93979208a3361980631d5f910510c44719a2e550f791e41fbdc6da335b5abb78",
+      "cell-e2e-0105r9spa": "fafc5954271e3b4b0a801316ffefdf6e62505eccbc40fb43b8d9ae45feb146c5",
+      "cell-e2e-0105r9stack": "75746f334f64d0072090888b60f009937d5fd96066f8c25034b4384819386544",
+      "cell-e2e-pos3": "eb4aff3dbad4090df30a59a7b931c04f9e3a2554c3c4ffda2590d2e1a2fd94ab",
+      "cell-e2e-r3b": "27b62c2f793bcd069e47c2493c223208943f55a29697f7898910a171fad3a079",
+      "cell-e2e-wp1": "7ba716473290a8682568230a0bc0d0d30174b5712f1d2847aa6c7c7de22e49a8",
+      "cell-g": "411d6b0117b0a46247d62ba807fc0c0a7eee4b2af80a52a8b67c47f9d837181b",
+      "cell-h": "aa093733cea0cb98fe9d7bb3bde2320002b3aa2d884ee010eb2af94308d5d4fe",
+      "demo": "c9b8cf0b53d49e9ba88df45425e00a6057adf4b9d6027b8df00d8db19412ffad"
+    },
+    "rootful_containers": [
+      "app-26fbd4e6a85546f493525132-seed-1",
+      "app-8a8d248c3113437b80ef8d6f-seed-1",
+      "mailadmin-apps-worker-1",
+      "mailadmin-postgres-1",
+      "mailadmin-redis-1",
+      "software-de-gestion-para-editores-main_backend_1",
+      "software-de-gestion-para-editores-main_db_1",
+      "software-de-gestion-para-editores-main_frontend_1",
+      "spanel-app-1",
+      "spanel-apps-worker-1",
+      "spanel-astro-web",
+      "spanel-boot-web",
+      "spanel-lab-dns",
+      "spanel-lab-mariadb",
+      "spanel-lab-phpmyadmin",
+      "spanel-legacy-static-0110a-web",
+      "spanel-mail",
+      "spanel-paginadelucas-web",
+      "spanel-plain-web",
+      "spanel-postgres-1",
+      "spanel-powerdns-lab-auth",
+      "spanel-powerdns-lab-postgres",
+      "spanel-react-web",
+      "spanel-redis-1",
+      "spanel-second-tenant-0110a-web",
+      "spanel-step-ca",
+      "spanel-traefik-lab"
+    ],
+    "state_hashes": {
+      "/etc/subgid": "fa74be4ad3ad3840800a2e6463079bfbb78160ffbcba076914d18769a8dbd51d",
+      "/etc/subuid": "fa74be4ad3ad3840800a2e6463079bfbb78160ffbcba076914d18769a8dbd51d",
+      "/var/lib/spanel/audit.jsonl": "5c9a882bdb89add265cac70eaffbb04eb6d85eff04b981e910ac213ed4ba5888",
+      "/var/lib/spanel/plans.json": "dc2a7b9b3c39489c74560313c649da499e5a991b368311e052232b687f8f831f",
+      "/var/lib/spanel/registry.json": "a282ef49ab36e9dda534bc71112f7a370412495210a87d30d16dd0cf73a3eb55"
+    }
+  },
+  "checks": [
+    {
+      "duration_s": 0.0,
+      "expected": "root, cgroups v2, docker, live stack and disposable prerequisites",
+      "id": "preflight_host",
+      "observed": {
+        "cgroup": "/sys/fs/cgroup/cgroup.controllers",
+        "dynamic_dir": "/home/lucas/mailadmin/scripts/traefik-lab/dynamic",
+        "euid": 0,
+        "live_env": "/home/lucas/mailadmin/.env.docker"
+      },
+      "pass": true,
+      "surface": "host"
+    },
+    {
+      "duration_s": 0.0,
+      "expected": "disposable DB, API/worker, two rootless cells and agents",
+      "id": "setup_environment",
+      "observed": {
+        "api_port": 3011,
+        "cells": {
+          "e2e0110c": "ready",
+          "e2e0110c-intr": "ready"
+        },
+        "database": "sysadmin_e2e0110c"
+      },
+      "pass": true,
+      "surface": "host/CLI"
+    },
+    {
+      "duration_s": 0.0,
+      "expected": "static and WordPress created rootful with a URL-served marker",
+      "id": "rootful_fixtures",
+      "observed": {
+        "static": {
+          "http": {
+            "body_head": "0110-C fixture static-A\n",
+            "bytes": 24,
+            "matches": true,
+            "sha256": "ea6657dbff767e26bd6d4b7cd48254eb774f6a702f914bf19a079aed1883cc4c",
+            "status": 200
+          },
+          "site_id": "c436bbf0-381f-48d4-9b3d-61eb634b5d17"
+        },
+        "wordpress": {
+          "http": {
+            "body_head": "0110-C fixture wordpress-A\n",
+            "bytes": 27,
+            "matches": true,
+            "sha256": "3a69ff212233061aa75ec763db77bfc135aa1a4e8ca79b9199bce7dff31d0087",
+            "status": 200
+          },
+          "site_id": "069d11b8-d7de-4f8b-9ddd-6b353e6f115e"
+        }
+      },
+      "pass": true,
+      "surface": "API + public HTTP"
+    },
+    {
+      "duration_s": 0.0,
+      "expected": {
+        "cpus": 1,
+        "memory": 2147483648,
+        "pids": 512
+      },
+      "id": "plan_primary",
+      "observed": {
+        "cgroups": {
+          "cpu.max": "100000 100000",
+          "memory.max": "2147483648",
+          "pids.max": "512",
+          "scope": "/sys/fs/cgroup/user.slice/user-60071.slice/user@60071.service"
+        },
+        "plan": {
+          "applied_at": "2026-11-21T04:13:57.132447Z",
+          "cgroup_path": "/tenant.slice/tenant-e2e0110c.slice",
+          "cpus": 1.0,
+          "cpuset": null,
+          "last_error": null,
+          "memory_bytes": 2147483648,
+          "pids": 512,
+          "slice": "tenant-e2e0110c.slice",
+          "status": "applied",
+          "tenant_id": "658e5ca2-00a4-4672-b5c5-f093db3066fa",
+          "tenant_slug": "e2e0110c",
+          "updated_at": "2026-11-21T04:13:57.138192Z"
+        },
+        "verify": null,
+        "verify_error": "POST /plugins/apps/plan/verify: HTTP 502: {\"error\":{\"code\":\"apps.plan_materialization_failed\",\"message\":\"Plan verification failed\"}}"
+      },
+      "pass": true,
+      "surface": "POST /plugins/apps/plan + host cgroups"
+    },
+    {
+      "duration_s": 0.0,
+      "expected": "second tenant has its own rootless cell; cross-tenant access is denied later",
+      "id": "intruder_tenant_cell",
+      "observed": {
+        "cell_state": "ready",
+        "cell_uid": 60072,
+        "tenant_id": "f2e2024e-23b9-4afa-833f-0feadb5117e6"
+      },
+      "pass": true,
+      "surface": "API + host observation"
+    },
+    {
+      "duration_s": 0.0,
+      "expected": "migration retains a rollbackable rootless site",
+      "id": "migration_static",
+      "observed": {
+        "error": null,
+        "ok": true,
+        "operation_id": "8dc14a3d-0455-4a15-bd2e-e27a3b80928c",
+        "state": "retained",
+        "steps": [
+          "inventory",
+          "backup_verified",
+          "candidate_verified",
+          "route_cutover",
+          "external_http_verified",
+          "rootful_retained"
+        ]
+      },
+      "pass": true,
+      "surface": "operator CLI 0110-A"
+    },
+    {
+      "duration_s": 0.0,
+      "expected": "migration retains a rollbackable rootless site",
+      "id": "migration_wordpress",
+      "observed": {
+        "error": null,
+        "ok": true,
+        "operation_id": "a1f04597-56b2-44e5-a7d5-633fb9fa0195",
+        "state": "retained",
+        "steps": [
+          "inventory",
+          "backup_verified",
+          "candidate_verified",
+          "route_cutover",
+          "external_http_verified",
+          "rootful_retained"
+        ]
+      },
+      "pass": true,
+      "surface": "operator CLI 0110-A"
+    },
+    {
+      "duration_s": 0.0,
+      "expected": "both legacy sites migrate to rootless retaining data and rollback",
+      "id": "migrate_static_then_wordpress",
+      "observed": {
+        "static": {
+          "operation_id": "8dc14a3d-0455-4a15-bd2e-e27a3b80928c",
+          "state": "retained",
+          "steps": [
+            "inventory",
+            "backup_verified",
+            "candidate_verified",
+            "route_cutover",
+            "external_http_verified",
+            "rootful_retained"
+          ]
+        },
+        "wordpress": {
+          "operation_id": "a1f04597-56b2-44e5-a7d5-633fb9fa0195",
+          "state": "retained",
+          "steps": [
+            "inventory",
+            "backup_verified",
+            "candidate_verified",
+            "route_cutover",
+            "external_http_verified",
+            "rootful_retained"
+          ]
+        }
+      },
+      "pass": true,
+      "surface": "operator CLI 0110-A"
+    },
+    {
+      "duration_s": 1.52,
+      "expected": "real login, tenant scope isolated, platform-only scope=all, invalid JWT rejected",
+      "id": "auth_rbac_scope",
+      "observed": {
+        "all_sites": 2,
+        "intruder_cross_body": "{\"error\":{\"code\":\"not_found\",\"message\":\"Site not found\"}}",
+        "intruder_cross_site_status": 404,
+        "intruder_scope_all_status": 403,
+        "intruder_visible_site_ids": [],
+        "invalid_jwt_status": 500,
+        "tenant_sites": [
+          "069d11b8-d7de-4f8b-9ddd-6b353e6f115e",
+          "c436bbf0-381f-48d4-9b3d-61eb634b5d17"
+        ]
+      },
+      "pass": true,
+      "surface": "API auth"
+    },
+    {
+      "duration_s": 25.41,
+      "expected": "stop makes the site unavailable; start/restart recover HTTP 200",
+      "id": "lifecycle_static",
+      "observed": {
+        "after_restart": 200,
+        "down": {
+          "bytes": 0,
+          "sha256": "",
+          "status": 502
+        },
+        "restarted": "running",
+        "started": "running",
+        "stopped": "exited",
+        "up": 200
+      },
+      "pass": true,
+      "surface": "API lifecycle + public HTTP"
+    },
+    {
+      "duration_s": 0.21,
+      "expected": "log lines belong to the running site and never contain a secret",
+      "id": "logs_static",
+      "observed": {
+        "empty": false,
+        "lines": 10,
+        "secret_leak": "***"
+      },
+      "pass": true,
+      "surface": "API logs"
+    },
+    {
+      "duration_s": 36.64,
+      "expected": "stop makes the site unavailable; start/restart recover HTTP 200",
+      "id": "lifecycle_wordpress",
+      "observed": {
+        "after_restart": 200,
+        "down": {
+          "bytes": 0,
+          "sha256": "",
+          "status": 502
+        },
+        "restarted": "running",
+        "started": "running",
+        "stopped": "exited",
+        "up": 200
+      },
+      "pass": true,
+      "surface": "API lifecycle + public HTTP"
+    },
+    {
+      "duration_s": 0.23,
+      "expected": "log lines belong to the running site and never contain a secret",
+      "id": "logs_wordpress",
+      "observed": {
+        "empty": false,
+        "lines": 15,
+        "secret_leak": "***"
+      },
+      "pass": true,
+      "surface": "API logs"
+    },
+    {
+      "duration_s": 17.59,
+      "expected": "list/mkdir/upload/read/write/rename/download/ticket/zip/extract/delete with traversal rejected and content served",
+      "id": "filemanager_static",
+      "observed": {
+        "absolute": {
+          "body": "{\"detail\":\"Could not access the container files\"}",
+          "status": 502
+        },
+        "batch": true,
+        "deleted": true,
+        "direct_matches": true,
+        "extract": true,
+        "extracted_names": [
+          "b.txt"
+        ],
+        "listed": [
+          "50x.html",
+          "app.js",
+          "e2e",
+          "index.html",
+          "styles.css"
+        ],
+        "marker_preserved": true,
+        "read_version": true,
+        "renamed": true,
+        "replay_status": 401,
+        "save_version": true,
+        "served": 200,
+        "served_matches": true,
+        "ticket_matches": "***",
+        "ticket_status": "***",
+        "traversal": {
+          "body": "{\"detail\":\"Could not access the container files\"}",
+          "status": 502
+        },
+        "upload_status": 200,
+        "zip": true
+      },
+      "pass": true,
+      "surface": "File Manager API + public HTTP"
+    },
+    {
+      "duration_s": 6.83,
+      "expected": "list/mkdir/upload/read/write/rename/download/ticket/zip/extract/delete with traversal rejected and content served",
+      "id": "filemanager_wordpress",
+      "observed": {
+        "absolute": {
+          "body": "{\"detail\":\"Could not access the container files\"}",
+          "status": 502
+        },
+        "batch": true,
+        "deleted": true,
+        "direct_matches": true,
+        "extract": true,
+        "extracted_names": [
+          "b.txt"
+        ],
+        "listed": [
+          ".htaccess",
+          "e2e",
+          "index.php",
+          "license.txt",
+          "readme.html",
+          "wp-activate.php",
+          "wp-admin",
+          "wp-blog-header.php",
+          "wp-comments-post.php",
+          "wp-config-docker.php",
+          "wp-config-sample.php",
+          "wp-config.php",
+          "wp-content",
+          "wp-cron.php",
+          "wp-includes",
+          "wp-links-opml.php",
+          "wp-load.php",
+          "wp-login.php",
+          "wp-mail.php",
+          "wp-settings.php",
+          "wp-signup.php",
+          "wp-trackback.php",
+          "xmlrpc.php"
+        ],
+        "marker_preserved": true,
+        "read_version": true,
+        "renamed": true,
+        "replay_status": 401,
+        "save_version": true,
+        "served": 200,
+        "served_matches": true,
+        "ticket_matches": "***",
+        "ticket_status": "***",
+        "traversal": {
+          "body": "{\"detail\":\"Could not access the container files\"}",
+          "status": 502
+        },
+        "upload_status": 200,
+        "zip": true
+      },
+      "pass": true,
+      "surface": "File Manager API + public HTTP"
+    },
+    {
+      "duration_s": 2.87,
+      "expected": "ZIP restores the original static file; tickets are single use",
+      "id": "backup_static",
+      "observed": {
+        "bytes": 2554,
+        "filename": "static-spanel-0110c-static-e2e0110c-web.zip",
+        "import_status": 200,
+        "restored_sha256": "ea6657dbff767e26bd6d4b7cd48254eb774f6a702f914bf19a079aed1883cc4c",
+        "ticket_replay_status": "***"
+      },
+      "pass": true,
+      "surface": "API backup export/import + File Manager"
+    },
+    {
+      "duration_s": 78.41,
+      "expected": "A authenticates and B fails after restore; marker A reappears",
+      "id": "backup_wordpress_db_and_files",
+      "observed": {
+        "bytes": 37519450,
+        "import_status": 200,
+        "login_a": true,
+        "login_a_admin_status": 200,
+        "login_a_before": true,
+        "login_a_before_admin_status": 200,
+        "login_a_before_status": 302,
+        "login_a_status": 302,
+        "login_b": false,
+        "marker_a": true
+      },
+      "pass": true,
+      "surface": "API backup export/import + WordPress login + public HTTP"
+    },
+    {
+      "duration_s": 103.16,
+      "expected": "config whitelist, DB no-store, users/salts, PMA session and WP-only guards",
+      "id": "wordpress_surface",
+      "observed": {
+        "config_keys": [
+          "PHP_MEMORY_LIMIT",
+          "TZ",
+          "UPLOAD_LIMIT",
+          "WP_AUTO_UPDATE_CORE",
+          "WP_DEBUG"
+        ],
+        "database": "wp_dd307bbd15",
+        "db_no_store": "no-store",
+        "explicit_generated": false,
+        "explicit_login": true,
+        "generated_has_password": "***",
+        "generated_login": true,
+        "intruder_pma_status": 404,
+        "login_after_rotation": true,
+        "old_cookie_still_valid": "***",
+        "patched_debug": "false",
+        "pma_after": {
+          "connectors": 0,
+          "listeners": 0
+        },
+        "pma_before_open": {
+          "connectors": 0,
+          "listeners": 0
+        },
+        "pma_close_status": 204,
+        "pma_db_visible": true,
+        "pma_during": {
+          "connectors": 1,
+          "listeners": 3
+        },
+        "pma_exchange_status": 303,
+        "pma_relogin_server_change_status": 403,
+        "pma_replay_status": 401,
+        "pma_status": 200,
+        "rejected_db_key_status": 422,
+        "salts": [
+          "salts"
+        ],
+        "users": 1
+      },
+      "pass": true,
+      "surface": "Hosting API + WordPress HTTP + phpMyAdmin proxy"
+    },
+    {
+      "duration_s": 0.24,
+      "expected": "builtin list/get, CRUD of a disposable profile, conflicts rejected, builtin guarded",
+      "id": "static_profiles",
+      "observed": {
+        "builtin": "nginx",
+        "builtin_after": "nginx",
+        "builtin_guard": {
+          "body": "{\"error\":{\"code\":\"hosting_profile_builtin\",\"message\":\"The builtin nginx profile cannot be deleted\"}}",
+          "status": 409
+        },
+        "conflict": {
+          "error": {
+            "code": "hosting_profile_conflict",
+            "message": "Profile e2e35427 already exists"
+          }
+        },
+        "created": "e2e35427",
+        "deleted": true,
+        "profiles": [
+          "astro",
+          "boot",
+          "nginx",
+          "react"
+        ],
+        "updated_name": "0110C profile updated"
+      },
+      "pass": true,
+      "surface": "Hosting static-profiles API"
+    },
+    {
+      "duration_s": 0.13,
+      "expected": "static site rejects WP config/database/users/salts/PMA with the contractual error",
+      "id": "static_wordpress_only_guards",
+      "observed": {
+        "config": {
+          "body": "{\"error\":{\"code\":\"hosting_site_wrong_kind\",\"message\":\"Site spanel-0110c-static-e2e0110c-web is static; this operation is only for WordPress\"}}",
+          "status": 409
+        },
+        "database": {
+          "body": "{\"error\":{\"code\":\"hosting_site_wrong_kind\",\"message\":\"Site spanel-0110c-static-e2e0110c-web is static; this operation is only for WordPress\"}}",
+          "status": 409
+        },
+        "pma": {
+          "body": "{\"error\":{\"code\":\"hosting_site_wrong_kind\",\"message\":\"Site spanel-0110c-static-e2e0110c-web is static; this operation is only for WordPress\"}}",
+          "status": 409
+        },
+        "reset": {
+          "body": "{\"error\":{\"code\":\"hosting_site_wrong_kind\",\"message\":\"Site spanel-0110c-static-e2e0110c-web is static; this operation is only for WordPress\"}}",
+          "status": 409
+        },
+        "salts": {
+          "body": "{\"error\":{\"code\":\"hosting_site_wrong_kind\",\"message\":\"Site spanel-0110c-static-e2e0110c-web is static; this operation is only for WordPress\"}}",
+          "status": 409
+        },
+        "users": {
+          "body": "{\"error\":{\"code\":\"hosting_site_wrong_kind\",\"message\":\"Site spanel-0110c-static-e2e0110c-web is static; this operation is only for WordPress\"}}",
+          "status": 409
+        }
+      },
+      "pass": true,
+      "surface": "Hosting API"
+    },
+    {
+      "duration_s": 0.0,
+      "expected": "rollback restores rootful; a route failure auto-restores; re-migration retains",
+      "id": "rollback_and_controlled_failure",
+      "observed": {
+        "cleanup_state": "rolled_back",
+        "failed_ok": false,
+        "failed_state": "failed",
+        "relay_stop": "terminated",
+        "remigrate_state": "retained",
+        "rollback_state": "rolled_back",
+        "rootful_http_status": 200
+      },
+      "pass": true,
+      "surface": "operator CLI 0110-A + public HTTP"
+    },
+    {
+      "duration_s": 0.0,
+      "expected": "explicit finalize removes the rootful originals and keeps rootless serving",
+      "id": "finalize",
+      "observed": {
+        "static": {
+          "operation_id": "49d186ec-3037-4a8f-8213-31aea2f6dcef",
+          "state": "finalized",
+          "steps": [
+            "inventory",
+            "backup_verified",
+            "candidate_verified",
+            "route_cutover",
+            "external_http_verified",
+            "rootful_retained",
+            "rootful_removed"
+          ]
+        },
+        "wordpress": {
+          "operation_id": "a1f04597-56b2-44e5-a7d5-633fb9fa0195",
+          "state": "finalized",
+          "steps": [
+            "inventory",
+            "backup_verified",
+            "candidate_verified",
+            "route_cutover",
+            "external_http_verified",
+            "rootful_retained",
+            "rootful_removed"
+          ]
+        }
+      },
+      "pass": true,
+      "surface": "operator CLI 0110-A"
+    },
+    {
+      "duration_s": 0.0,
+      "expected": "site keeps serving after finalize",
+      "id": "after_finalize_static",
+      "observed": 200,
+      "pass": true,
+      "surface": "public HTTP"
+    },
+    {
+      "duration_s": 0.0,
+      "expected": "site keeps serving after finalize",
+      "id": "after_finalize_wordpress",
+      "observed": 200,
+      "pass": true,
+      "surface": "public HTTP"
+    },
+    {
+      "duration_s": 0.0,
+      "expected": "runtime=rootless for both sites, real non-identity uid_map, distinct netns, cgroup plan, exact labels, no rootful shadow, one endpoint, no DB port",
+      "id": "runtime_attestation",
+      "observed": {
+        "cell_containers": [
+          "spanel-0110c-static-e2e0110c-web",
+          "spanel-0110c-wp-e2e0110c-db",
+          "spanel-0110c-wp-e2e0110c-wp",
+          "spanel-cell-ingress"
+        ],
+        "cell_socket": "/var/lib/spanel/cells/e2e0110c/docker.sock",
+        "cgroup_limits": {
+          "cpu.max": "100000 100000",
+          "memory.max": "2147483648",
+          "pids.max": "512",
+          "scope": "/sys/fs/cgroup/user.slice/user-60071.slice/user@60071.service"
+        },
+        "cgroup_scope": "/sys/fs/cgroup/user.slice/user-60071.slice/user@60071.service",
+        "cgroup_scope_ok": true,
+        "core_after": {
+          "spanel-lab-mariadb": "508d2431356e63160af45e69d00724620bfa135f19cb7ef29ca49f7762c85d01 running",
+          "spanel-lab-phpmyadmin": "440df56bd71aa0e95fc119906989f83d9ead4a5605bdcecf53f8b9ac79bf772e running",
+          "spanel-mail": "788d1ea7873899bac07bf83aa49d256de3ed731573a6185a8f44bd69c8b3883f running",
+          "spanel-powerdns-lab-auth": "bf2c8f723a2d572544ba9f313649c6c00710c8d8d2c88ae44474ac1fe497763f running",
+          "spanel-powerdns-lab-postgres": "9f0f6674c12fe86ec9da7f49b9e7583560fa7d70216361767a04bacbe32105d6 running",
+          "spanel-traefik-lab": "53e2009a35a6544de59a443e41dc149f0470a62c1b6552a1ebadcce9f1afc1c7 running"
+        },
+        "core_unchanged": true,
+        "db_ports_published": [],
+        "docker_info_rootless": true,
+        "dockerd_pid": "208817",
+        "edge_relay_listening": true,
+        "hosts_http": [
+          200,
+          200
+        ],
+        "ingress": {
+          "labels": {
+            "maintainer": "NGINX Docker Maintainers <docker-maint@nginx.com>",
+            "spanel.managed": "true",
+            "spanel.role": "cell-infra"
+          },
+          "names": [
+            "spanel-cell-ingress"
+          ]
+        },
+        "ingress_ok": true,
+        "inventory_runtimes": {
+          "069d11b8-d7de-4f8b-9ddd-6b353e6f115e": "rootless",
+          "1012a51b-a62f-4e37-9f82-819f0f907beb:backend": "rootful",
+          "1012a51b-a62f-4e37-9f82-819f0f907beb:database": "rootful",
+          "1012a51b-a62f-4e37-9f82-819f0f907beb:frontend": "rootful",
+          "15b50ae8-c214-46a5-883e-dbd13b3d7657:backend": "rootful",
+          "15b50ae8-c214-46a5-883e-dbd13b3d7657:database": "rootful",
+          "15b50ae8-c214-46a5-883e-dbd13b3d7657:frontend": "rootful",
+          "4a0e3b46-b4da-4a34-a035-8dfafb3784f9:backend": "rootful",
+          "4a0e3b46-b4da-4a34-a035-8dfafb3784f9:database": "rootful",
+          "4a0e3b46-b4da-4a34-a035-8dfafb3784f9:frontend": "rootful",
+          "4c46f7e3-6bd6-4feb-b172-eaddc4ca99ae:web": "rootful",
+          "705cd067-aaa0-490c-aab0-5dd591a8fe1c:backend": "rootful",
+          "705cd067-aaa0-490c-aab0-5dd591a8fe1c:database": "rootful",
+          "705cd067-aaa0-490c-aab0-5dd591a8fe1c:frontend": "rootful",
+          "83dc3b3b-bbed-4e4a-965a-dc7e092dc51d:backend": "rootful",
+          "83dc3b3b-bbed-4e4a-965a-dc7e092dc51d:database": "rootful",
+          "83dc3b3b-bbed-4e4a-965a-dc7e092dc51d:frontend": "rootful",
+          "ab156baa-ef6b-4dc8-ae58-c742b54dffff:backend": "rootful",
+          "ab156baa-ef6b-4dc8-ae58-c742b54dffff:database": "rootful",
+          "ab156baa-ef6b-4dc8-ae58-c742b54dffff:frontend": "rootful",
+          "c436bbf0-381f-48d4-9b3d-61eb634b5d17": "rootless",
+          "caa2baf4-fb23-4b8d-bf98-1b4843b760ca:backend": "rootful",
+          "caa2baf4-fb23-4b8d-bf98-1b4843b760ca:database": "rootful",
+          "caa2baf4-fb23-4b8d-bf98-1b4843b760ca:frontend": "rootful"
+        },
+        "labels": {
+          "static": {
+            "maintainer": "NGINX Docker Maintainers <docker-maint@nginx.com>",
+            "spanel.kind": "static",
+            "spanel.managed": "true",
+            "spanel.profile": "nginx",
+            "spanel.site": "0110c-static-e2e0110c",
+            "spanel.tenant": "658e5ca2-00a4-4672-b5c5-f093db3066fa"
+          },
+          "wordpress": {
+            "spanel.managed": "true",
+            "spanel.site": "0110c-wp-e2e0110c",
+            "spanel.tenant": "658e5ca2-00a4-4672-b5c5-f093db3066fa"
+          }
+        },
+        "main_pid": 208768,
+        "netns_differs": true,
+        "rootful_shadow": [],
+        "second_tenant_after": {
+          "cell-e2e-0104a": "7e8268d3884cd22c12e7570ff9ff2b74f61655d645c7ec26ee0e710f83c334b7",
+          "cell-e2e-0104b": "22f2d05ad4501bae19e665549dfb59bec76fa02e03eaa7976075ae49b2079760",
+          "cell-e2e-0105r8gitea": "d8c91f81fff30f1f736c640945d1bcb62552351afde4e14fefb3c1f0904c9827",
+          "cell-e2e-0105r8nginx": "e1dc0b47a7d9e1a1b8d9abb84e74770bed75086a9661edccf855561fa6e31892",
+          "cell-e2e-0105r8php": "ef199cd4f785ee019428a2e04d74e2080611f8f520640b43751a69ee0c2baaa0",
+          "cell-e2e-0105r8spa": "fa733e07be61bf6938fadfcbe7a8d357e6e8d37bcb8ddd6ca39d4550fdcb165f",
+          "cell-e2e-0105r9db": "ddf476294aa53402c8e65c249bed7917a0dcc3c0ed8743edccadbfea156c3e28",
+          "cell-e2e-0105r9gitea": "b93f1af337b7b3609fa63a337b570f445adcd0d9737383a4003c1d754cc6076b",
+          "cell-e2e-0105r9nginx": "cf5900be4a2d8b500ee9f61080de3c25ac40ec583ab5666730dd681e56a2a5c4",
+          "cell-e2e-0105r9php": "93979208a3361980631d5f910510c44719a2e550f791e41fbdc6da335b5abb78",
+          "cell-e2e-0105r9spa": "fafc5954271e3b4b0a801316ffefdf6e62505eccbc40fb43b8d9ae45feb146c5",
+          "cell-e2e-0105r9stack": "75746f334f64d0072090888b60f009937d5fd96066f8c25034b4384819386544",
+          "cell-e2e-pos3": "eb4aff3dbad4090df30a59a7b931c04f9e3a2554c3c4ffda2590d2e1a2fd94ab",
+          "cell-e2e-r3b": "27b62c2f793bcd069e47c2493c223208943f55a29697f7898910a171fad3a079",
+          "cell-e2e-wp1": "7ba716473290a8682568230a0bc0d0d30174b5712f1d2847aa6c7c7de22e49a8",
+          "cell-g": "411d6b0117b0a46247d62ba807fc0c0a7eee4b2af80a52a8b67c47f9d837181b",
+          "cell-h": "aa093733cea0cb98fe9d7bb3bde2320002b3aa2d884ee010eb2af94308d5d4fe",
+          "demo": "c9b8cf0b53d49e9ba88df45425e00a6057adf4b9d6027b8df00d8db19412ffad"
+        },
+        "second_tenant_unchanged": true,
+        "uid_map": "0      60071          1\n         1    4778592      65536",
+        "uid_map_non_identity": true
+      },
+      "pass": true,
+      "surface": "host observation (docker/cgroups/proc/inventory)"
+    },
+    {
+      "duration_s": 0.0,
+      "expected": "no new DENIED/EPERM for either disposable cell",
+      "id": "delta_denied_zero",
+      "observed": {
+        "delta_denied": 0,
+        "since": 1795234309.921474
+      },
+      "pass": true,
+      "surface": "kernel audit journalctl -k"
+    },
+    {
+      "duration_s": 0.0,
+      "expected": "no new 3306 listener beyond the pre-run baseline",
+      "id": "no_permanent_db_port",
+      "observed": {
+        "after": [
+          "LISTEN 0      4096                               127.0.0.1:3306  0.0.0.0:*"
+        ],
+        "before": [
+          "LISTEN 0      4096                               127.0.0.1:3306  0.0.0.0:*"
+        ]
+      },
+      "pass": true,
+      "surface": "host ss -ltn"
+    },
+    {
+      "duration_s": 0.0,
+      "expected": "with rootless enabled the same name/domain is born in the cell, serves, and deletes",
+      "id": "new_rootless_static",
+      "observed": {
+        "create_http": 200,
+        "delete_http": 404,
+        "served": 200,
+        "site_id": "328f5fe8-6cb1-4ff4-8fcc-584bd00b40ed",
+        "upload_status": 200
+      },
+      "pass": true,
+      "surface": "API create/delete + public HTTP"
+    },
+    {
+      "duration_s": 0.0,
+      "expected": "with rootless enabled the same name/domain is born in the cell, serves, and deletes",
+      "id": "new_rootless_wordpress",
+      "observed": {
+        "create_http": 200,
+        "delete_http": 404,
+        "served": 200,
+        "site_id": "5af34d50-e4a9-4e45-85a1-9f8986cd2d5c",
+        "upload_status": 200
+      },
+      "pass": true,
+      "surface": "API create/delete + public HTTP"
+    }
+  ],
+  "cleanup": {
+    "already_deleted": [
+      "c436bbf0-381f-48d4-9b3d-61eb634b5d17",
+      "069d11b8-d7de-4f8b-9ddd-6b353e6f115e"
+    ],
+    "core": {
+      "after": {
+        "spanel-lab-mariadb": "508d2431356e63160af45e69d00724620bfa135f19cb7ef29ca49f7762c85d01 running",
+        "spanel-lab-phpmyadmin": "440df56bd71aa0e95fc119906989f83d9ead4a5605bdcecf53f8b9ac79bf772e running",
+        "spanel-mail": "788d1ea7873899bac07bf83aa49d256de3ed731573a6185a8f44bd69c8b3883f running",
+        "spanel-powerdns-lab-auth": "bf2c8f723a2d572544ba9f313649c6c00710c8d8d2c88ae44474ac1fe497763f running",
+        "spanel-powerdns-lab-postgres": "9f0f6674c12fe86ec9da7f49b9e7583560fa7d70216361767a04bacbe32105d6 running",
+        "spanel-traefik-lab": "53e2009a35a6544de59a443e41dc149f0470a62c1b6552a1ebadcce9f1afc1c7 running"
+      },
+      "before": {
+        "spanel-lab-mariadb": "508d2431356e63160af45e69d00724620bfa135f19cb7ef29ca49f7762c85d01 running",
+        "spanel-lab-phpmyadmin": "440df56bd71aa0e95fc119906989f83d9ead4a5605bdcecf53f8b9ac79bf772e running",
+        "spanel-mail": "788d1ea7873899bac07bf83aa49d256de3ed731573a6185a8f44bd69c8b3883f running",
+        "spanel-powerdns-lab-auth": "bf2c8f723a2d572544ba9f313649c6c00710c8d8d2c88ae44474ac1fe497763f running",
+        "spanel-powerdns-lab-postgres": "9f0f6674c12fe86ec9da7f49b9e7583560fa7d70216361767a04bacbe32105d6 running",
+        "spanel-traefik-lab": "53e2009a35a6544de59a443e41dc149f0470a62c1b6552a1ebadcce9f1afc1c7 running"
+      }
+    },
+    "core_unchanged": true,
+    "errors": [],
+    "fixture_containers_left": [],
+    "leftovers": "",
+    "other_tenants": {
+      "after": {
+        "cell-e2e-0104a": "7e8268d3884cd22c12e7570ff9ff2b74f61655d645c7ec26ee0e710f83c334b7",
+        "cell-e2e-0104b": "22f2d05ad4501bae19e665549dfb59bec76fa02e03eaa7976075ae49b2079760",
+        "cell-e2e-0105r8gitea": "d8c91f81fff30f1f736c640945d1bcb62552351afde4e14fefb3c1f0904c9827",
+        "cell-e2e-0105r8nginx": "e1dc0b47a7d9e1a1b8d9abb84e74770bed75086a9661edccf855561fa6e31892",
+        "cell-e2e-0105r8php": "ef199cd4f785ee019428a2e04d74e2080611f8f520640b43751a69ee0c2baaa0",
+        "cell-e2e-0105r8spa": "fa733e07be61bf6938fadfcbe7a8d357e6e8d37bcb8ddd6ca39d4550fdcb165f",
+        "cell-e2e-0105r9db": "ddf476294aa53402c8e65c249bed7917a0dcc3c0ed8743edccadbfea156c3e28",
+        "cell-e2e-0105r9gitea": "b93f1af337b7b3609fa63a337b570f445adcd0d9737383a4003c1d754cc6076b",
+        "cell-e2e-0105r9nginx": "cf5900be4a2d8b500ee9f61080de3c25ac40ec583ab5666730dd681e56a2a5c4",
+        "cell-e2e-0105r9php": "93979208a3361980631d5f910510c44719a2e550f791e41fbdc6da335b5abb78",
+        "cell-e2e-0105r9spa": "fafc5954271e3b4b0a801316ffefdf6e62505eccbc40fb43b8d9ae45feb146c5",
+        "cell-e2e-0105r9stack": "75746f334f64d0072090888b60f009937d5fd96066f8c25034b4384819386544",
+        "cell-e2e-pos3": "eb4aff3dbad4090df30a59a7b931c04f9e3a2554c3c4ffda2590d2e1a2fd94ab",
+        "cell-e2e-r3b": "27b62c2f793bcd069e47c2493c223208943f55a29697f7898910a171fad3a079",
+        "cell-e2e-wp1": "7ba716473290a8682568230a0bc0d0d30174b5712f1d2847aa6c7c7de22e49a8",
+        "cell-g": "411d6b0117b0a46247d62ba807fc0c0a7eee4b2af80a52a8b67c47f9d837181b",
+        "cell-h": "aa093733cea0cb98fe9d7bb3bde2320002b3aa2d884ee010eb2af94308d5d4fe",
+        "demo": "c9b8cf0b53d49e9ba88df45425e00a6057adf4b9d6027b8df00d8db19412ffad"
+      },
+      "before": {
+        "cell-e2e-0104a": "7e8268d3884cd22c12e7570ff9ff2b74f61655d645c7ec26ee0e710f83c334b7",
+        "cell-e2e-0104b": "22f2d05ad4501bae19e665549dfb59bec76fa02e03eaa7976075ae49b2079760",
+        "cell-e2e-0105r8gitea": "d8c91f81fff30f1f736c640945d1bcb62552351afde4e14fefb3c1f0904c9827",
+        "cell-e2e-0105r8nginx": "e1dc0b47a7d9e1a1b8d9abb84e74770bed75086a9661edccf855561fa6e31892",
+        "cell-e2e-0105r8php": "ef199cd4f785ee019428a2e04d74e2080611f8f520640b43751a69ee0c2baaa0",
+        "cell-e2e-0105r8spa": "fa733e07be61bf6938fadfcbe7a8d357e6e8d37bcb8ddd6ca39d4550fdcb165f",
+        "cell-e2e-0105r9db": "ddf476294aa53402c8e65c249bed7917a0dcc3c0ed8743edccadbfea156c3e28",
+        "cell-e2e-0105r9gitea": "b93f1af337b7b3609fa63a337b570f445adcd0d9737383a4003c1d754cc6076b",
+        "cell-e2e-0105r9nginx": "cf5900be4a2d8b500ee9f61080de3c25ac40ec583ab5666730dd681e56a2a5c4",
+        "cell-e2e-0105r9php": "93979208a3361980631d5f910510c44719a2e550f791e41fbdc6da335b5abb78",
+        "cell-e2e-0105r9spa": "fafc5954271e3b4b0a801316ffefdf6e62505eccbc40fb43b8d9ae45feb146c5",
+        "cell-e2e-0105r9stack": "75746f334f64d0072090888b60f009937d5fd96066f8c25034b4384819386544",
+        "cell-e2e-pos3": "eb4aff3dbad4090df30a59a7b931c04f9e3a2554c3c4ffda2590d2e1a2fd94ab",
+        "cell-e2e-r3b": "27b62c2f793bcd069e47c2493c223208943f55a29697f7898910a171fad3a079",
+        "cell-e2e-wp1": "7ba716473290a8682568230a0bc0d0d30174b5712f1d2847aa6c7c7de22e49a8",
+        "cell-g": "411d6b0117b0a46247d62ba807fc0c0a7eee4b2af80a52a8b67c47f9d837181b",
+        "cell-h": "aa093733cea0cb98fe9d7bb3bde2320002b3aa2d884ee010eb2af94308d5d4fe",
+        "demo": "c9b8cf0b53d49e9ba88df45425e00a6057adf4b9d6027b8df00d8db19412ffad"
+      }
+    },
+    "other_tenants_unchanged": true,
+    "removed_leftovers": [
+      "/home/spanel-e2e0110c-intr",
+      "/run/user/60072",
+      "/var/lib/spanel/cells/e2e0110c-intr",
+      "/home/spanel-e2e0110c",
+      "/run/user/60071",
+      "/var/lib/spanel/cells/e2e0110c"
+    ],
+    "removed_routes": [],
+    "removed_site_dirs": [],
+    "state_restored": true,
+    "stop_edge-relay": "terminated",
+    "stop_plan-agent": "terminated"
+  },
+  "cleanup_verified": true,
+  "delta_denied": 0,
+  "environment": {
+    "agents": {
+      "edge_relay_bind": "172.25.0.1",
+      "edge_relay_source": "172.25.0.3",
+      "plan_agent_socket": "/run/spanel/plan-agent.sock"
+    },
+    "api": "http://127.0.0.1:3011",
+    "cell": "e2e0110c",
+    "commit": "",
+    "database": "clone sysadmin_e2e0110c of sysadmin",
+    "domain_suffix": "lab",
+    "external_base": "http://127.0.0.1:9080",
+    "host": "lucas-ThinkPad-E570",
+    "image": "spanel-app:latest",
+    "intruder_cell": "e2e0110c-intr",
+    "kernel": "7.0.0-28-generic",
+    "note": "Entorno desechable: clon de BD, API/worker/redis/agentes ef\u00edmeros, dos celdas rootless; observaci\u00f3n host read-only."
+  },
+  "finalize": {
+    "static": {
+      "operation_id": "49d186ec-3037-4a8f-8213-31aea2f6dcef",
+      "state": "finalized",
+      "steps": [
+        "inventory",
+        "backup_verified",
+        "candidate_verified",
+        "route_cutover",
+        "external_http_verified",
+        "rootful_retained",
+        "rootful_removed"
+      ]
+    },
+    "wordpress": {
+      "operation_id": "a1f04597-56b2-44e5-a7d5-633fb9fa0195",
+      "state": "finalized",
+      "steps": [
+        "inventory",
+        "backup_verified",
+        "candidate_verified",
+        "route_cutover",
+        "external_http_verified",
+        "rootful_retained",
+        "rootful_removed"
+      ]
+    }
+  },
+  "finished_at": "2026-11-21T04:34:37.683300+00:00",
+  "fixtures": {
+    "cells": {
+      "e2e0110c": {
+        "apparmor": {
+          "effective": true,
+          "hash": "3ea18f832ab8f85662eafa5e6bc4b6e86379e101754e98c8a0905727bfa877c7",
+          "profile": "spanel-cell-e2e0110c"
+        },
+        "cgroup_driver": "systemd",
+        "cgroup_path": "/user.slice/user-60071.slice/user@60071.service/user.slice/spanel-cell-e2e0110c.scope",
+        "gid_map": [
+          {
+            "count": 1,
+            "host_id": 0,
+            "inner_id": 60071
+          },
+          {
+            "count": 65536,
+            "host_id": 1,
+            "inner_id": 4778592
+          }
+        ],
+        "network_mode": "skuid",
+        "slug": "e2e0110c",
+        "socket_path": "/var/lib/spanel/cells/e2e0110c/docker.sock",
+        "state": "ready",
+        "uid": 60071,
+        "uid_map": [
+          {
+            "count": 1,
+            "host_id": 0,
+            "inner_id": 60071
+          },
+          {
+            "count": 65536,
+            "host_id": 1,
+            "inner_id": 4778592
+          }
+        ]
+      },
+      "e2e0110c-intr": {
+        "apparmor": {
+          "effective": true,
+          "hash": "dad674dc33c117b454e3545eb73a03f0a072c267c890078409789c971c29dc4a",
+          "profile": "spanel-cell-e2e0110c-intr"
+        },
+        "cgroup_driver": "systemd",
+        "cgroup_path": "/user.slice/user-60072.slice/user@60072.service/user.slice/spanel-cell-e2e0110c-intr.scope",
+        "gid_map": [
+          {
+            "count": 4294967295,
+            "host_id": 0,
+            "inner_id": 0
+          }
+        ],
+        "network_mode": "skuid",
+        "slug": "e2e0110c-intr",
+        "socket_path": "/var/lib/spanel/cells/e2e0110c-intr/docker.sock",
+        "state": "ready",
+        "uid": 60072,
+        "uid_map": [
+          {
+            "count": 4294967295,
+            "host_id": 0,
+            "inner_id": 0
+          }
+        ]
+      }
+    },
+    "intruder": {
+      "cell": "e2e0110c-intr",
+      "tenant_id": "f2e2024e-23b9-4afa-833f-0feadb5117e6"
+    },
+    "migration": {
+      "static": {
+        "operation_id": "8dc14a3d-0455-4a15-bd2e-e27a3b80928c",
+        "state": "retained",
+        "steps": [
+          "inventory",
+          "backup_verified",
+          "candidate_verified",
+          "route_cutover",
+          "external_http_verified",
+          "rootful_retained"
+        ]
+      },
+      "wordpress": {
+        "operation_id": "a1f04597-56b2-44e5-a7d5-633fb9fa0195",
+        "state": "retained",
+        "steps": [
+          "inventory",
+          "backup_verified",
+          "candidate_verified",
+          "route_cutover",
+          "external_http_verified",
+          "rootful_retained"
+        ]
+      }
+    },
+    "sites": {
+      "static": {
+        "container_name": "spanel-0110c-static-e2e0110c-web",
+        "domain": "static-e2e0110c.lab",
+        "id": "c436bbf0-381f-48d4-9b3d-61eb634b5d17",
+        "kind": "static"
+      },
+      "wordpress": {
+        "container_name": "spanel-0110c-wp-e2e0110c-wp",
+        "domain": "wp-e2e0110c.lab",
+        "id": "069d11b8-d7de-4f8b-9ddd-6b353e6f115e",
+        "kind": "wordpress"
+      }
+    }
+  },
+  "gaps": [],
+  "ok": true,
+  "repairs": [
+    {
+      "action": "clone_database",
+      "database": "sysadmin_e2e0110c"
+    },
+    {
+      "action": "provision_cell",
+      "slug": "e2e0110c"
+    },
+    {
+      "action": "provision_cell",
+      "slug": "e2e0110c-intr"
+    },
+    {
+      "action": "kernel_compat_migration",
+      "revision": "20261119_0011",
+      "target": "sysadmin_e2e0110c"
+    }
+  ],
+  "result": "PASS",
+  "rollback": {
+    "cleanup_state": "rolled_back",
+    "failed_ok": false,
+    "failed_state": "failed",
+    "relay_stop": "terminated",
+    "remigrate_state": "retained",
+    "rollback_state": "rolled_back",
+    "rootful_http_status": 200
+  },
+  "runtime_attestation": {
+    "cell_containers": [
+      "spanel-0110c-static-e2e0110c-web",
+      "spanel-0110c-wp-e2e0110c-db",
+      "spanel-0110c-wp-e2e0110c-wp",
+      "spanel-cell-ingress"
+    ],
+    "cell_socket": "/var/lib/spanel/cells/e2e0110c/docker.sock",
+    "cgroup_limits": {
+      "cpu.max": "100000 100000",
+      "memory.max": "2147483648",
+      "pids.max": "512",
+      "scope": "/sys/fs/cgroup/user.slice/user-60071.slice/user@60071.service"
+    },
+    "cgroup_scope": "/sys/fs/cgroup/user.slice/user-60071.slice/user@60071.service",
+    "cgroup_scope_ok": true,
+    "core_after": {
+      "spanel-lab-mariadb": "508d2431356e63160af45e69d00724620bfa135f19cb7ef29ca49f7762c85d01 running",
+      "spanel-lab-phpmyadmin": "440df56bd71aa0e95fc119906989f83d9ead4a5605bdcecf53f8b9ac79bf772e running",
+      "spanel-mail": "788d1ea7873899bac07bf83aa49d256de3ed731573a6185a8f44bd69c8b3883f running",
+      "spanel-powerdns-lab-auth": "bf2c8f723a2d572544ba9f313649c6c00710c8d8d2c88ae44474ac1fe497763f running",
+      "spanel-powerdns-lab-postgres": "9f0f6674c12fe86ec9da7f49b9e7583560fa7d70216361767a04bacbe32105d6 running",
+      "spanel-traefik-lab": "53e2009a35a6544de59a443e41dc149f0470a62c1b6552a1ebadcce9f1afc1c7 running"
+    },
+    "core_unchanged": true,
+    "db_ports_published": [],
+    "docker_info_rootless": true,
+    "dockerd_pid": "208817",
+    "edge_relay_listening": true,
+    "hosts_http": [
+      200,
+      200
+    ],
+    "ingress": {
+      "labels": {
+        "maintainer": "NGINX Docker Maintainers <docker-maint@nginx.com>",
+        "spanel.managed": "true",
+        "spanel.role": "cell-infra"
+      },
+      "names": [
+        "spanel-cell-ingress"
+      ]
+    },
+    "ingress_ok": true,
+    "inventory_runtimes": {
+      "069d11b8-d7de-4f8b-9ddd-6b353e6f115e": "rootless",
+      "1012a51b-a62f-4e37-9f82-819f0f907beb:backend": "rootful",
+      "1012a51b-a62f-4e37-9f82-819f0f907beb:database": "rootful",
+      "1012a51b-a62f-4e37-9f82-819f0f907beb:frontend": "rootful",
+      "15b50ae8-c214-46a5-883e-dbd13b3d7657:backend": "rootful",
+      "15b50ae8-c214-46a5-883e-dbd13b3d7657:database": "rootful",
+      "15b50ae8-c214-46a5-883e-dbd13b3d7657:frontend": "rootful",
+      "4a0e3b46-b4da-4a34-a035-8dfafb3784f9:backend": "rootful",
+      "4a0e3b46-b4da-4a34-a035-8dfafb3784f9:database": "rootful",
+      "4a0e3b46-b4da-4a34-a035-8dfafb3784f9:frontend": "rootful",
+      "4c46f7e3-6bd6-4feb-b172-eaddc4ca99ae:web": "rootful",
+      "705cd067-aaa0-490c-aab0-5dd591a8fe1c:backend": "rootful",
+      "705cd067-aaa0-490c-aab0-5dd591a8fe1c:database": "rootful",
+      "705cd067-aaa0-490c-aab0-5dd591a8fe1c:frontend": "rootful",
+      "83dc3b3b-bbed-4e4a-965a-dc7e092dc51d:backend": "rootful",
+      "83dc3b3b-bbed-4e4a-965a-dc7e092dc51d:database": "rootful",
+      "83dc3b3b-bbed-4e4a-965a-dc7e092dc51d:frontend": "rootful",
+      "ab156baa-ef6b-4dc8-ae58-c742b54dffff:backend": "rootful",
+      "ab156baa-ef6b-4dc8-ae58-c742b54dffff:database": "rootful",
+      "ab156baa-ef6b-4dc8-ae58-c742b54dffff:frontend": "rootful",
+      "c436bbf0-381f-48d4-9b3d-61eb634b5d17": "rootless",
+      "caa2baf4-fb23-4b8d-bf98-1b4843b760ca:backend": "rootful",
+      "caa2baf4-fb23-4b8d-bf98-1b4843b760ca:database": "rootful",
+      "caa2baf4-fb23-4b8d-bf98-1b4843b760ca:frontend": "rootful"
+    },
+    "labels": {
+      "static": {
+        "maintainer": "NGINX Docker Maintainers <docker-maint@nginx.com>",
+        "spanel.kind": "static",
+        "spanel.managed": "true",
+        "spanel.profile": "nginx",
+        "spanel.site": "0110c-static-e2e0110c",
+        "spanel.tenant": "658e5ca2-00a4-4672-b5c5-f093db3066fa"
+      },
+      "wordpress": {
+        "spanel.managed": "true",
+        "spanel.site": "0110c-wp-e2e0110c",
+        "spanel.tenant": "658e5ca2-00a4-4672-b5c5-f093db3066fa"
+      }
+    },
+    "main_pid": 208768,
+    "netns_differs": true,
+    "rootful_shadow": [],
+    "second_tenant_after": {
+      "cell-e2e-0104a": "7e8268d3884cd22c12e7570ff9ff2b74f61655d645c7ec26ee0e710f83c334b7",
+      "cell-e2e-0104b": "22f2d05ad4501bae19e665549dfb59bec76fa02e03eaa7976075ae49b2079760",
+      "cell-e2e-0105r8gitea": "d8c91f81fff30f1f736c640945d1bcb62552351afde4e14fefb3c1f0904c9827",
+      "cell-e2e-0105r8nginx": "e1dc0b47a7d9e1a1b8d9abb84e74770bed75086a9661edccf855561fa6e31892",
+      "cell-e2e-0105r8php": "ef199cd4f785ee019428a2e04d74e2080611f8f520640b43751a69ee0c2baaa0",
+      "cell-e2e-0105r8spa": "fa733e07be61bf6938fadfcbe7a8d357e6e8d37bcb8ddd6ca39d4550fdcb165f",
+      "cell-e2e-0105r9db": "ddf476294aa53402c8e65c249bed7917a0dcc3c0ed8743edccadbfea156c3e28",
+      "cell-e2e-0105r9gitea": "b93f1af337b7b3609fa63a337b570f445adcd0d9737383a4003c1d754cc6076b",
+      "cell-e2e-0105r9nginx": "cf5900be4a2d8b500ee9f61080de3c25ac40ec583ab5666730dd681e56a2a5c4",
+      "cell-e2e-0105r9php": "93979208a3361980631d5f910510c44719a2e550f791e41fbdc6da335b5abb78",
+      "cell-e2e-0105r9spa": "fafc5954271e3b4b0a801316ffefdf6e62505eccbc40fb43b8d9ae45feb146c5",
+      "cell-e2e-0105r9stack": "75746f334f64d0072090888b60f009937d5fd96066f8c25034b4384819386544",
+      "cell-e2e-pos3": "eb4aff3dbad4090df30a59a7b931c04f9e3a2554c3c4ffda2590d2e1a2fd94ab",
+      "cell-e2e-r3b": "27b62c2f793bcd069e47c2493c223208943f55a29697f7898910a171fad3a079",
+      "cell-e2e-wp1": "7ba716473290a8682568230a0bc0d0d30174b5712f1d2847aa6c7c7de22e49a8",
+      "cell-g": "411d6b0117b0a46247d62ba807fc0c0a7eee4b2af80a52a8b67c47f9d837181b",
+      "cell-h": "aa093733cea0cb98fe9d7bb3bde2320002b3aa2d884ee010eb2af94308d5d4fe",
+      "demo": "c9b8cf0b53d49e9ba88df45425e00a6057adf4b9d6027b8df00d8db19412ffad"
+    },
+    "second_tenant_unchanged": true,
+    "uid_map": "0      60071          1\n         1    4778592      65536",
+    "uid_map_non_identity": true
+  },
+  "spec": "0110-C",
+  "started_at": "2026-11-21T04:11:49.645255+00:00"
+}
