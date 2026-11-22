@@ -7,7 +7,7 @@ COPY apps/web/package.json apps/web/package-lock.json* ./apps/web/
 COPY vendor/ ./vendor/
 
 WORKDIR /app/apps/web
-RUN npm ci --prefer-offline --no-audit --no-fund
+RUN npm ci --ignore-scripts --prefer-offline --no-audit --no-fund
 
 COPY apps/web/ ./
 RUN npm run build
