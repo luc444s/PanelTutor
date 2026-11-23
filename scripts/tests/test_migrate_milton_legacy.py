@@ -81,6 +81,11 @@ def test_verify_timeout_is_parsed() -> None:
     assert args.verify_timeout == 180.0
 
 
+def test_verify_local_is_parsed() -> None:
+    args = mod.parser().parse_args(["--statics", "--verify-local"])
+    assert args.verify_local is True
+
+
 def test_stream_pipes_the_source_into_the_sink(tmp_path) -> None:
     target = tmp_path / "out"
     mod.stream(

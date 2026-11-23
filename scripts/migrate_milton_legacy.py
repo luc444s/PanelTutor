@@ -404,6 +404,77 @@ def extract_image_dir(
 # ---------------------------------------------------------------------------
 
 
+def verify_via_traefik(
+    domain: str,
+    *,
+    https: bool = True,
+    deadline_seconds: float = 30.0,
+    initial_backoff: float = 0.25,
+    max_backoff: float = 2.0,
+) -> None:
+    """Verify a route through the local Traefik, bypassing public DNS/CDN.
+
+    Cloudflare (or any external proxy) may challenge non-browser clients with
+    a 403 even when the origin route is healthy. This probe connects to the
+    ``traefik`` service on the Docker proxy network, sends the real SNI/Host
+    and follows the same Traefik -> relay -> ingress -> backend chain.
+    """
+    import socket
+    import ssl
+
+    port = 443 if https else 80
+    deadline = time.monotonic() + max(0.0, deadline_seconds)
+    delay = max(0.0, initial_backoff)
+    last_error: Exception | None = None
+    while True:
+        remaining = deadline - time.monotonic()
+        try:
+            raw = socket.create_connection(
+                ("traefik", port), timeout=max(0.1, min(5.0, remaining))
+            )
+            conn = raw
+            if https:
+                context = ssl.create_default_context()
+                conn = context.wrap_socket(raw, server_hostname=domain)
+            with conn:
+                conn.sendall(
+                    (
+                        f"GET / HTTP/1.1\r\nHost: {domain}\r\n"
+                        "Connection: close\r\n\r\n"
+                    ).encode()
+                )
+                chunks: list[bytes] = []
+                while True:
+                    chunk = conn.recv(65536)
+                    if not chunk:
+                        break
+                    chunks.append(chunk)
+            head = b"".join(chunks).split(b"\r\n", 1)[0].decode(errors="replace")
+            parts = head.split()
+            status = int(parts[1]) if len(parts) > 1 else 0
+            if status == 200:
+                return
+            last_error = RuntimeError(f"local Traefik returned {status}")
+        except (OSError, ssl.SSLError, ValueError) as exc:
+            last_error = exc
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise RuntimeError(
+                f"local Traefik route was not ready before deadline: {last_error}"
+            ) from last_error
+        sleep_for = min(delay, remaining)
+        if sleep_for > 0:
+            time.sleep(sleep_for)
+        delay = min(max_backoff, max(delay * 2, 0.01))
+
+
+def _patch_external_verify(function: Any) -> None:
+    from plugins.hosting.backend import rootless_ingress, rootless_migration
+
+    rootless_ingress.verify_external_route = function
+    rootless_migration.verify_external_route = function
+
+
 def publish_custom_route(
     app: Any,
     db: Any,
@@ -1011,6 +1082,14 @@ def parser() -> argparse.ArgumentParser:
         default=None,
         help="Override the external HTTP probe deadline in seconds.",
     )
+    p.add_argument(
+        "--verify-local",
+        action="store_true",
+        help=(
+            "Verify through the local Traefik (Host/SNI) instead of the public "
+            "domain. Bypasses Cloudflare challenges and external DNS."
+        ),
+    )
     p.add_argument("--yes", action="store_true", help="Skip the confirmation.")
     p.add_argument(
         "--force", action="store_true", help="Recreate target containers/volumes."
@@ -1035,23 +1114,35 @@ def main(argv: list[str] | None = None) -> int:
     if args.dry_run:
         args.apply = False
     if args.skip_external_verify:
-        from plugins.hosting.backend import rootless_migration
-
-        rootless_migration.verify_external_route = lambda *a, **k: None
+        _patch_external_verify(lambda *a, **k: None)
         print(
             "   AVISO: verificación HTTP externa omitida; valida la ruta a mano",
             flush=True,
         )
-    elif args.verify_timeout is not None:
-        from plugins.hosting.backend import rootless_migration
+    elif args.verify_local:
 
-        original_verify = rootless_migration.verify_external_route
+        def local_verify(domain, *, https=True, deadline_seconds=30.0, **kwargs):
+            if args.verify_timeout is not None:
+                deadline_seconds = args.verify_timeout
+            return verify_via_traefik(
+                domain, https=https, deadline_seconds=deadline_seconds
+            )
+
+        _patch_external_verify(local_verify)
+        print(
+            "   verificación local vía Traefik (Host/SNI; sin DNS público)",
+            flush=True,
+        )
+    elif args.verify_timeout is not None:
+        from plugins.hosting.backend import rootless_ingress
+
+        original_verify = rootless_ingress.verify_external_route
 
         def patient_verify(domain, *, https=True, **kwargs):
             kwargs.setdefault("deadline_seconds", args.verify_timeout)
             return original_verify(domain, https=https, **kwargs)
 
-        rootless_migration.verify_external_route = patient_verify
+        _patch_external_verify(patient_verify)
         print(
             f"   verificación HTTP externa: deadline {args.verify_timeout:g}s",
             flush=True,

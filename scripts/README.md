@@ -751,17 +751,24 @@ Evidence is written to
 **Write operation; run as root.** Idempotent installer for
 `spanel-plan-agent.service` and `spanel-edge-relay.service`. It creates
 `/etc/spanel/plan_agent_token` mode `0600` once (never rotates), renders the
-units with the real repo/Python/data root, app-container UID and Traefik UID,
-enables them and verifies the sockets plus the `capacity` op.
+units with the real repo/Python/data root, app-container UID, Traefik UID
+and Traefik IP (the unprivileged relay cannot inspect Docker itself), enables
+them and verifies the sockets plus the `capacity` op.
 
 ```bash
 python3 scripts/install_tenant_agents.py --check
 python3 scripts/install_tenant_agents.py --dry-run
 python3 scripts/install_tenant_agents.py --traefik-uid 1000
+python3 scripts/install_tenant_agents.py --traefik-ip 172.18.0.4
 ```
 
 If a unit already exists with different content it refuses to overwrite it;
 inspect the difference and use `--force` deliberately.
+
+Cell provisioning also opens the cell's relay port (`40000+index`) in UFW,
+limited to the Traefik IP, and deprovisioning removes it. If the host uses a
+different firewall manager, `provision` reports the firewall as skipped; open
+the relay port range `40000:59999/tcp` from the Traefik IP manually.
 
 ### `migrate_tenant_apps.py`
 
@@ -809,6 +816,10 @@ Default is dry-run. `--wordpress` stops the four legacy WordPress containers
 and `mariadb`, copies the bind data into cell volumes, starts the shared
 MariaDB in the cell and cuts the routes over. The rootful containers/data stay
 available for rollback.
+
+If a domain is behind Cloudflare, the public probe can receive a bot challenge
+(403) even when the origin is healthy. Use `--verify-local` to verify through
+the local Traefik service (`Host`/SNI) instead of public DNS.
 
 ## Auxiliary files
 

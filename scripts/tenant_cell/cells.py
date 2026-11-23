@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from . import alloc, apparmor, audit, network
+from . import alloc, apparmor, audit, firewall, network
 from .alloc import DEFAULT_CGROUP_DRIVER, LEGACY_CGROUP_DRIVER, cgroup_driver
 from .doctor import DoctorReport, HostProbe, run_doctor
 from .executor import Executor  # re-exported for tests
@@ -223,6 +223,13 @@ class CellService:
             self.executor.ensure_cell_egress(int(cell["uid"]), network.egress_subnet())
             applied["egress"] = True
 
+        # The relay port is fronted by the host firewall; without this rule a
+        # healthy cell still times out for Traefik. Idempotent and fail-safe.
+        firewall_result = firewall.ensure_relay_ingress(int(cell["index"]))
+        applied["firewall"] = bool(
+            firewall_result.get("active") and not firewall_result.get("error")
+        )
+
         alloc.update_allocation(
             self.data_root,
             slug,
@@ -242,7 +249,9 @@ class CellService:
             state="ready",
         )
         self._keep_plan(slug)
-        return self.status(slug)
+        result = self.status(slug)
+        result["firewall"] = firewall_result
+        return result
 
     def deprovision(self, slug: str, keep_data: bool = True) -> dict[str, Any]:
         """Tear down daemon/unit/network/profile; keep data unless purged."""
@@ -262,6 +271,7 @@ class CellService:
             return {"slug": slug, "state": state, "data_kept": False}
 
         applied = cell.get("applied", {})
+        firewall_result = firewall.remove_relay_ingress(int(cell["index"]))
         driver = cgroup_driver(cell)
         if applied.get("egress"):
             self.executor.remove_cell_egress(
@@ -296,7 +306,12 @@ class CellService:
             self.data_root, tenant_slug=slug, verb="deprovision",
             exit_code=0, state=state, keep_data=keep_data,
         )
-        return {"slug": slug, "state": state, "data_kept": keep_data}
+        return {
+            "slug": slug,
+            "state": state,
+            "data_kept": keep_data,
+            "firewall": firewall_result,
+        }
 
     def repair(self, slug: str) -> dict[str, Any]:
         """Re-install profile, daemon config, unit and network rules.
@@ -336,6 +351,10 @@ class CellService:
         if live_pid <= 0:
             raise RuntimeError("cannot repair cell egress NAT without a running daemon")
         self.executor.ensure_cell_egress(int(cell["uid"]), network.egress_subnet())
+        firewall_result = firewall.ensure_relay_ingress(int(cell["index"]))
+        applied["firewall"] = bool(
+            firewall_result.get("active") and not firewall_result.get("error")
+        )
         applied["apparmor"] = True
         applied["daemon_config"] = True
         applied["systemd"] = True
@@ -352,7 +371,9 @@ class CellService:
             self.data_root, tenant_slug=slug, verb="repair", exit_code=0
         )
         self._keep_plan(slug)
-        return self.status(slug)
+        result = self.status(slug)
+        result["firewall"] = firewall_result
+        return result
 
     def verify_limits(self, slug: str) -> dict[str, Any]:
         """A.SPEC 0099: prove the kernel applies the limits, not just Docker."""
