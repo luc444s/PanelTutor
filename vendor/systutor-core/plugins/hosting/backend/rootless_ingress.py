@@ -134,7 +134,11 @@ class RootlessIngress:
                 f"server_name {route.domain}; "
                 "location / { "
                 f"proxy_pass http://{route.target}:{route.port}; "
-                "proxy_set_header Host $host; proxy_set_header X-Forwarded-Proto $scheme; "
+                "proxy_set_header Host $host; "
+                # Traefik terminates TLS and already sends the real scheme.
+                # Do not overwrite it with $scheme (the relay hop is HTTP):
+                # WordPress would see HTTP and redirect to HTTPS every time.
+                "proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto; "
                 "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; } }"
             )
         return ("\n".join(blocks) + "\n").encode()

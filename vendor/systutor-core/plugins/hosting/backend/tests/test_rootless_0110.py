@@ -90,6 +90,8 @@ def test_ingress_config_multiplexes_hosts_without_paths_or_argv() -> None:
     ).decode()
     assert "server_name one.example.test" in content
     assert "proxy_pass http://spanel-two-web:8080" in content
+    assert "X-Forwarded-Proto $http_x_forwarded_proto" in content
+    assert "X-Forwarded-Proto $scheme" not in content
     assert content.index("one.example.test") < content.index("two.example.test")
     assert "listen 80 default_server" in content
 
