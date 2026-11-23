@@ -199,6 +199,17 @@ def read_wp_config(
     not declared" error instead of turning a missing file into a leak or a
     traceback. The content never enters the error path.
     """
+    runtime = env.get("_SPANEL_RUNTIME_HANDLE")
+    if runtime is not None:
+        # A rootless site lives in its tenant cell, not in the rootful daemon.
+        # `run(build_docker_argv(...))` would read the legacy container (or a
+        # missing one) and report a false "database not declared" error.
+        try:
+            return runtime.command(
+                ("exec", container_name, "cat", WP_CONFIG_PATH)
+            ).decode(errors="replace")
+        except Exception:  # noqa: BLE001 - an unreadable file is not fatal here
+            return None
     command = f"docker exec {shlex.quote(container_name)} cat {WP_CONFIG_PATH}"
     result = run(build_docker_argv(command, env=env), env=env, timeout=timeout)
     if result.returncode != 0:

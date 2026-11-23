@@ -162,3 +162,45 @@ def test_a_failed_read_returns_none_without_raising(monkeypatch) -> None:
 
     monkeypatch.setattr(wpconfig, "run", fake_run)
     assert read_wp_config({"SPANEL_DOCKER_TRANSPORT": "local"}, "missing") is None
+
+
+class FakeRuntime:
+    def __init__(self, *, fail: bool = False) -> None:
+        self.commands: list[tuple[str, ...]] = []
+        self.fail = fail
+
+    def command(self, args, *, input=None):  # noqa: ANN001
+        self.commands.append(tuple(args))
+        if self.fail:
+            raise RuntimeError("container is stopped")
+        return _config().encode()
+
+
+def test_read_wp_config_uses_the_rootless_runtime(monkeypatch) -> None:
+    def fake_run(argv, *, env, timeout=30, input=None):
+        raise AssertionError("the rootful transport must not be used")
+
+    monkeypatch.setattr(wpconfig, "run", fake_run)
+    runtime = FakeRuntime()
+    text = read_wp_config(
+        {"_SPANEL_RUNTIME_HANDLE": runtime},
+        "gestiongases",
+    )
+
+    assert text == _config()
+    assert runtime.commands == [
+        ("exec", "gestiongases", "cat", "/var/www/html/wp-config.php")
+    ]
+
+
+def test_read_wp_config_returns_none_when_the_rootless_runtime_fails(
+    monkeypatch,
+) -> None:
+    def fake_run(argv, *, env, timeout=30, input=None):
+        raise AssertionError("the rootful transport must not be used")
+
+    monkeypatch.setattr(wpconfig, "run", fake_run)
+    assert read_wp_config(
+        {"_SPANEL_RUNTIME_HANDLE": FakeRuntime(fail=True)},
+        "gestiongases",
+    ) is None
