@@ -40,6 +40,7 @@ def installer(tmp_path, monkeypatch):
         data_root="/var/lib/spanel",
         app_container="spanel-app-1",
         traefik_uid=1000,
+        traefik_ip="172.18.0.4",
         etc_dir=tmp_path / "etc",
         unit_dir=tmp_path / "units",
         runtime_dir=tmp_path / "run",
@@ -84,6 +85,7 @@ def test_install_creates_token_and_renders_units(installer) -> None:
     # None of the units may declare RuntimeDirectory (systemd would chown it).
     assert "RuntimeDirectory=" not in plan
     assert "RuntimeDirectory=" not in relay
+    assert "Environment=SPANEL_EDGE_RELAY_SOURCES=172.18.0.4" in relay
     assert "ReadWritePaths=" in plan and "/run/spanel" in plan
     runtime = (inst.tmpfiles_path).read_text()
     assert "d /run/spanel 0770 root 1000 -" in runtime

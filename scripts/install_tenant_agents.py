@@ -151,6 +151,19 @@ def resolve_traefik_uid(override: int | None) -> int:
     return uid
 
 
+DEFAULT_PROXY_NETWORK = "proxy"
+DEFAULT_TRAEFIK_CONTAINER = "traefik"
+
+
+def detect_traefik_ip(container: str = DEFAULT_TRAEFIK_CONTAINER) -> str:
+    """Read Traefik's address in the proxy network (installer runs as root)."""
+    fmt = '{{(index .NetworkSettings.Networks "%s").IPAddress}}' % (
+        DEFAULT_PROXY_NETWORK,
+    )
+    checked = run(["docker", "inspect", "-f", fmt, container])
+    return checked.stdout.strip() if checked.returncode == 0 else ""
+
+
 def render_unit(
     template: str,
     *,
@@ -250,6 +263,7 @@ class Installer:
         data_root: str = DEFAULT_DATA_ROOT,
         app_container: str = DEFAULT_APP_CONTAINER,
         traefik_uid: int | None = None,
+        traefik_ip: str | None = None,
         etc_dir: Path = Path("/etc/spanel"),
         unit_dir: Path = Path("/etc/systemd/system"),
         runtime_dir: Path = Path("/run/spanel"),
@@ -260,6 +274,7 @@ class Installer:
         self.data_root = data_root
         self.app_container = app_container
         self.traefik_uid_override = traefik_uid
+        self.traefik_ip_override = traefik_ip
         self.etc_dir = etc_dir
         self.unit_dir = unit_dir
         self.runtime_dir = runtime_dir
@@ -304,6 +319,12 @@ class Installer:
             traefik_error = str(exc)
         else:
             traefik_error = ""
+        traefik_ip = self.traefik_ip_override or detect_traefik_ip()
+        if not traefik_ip:
+            traefik_error = traefik_error or (
+                "cannot detect the Traefik IP in the proxy network; "
+                "pass --traefik-ip"
+            )
         try:
             app_uid = detect_app_uid(self.app_container)
             app_error = ""
@@ -324,7 +345,10 @@ class Installer:
             python=self.python,
             repo=self.repo,
             data_root=self.data_root,
-            replacements={"<SPANEL_TRAEFIK_UID>": traefik_uid or DEFAULT_TRAEFIK_UID},
+            replacements={
+                "<SPANEL_TRAEFIK_UID>": traefik_uid or DEFAULT_TRAEFIK_UID,
+                "<SPANEL_TRAEFIK_IP>": traefik_ip,
+            },
         )
         runtime = runtime_template.replace(
             "<SPANEL_TRAEFIK_UID>", str(traefik_uid or DEFAULT_TRAEFIK_UID)
@@ -359,6 +383,7 @@ class Installer:
             "app_container": self.app_container,
             "app_uid": app_uid,
             "traefik_uid": traefik_uid,
+            "traefik_ip": traefik_ip,
             "token": {
                 "path": str(self.token_path),
                 "exists": self.token_path.is_file(),
@@ -409,6 +434,16 @@ class Installer:
         if not interpreter_ok:
             raise InstallError(interpreter_error)
         traefik_uid = int(inspect["traefik_uid"])
+        traefik_ip = str(
+            inspect.get("traefik_ip")
+            or self.traefik_ip_override
+            or detect_traefik_ip()
+        )
+        if not traefik_ip:
+            raise InstallError(
+                "cannot detect the Traefik IP in the proxy network; "
+                "pass --traefik-ip"
+            )
         if inspect.get("app_uid", -1) < 0:
             raise InstallError(
                 "cannot resolve the app container UID: "
@@ -439,7 +474,10 @@ class Installer:
             python=self.python,
             repo=self.repo,
             data_root=self.data_root,
-            replacements={"<SPANEL_TRAEFIK_UID>": traefik_uid},
+            replacements={
+                "<SPANEL_TRAEFIK_UID>": traefik_uid,
+                "<SPANEL_TRAEFIK_IP>": traefik_ip,
+            },
         )
         runtime = runtime_template.replace("<SPANEL_TRAEFIK_UID>", str(traefik_uid))
 
@@ -451,6 +489,7 @@ class Installer:
             "token": token,
             "app_uid": inspect["app_uid"],
             "traefik_uid": traefik_uid,
+            "traefik_ip": traefik_ip,
             "python": self.python,
             "units": {},
         }
@@ -541,6 +580,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--data-root", default=DEFAULT_DATA_ROOT)
     parser.add_argument("--app-container", default=DEFAULT_APP_CONTAINER)
     parser.add_argument("--traefik-uid", type=int, default=None)
+    parser.add_argument(
+        "--traefik-ip",
+        default=None,
+        help="Traefik IP in the proxy network (detected when omitted).",
+    )
     parser.add_argument("--python", default=None, help="Interpreter used in the units.")
     parser.add_argument("--etc-dir", type=Path, default=Path("/etc/spanel"))
     parser.add_argument("--unit-dir", type=Path, default=Path("/etc/systemd/system"))
@@ -557,6 +601,7 @@ def main(argv: list[str] | None = None) -> int:
         data_root=args.data_root,
         app_container=args.app_container,
         traefik_uid=args.traefik_uid,
+        traefik_ip=args.traefik_ip,
         etc_dir=args.etc_dir,
         unit_dir=args.unit_dir,
         runtime_dir=args.runtime_dir,

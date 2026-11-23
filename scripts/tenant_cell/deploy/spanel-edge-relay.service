@@ -26,6 +26,10 @@ Environment=SPANEL_EDGE_RELAY_BIND=172.18.0.1
 Environment=SPANEL_EDGE_RELAY_SOCKET=/run/spanel/edge-relay.sock
 # Optional override: SPANEL_EDGE_RELAY_SOURCES=<traefik-ip> (detected from the
 # proxy network when unset). Never a wildcard: an empty allowlist denies all.
+# The relay is unprivileged and cannot inspect Docker, so the installer must
+# render the Traefik IP explicitly; otherwise the allowlist is empty and all
+# rootless routes fail closed.
+Environment=SPANEL_EDGE_RELAY_SOURCES=<SPANEL_TRAEFIK_IP>
 # /run/spanel is created by the tmpfiles.d entry installed from
 # scripts/tenant_cell/deploy/spanel-runtime.conf as root:<traefik-gid> 0770.
 # Do NOT declare RuntimeDirectory here: systemd would chown it to Traefik's uid
