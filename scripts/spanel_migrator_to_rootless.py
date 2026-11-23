@@ -543,8 +543,13 @@ class Operator:
             return [payload]
         return [item for item in results if isinstance(item, dict)]
 
-    def hosting_migrate(self, site_id: str) -> dict[str, Any]:
-        return self.hosting("migrate", "--site", site_id, timeout=3600)
+    def hosting_migrate(
+        self, site_id: str, *, shared_db: str | None = None
+    ) -> dict[str, Any]:
+        args = ["migrate", "--site", site_id]
+        if shared_db:
+            args.extend(["--shared-db", shared_db])
+        return self.hosting(*args, timeout=3600)
 
     def hosting_finalize(
         self, site_id: str, operation_id: str, domain: str
@@ -648,6 +653,7 @@ class MigrationPlan:
     storage_bytes: int | None = None
     kinds: tuple[str, ...] = KINDS
     site_ids: tuple[str, ...] = ()
+    shared_db: str | None = None
     skip_plan: bool = False
     skip_sites: bool = False
     finalize: bool = False
@@ -1031,7 +1037,9 @@ class Migrator:
                 self.journal.event("sites", "migrate_preview", ok=True, detail=site)
                 continue
             try:
-                result = self.ops.hosting_migrate(site_id)
+                result = self.ops.hosting_migrate(
+                    site_id, shared_db=self.plan.shared_db
+                )
             except OperatorError as exc:
                 result = {"ok": False, "site_id": site_id, "error": str(exc)}
             self.journal.event(
@@ -1240,6 +1248,14 @@ def _parser() -> argparse.ArgumentParser:
         action="append",
         default=[],
         help="Restrict the migration to this site id (repeatable).",
+    )
+    parser.add_argument(
+        "--shared-db",
+        default=None,
+        help=(
+            "Legacy shared database container for WordPress (explicit opt-in, "
+            "e.g. mariadb). Forces a maintenance window."
+        ),
     )
     parser.add_argument(
         "--skip-plan",
@@ -1462,6 +1478,7 @@ def build_plan(
         storage_bytes=storage_bytes,
         kinds=kinds,
         site_ids=tuple(args.site),
+        shared_db=args.shared_db,
         skip_plan=args.skip_plan,
         skip_sites=args.skip_sites,
         finalize=args.finalize,
@@ -1503,6 +1520,8 @@ def print_summary(plan: MigrationPlan, console: Console) -> None:
     else:
         which = "all" if plan.site_ids == () else ", ".join(plan.site_ids)
         console.info(f"sites:         {which} ({', '.join(plan.kinds)})")
+        if plan.shared_db:
+            console.info(f"shared DB:     {plan.shared_db} (legacy maintenance window)")
         console.info(f"end state:     {'finalized' if plan.finalize else 'retained'}")
         console.info(
             f"on failure:    {'rollback all migrated' if plan.rollback_on_failure else 'stop'}"

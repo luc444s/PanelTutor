@@ -702,6 +702,10 @@ Useful flags:
 
 - `--dry-run`: previews every phase without host mutation.
 - `--only static|wordpress` or `--site <id>` (repeatable).
+- `--shared-db <container>`: explicit legacy shared MariaDB for WordPress.
+  It stops every rootful WordPress that uses it plus the database, copies the
+  database volume once, starts it in the cell and migrates the sites against it.
+  This is a maintenance window and is never enabled automatically.
 - `--skip-plan` / `--skip-sites`: partial runs.
 - `--finalize`: removes the rootful copy after a successful migration. The
   default is **retained**, with a verified backup and rollback available.
@@ -729,9 +733,10 @@ active release and the Apps worker places it on the tenant's rootless socket.
 Apps without a signed release are reported as `requires_hardening`; they are
 never hardened with guessed service users or writable paths.
 
-Current Hosting limitation: the migrator assumes **one managed MySQL container
-per WordPress**. A tenant-wide shared MySQL is detected as a different topology
-and is not migrated by this tool yet; do not force it with `--site`.
+Current Hosting limitation: the default migrator assumes **one managed MySQL
+container per WordPress**. A tenant-wide shared MySQL requires the explicit
+`--shared-db <container>` mode; it is never auto-detected and is intended only
+for a tenant-exclusive legacy database.
 
 `--storage` is a **declared** limit (A.SPEC 0111), not a filesystem quota. The
 script validates it against free space and records it in the plan/evidence, but

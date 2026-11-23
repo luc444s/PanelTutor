@@ -704,6 +704,10 @@ Opciones útiles:
 
 - `--dry-run`: previsualiza todas las fases sin mutar el host.
 - `--only static|wordpress` o `--site <id>` (repetible).
+- `--shared-db <contenedor>`: MariaDB legacy compartido para WordPress. Para
+  todos los WordPress rootful que lo usan y la base, copia el volumen una sola
+  vez, lo arranca en la celda y migra los sitios contra él. Es una ventana de
+  mantenimiento y nunca se activa automáticamente.
 - `--skip-plan` / `--skip-sites`: ejecuciones parciales.
 - `--finalize`: elimina la copia rootful tras migrar. Por defecto el estado es
   **retained**, con backup verificado y rollback disponible.
@@ -731,9 +735,10 @@ firmada ya activa y el worker la coloca en el socket rootless del tenant. Las
 Apps sin release firmada se reportan como `requires_hardening`; nunca se
 endurecen con usuarios o rutas adivinadas.
 
-Limitación actual de Hosting: el migrador asume **un MySQL gestionado por
-WordPress**. Un MySQL compartido por todo el tenant es una topología distinta y
-todavía no la migra esta herramienta; no la fuerces con `--site`.
+Limitación actual de Hosting: el migrador por defecto asume **un MySQL
+gestionado por WordPress**. Un MySQL compartido por todo el tenant requiere el
+modo explícito `--shared-db <contenedor>`; nunca se autodetecta y está pensado
+solo para una base legacy exclusiva del tenant.
 
 `--storage` es un límite **declarado** (A.SPEC 0111), no una cuota de
 filesystem. El script lo valida contra el espacio libre y lo registra en el plan

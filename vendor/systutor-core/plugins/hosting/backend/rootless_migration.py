@@ -35,6 +35,15 @@ from .static import StaticNames, StaticProvisioner
 FINAL_STATES = {"failed", "rolled_back", "finalized"}
 
 
+def shared_network_name(slug: str) -> str:
+    """Stable internal network for a tenant's legacy shared database."""
+    name = f"spanel-{slug}-shared-db"
+    if len(name) <= 63:
+        return name
+    digest = hashlib.sha256(slug.encode()).hexdigest()[:8]
+    return f"spanel-{slug[:40]}-{digest}-db"[:63]
+
+
 def _redact(error: Exception) -> str:
     text = str(error)
     text = re.sub(r"(?i)(password|passwd|pwd)=([^\s;]+)", r"\1=<hidden>", text)
@@ -300,7 +309,14 @@ class RootlessMigrationService:
         )
         return site.container_name, names.container_port
 
-    def _wordpress(self, site: HostingSite, source, target) -> tuple[str, int]:
+    def _wordpress(
+        self,
+        site: HostingSite,
+        source,
+        target,
+        *,
+        shared_db: str | None = None,
+    ) -> tuple[str, int]:
         wp = source.inspect("container", site.container_name)
         if wp is None:
             raise RuntimeError("source WordPress container missing")
@@ -311,12 +327,78 @@ class RootlessMigrationService:
         database = source.inspect("container", db_name)
         if database is None:
             raise RuntimeError("managed WordPress database missing")
+        wp_volume = self._volume(wp, "/var/www/html")
+        wp_file = target.write_private(
+            f"{site.container_name}/wp.env",
+            ("\n".join((wp.get("Config") or {}).get("Env") or []) + "\n").encode(),
+        )
+        # The first copy is live; the second runs after the source is stopped so
+        # the candidate sees a stable tree.
+        self._copy_volume(source, target, wp_volume, site)
+
+        if shared_db is not None:
+            if db_name != shared_db:
+                raise RuntimeError(
+                    f"WORDPRESS_DB_HOST points to {db_name!r}, not the requested "
+                    f"shared database {shared_db!r}"
+                )
+            shared_network = shared_network_name(
+                self._tenant_slug(site.tenant_id)
+            )
+            self._ensure_shared_database(
+                shared_db, source, target, site, database, shared_network
+            )
+            source.command(("stop", site.container_name))
+            self._copy_volume(source, target, wp_volume, site)
+            target.command(
+                (
+                    "run",
+                    "-d",
+                    "--name",
+                    site.container_name,
+                    "--network",
+                    shared_network,
+                    "--restart",
+                    "unless-stopped",
+                    "--label",
+                    "spanel.managed=true",
+                    "--label",
+                    f"spanel.tenant={site.tenant_id}",
+                    "--label",
+                    f"spanel.site={site.container_name.removeprefix('spanel-').removesuffix('-wp')}",
+                    "--env-file",
+                    wp_file,
+                    "-v",
+                    f"{wp_volume}:/var/www/html",
+                    str((wp.get("Config") or {}).get("Image") or self.settings.wp_image),
+                )
+            )
+            target.command(("network", "connect", "spanel-hosting", site.container_name))
+            self._wait_container(target, site.container_name)
+            candidate = Provisioner(self.settings, target)
+            candidate._wait(
+                lambda: candidate.command(
+                    "run",
+                    "--rm",
+                    "--network",
+                    shared_network,
+                    "--volumes-from",
+                    site.container_name,
+                    "--env-file",
+                    wp_file,
+                    "wordpress:cli",
+                    "wp",
+                    "core",
+                    "is-installed",
+                ),
+                "migrated WordPress database",
+            )
+            return site.container_name, 80
+
         labels = (database.get("Config") or {}).get("Labels") or {}
         if labels.get("spanel.tenant") != site.tenant_id:
             raise RuntimeError("WordPress database ownership mismatch")
-        wp_volume = self._volume(wp, "/var/www/html")
         db_volume = self._volume(database, "/var/lib/mysql")
-        self._copy_volume(source, target, wp_volume, site)
         source.command(("stop", site.container_name))
         self._copy_volume(source, target, wp_volume, site)
         self._copy_volume(source, target, db_volume, site)
@@ -340,10 +422,6 @@ class RootlessMigrationService:
         db_file = target.write_private(
             f"{site.container_name}/db.env",
             ("\n".join((database.get("Config") or {}).get("Env") or []) + "\n").encode(),
-        )
-        wp_file = target.write_private(
-            f"{site.container_name}/wp.env",
-            ("\n".join((wp.get("Config") or {}).get("Env") or []) + "\n").encode(),
         )
         target.command(
             (
@@ -410,7 +488,126 @@ class RootlessMigrationService:
         )
         return site.container_name, 80
 
-    def migrate(self, site_id: str, *, dry_run: bool = False) -> dict[str, Any]:
+    def _tenant_slug(self, tenant_id: str) -> str:
+        from systutor.kernel.tenants.models import Tenant
+
+        tenant = self.db.get(Tenant, tenant_id)
+        if tenant is None or not getattr(tenant, "slug", ""):
+            raise RuntimeError("tenant slug is unavailable for the shared database")
+        return str(tenant.slug)
+
+    def _stop_shared_db_consumers(self, site: HostingSite, source, shared_db: str) -> None:
+        """Stop every rootful WordPress that points at the shared database.
+
+        A consistent volume copy needs the legacy MariaDB stopped. Stopping all
+        consumers first keeps the maintenance window explicit and avoids
+        leaving half of the sites querying a database that is being copied.
+        """
+        rows = self.db.scalars(
+            select(HostingSite).where(
+                HostingSite.tenant_id == site.tenant_id,
+                HostingSite.kind == "wordpress",
+            )
+        ).all()
+        for row in rows:
+            info = source.inspect("container", row.container_name)
+            host = env_of(info or {}).get("WORDPRESS_DB_HOST", "").split(":", 1)[0]
+            if host == shared_db:
+                try:
+                    source.command(("stop", row.container_name))
+                except Exception:  # noqa: BLE001 - a missing site must not abort the copy
+                    continue
+
+    def _ensure_shared_database(
+        self,
+        shared_db: str,
+        source,
+        target,
+        site: HostingSite,
+        database: dict[str, Any],
+        network: str,
+    ) -> None:
+        existing = target.inspect("container", shared_db)
+        if existing is not None:
+            state = existing.get("State") or {}
+            if state.get("Running") is not True and state.get("Status") != "running":
+                target.command(("start", shared_db))
+                self._wait_container(target, shared_db)
+            return
+        # Explicit legacy mode: stop the consumers and the shared MariaDB before
+        # copying its volume. This is the operator-accepted maintenance window.
+        self._stop_shared_db_consumers(site, source, shared_db)
+        try:
+            source.command(("stop", shared_db))
+        except Exception:  # noqa: BLE001 - already stopped is not an error
+            pass
+        if target.inspect("network", network) is None:
+            target.command(
+                (
+                    "network",
+                    "create",
+                    "--internal",
+                    "--label",
+                    "spanel.managed=true",
+                    "--label",
+                    f"spanel.tenant={site.tenant_id}",
+                    "--label",
+                    "spanel.role=legacy-shared-db",
+                    network,
+                )
+            )
+        db_volume = self._volume(database, "/var/lib/mysql")
+        if target.inspect("volume", db_volume) is None:
+            target.command(
+                (
+                    "volume",
+                    "create",
+                    "--label",
+                    "spanel.managed=true",
+                    "--label",
+                    f"spanel.tenant={site.tenant_id}",
+                    "--label",
+                    "spanel.role=legacy-shared-db",
+                    db_volume,
+                )
+            )
+            target.import_volume(db_volume, source.export_volume(db_volume))
+        db_file = target.write_private(
+            f"{shared_db}/db.env",
+            ("\n".join((database.get("Config") or {}).get("Env") or []) + "\n").encode(),
+        )
+        target.command(
+            (
+                "run",
+                "-d",
+                "--name",
+                shared_db,
+                "--network",
+                network,
+                "--restart",
+                "unless-stopped",
+                "--label",
+                "spanel.managed=true",
+                "--label",
+                f"spanel.tenant={site.tenant_id}",
+                "--label",
+                "spanel.role=legacy-shared-db",
+                "--env-file",
+                db_file,
+                "-v",
+                f"{db_volume}:/var/lib/mysql",
+                str((database.get("Config") or {}).get("Image") or self.settings.db_image),
+            )
+        )
+        self._wait_container(target, shared_db)
+
+    def migrate(
+        self,
+        site_id: str,
+        *,
+        dry_run: bool = False,
+        shared_db: str | None = None,
+    ) -> dict[str, Any]:
         if dry_run:
             return self.plan(site_id)
         site = self._site(site_id)
@@ -445,6 +642,14 @@ class RootlessMigrationService:
                     for m in info.get("Mounts", [])
                     if m.get("Type") == "volume" and m.get("Name")
                 ]
+                if shared_db is not None and site.kind == "wordpress":
+                    shared_info = source.inspect("container", shared_db)
+                    if shared_info is not None:
+                        shared_volume = self._volume(
+                            shared_info, "/var/lib/mysql"
+                        )
+                        if shared_volume not in volumes:
+                            volumes.append(shared_volume)
                 self._step(row, "copying", "inventory")
                 self._stop_source(site, source)
                 row.backup_path, row.backup_sha256 = self._backup_stream(site, source, volumes)
@@ -453,7 +658,9 @@ class RootlessMigrationService:
                 target_name, port = (
                     self._static(site, source, target)
                     if site.kind == "static"
-                    else self._wordpress(site, source, target)
+                    else self._wordpress(
+                        site, source, target, shared_db=shared_db
+                    )
                 )
                 self._step(row, "candidate_ready", "candidate_verified")
                 route = RouteSpec(site.id, site.tenant_id, str(site.domain), target_name, port)

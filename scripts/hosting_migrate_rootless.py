@@ -56,6 +56,11 @@ def _parser() -> argparse.ArgumentParser:
         item.add_argument("--all", action="store_true")
         item.add_argument("--kind", choices=("static", "wordpress"))
         item.add_argument("--exclude", action="append", default=[])
+        item.add_argument(
+            "--shared-db",
+            default=None,
+            help="Legacy shared database container (explicit opt-in).",
+        )
         item.add_argument("--json", action="store_true")
         if name == "migrate":
             item.add_argument("--dry-run", action="store_true")
@@ -105,7 +110,9 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
                     result = (
                         service.plan(site.id)
                         if args.command == "plan" or args.dry_run
-                        else service.migrate(site.id)
+                        else service.migrate(
+                            site.id, shared_db=getattr(args, "shared_db", None)
+                        )
                     )
                 except Exception as exc:  # noqa: BLE001 - CLI redacts the boundary
                     result = {

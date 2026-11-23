@@ -95,8 +95,8 @@ class FakeOperator:
         self.calls.append(("hosting_sites", tenant, kinds, site_ids))
         return list(self.site_plans)
 
-    def hosting_migrate(self, site_id):
-        self.calls.append(("hosting_migrate", site_id))
+    def hosting_migrate(self, site_id, *, shared_db=None):
+        self.calls.append(("hosting_migrate", site_id, shared_db))
         return dict(self.migrate_result)
 
     def hosting_finalize(self, site_id, operation_id, domain):
@@ -283,7 +283,7 @@ def test_rollback_on_failure_rolls_back_migrated_sites(tmp_path) -> None:
     results = {("hosting_migrate", "s1"): first, ("hosting_migrate", "s2"): second}
     original = ops.hosting_migrate
 
-    def migrate(site_id):
+    def migrate(site_id, **kwargs):
         ops.calls.append(("hosting_migrate", site_id))
         return dict(results[("hosting_migrate", site_id)])
 
@@ -295,6 +295,14 @@ def test_rollback_on_failure_rolls_back_migrated_sites(tmp_path) -> None:
         migrator.run()
     assert ("hosting_rollback", "s1", "op-1") in ops.calls
     del original
+
+
+def test_shared_db_is_forwarded_to_hosting(tmp_path) -> None:
+    migrator, ops, _console, _journal = make_migrator(
+        tmp_path, plan=make_plan(shared_db="mariadb")
+    )
+    migrator.run()
+    assert ("hosting_migrate", "s1", "mariadb") in ops.calls
 
 
 def test_dry_run_does_not_migrate_or_finalize(tmp_path) -> None:
