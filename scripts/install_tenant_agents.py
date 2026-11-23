@@ -529,11 +529,21 @@ class Installer:
             )
         if start:
             for name in (PLAN_UNIT, RELAY_UNIT):
-                enabled = run(["systemctl", "enable", "--now", name], timeout=90)
+                enabled = run(["systemctl", "enable", name], timeout=90)
                 if enabled.returncode != 0:
                     raise InstallError(
                         f"cannot enable {name}: "
                         + (enabled.stderr or enabled.stdout).strip()[:300]
+                    )
+                # ``enable --now`` is a no-op for an already-running unit, so a
+                # rewritten unit would keep the old environment until reboot.
+                action = results["units"].get(name)
+                verb = "restart" if action == "written" else "start"
+                started = run(["systemctl", verb, name], timeout=90)
+                if started.returncode != 0:
+                    raise InstallError(
+                        f"cannot {verb} {name}: "
+                        + (started.stderr or started.stdout).strip()[:300]
                     )
             if not wait_socket(self.agent_socket):
                 raise InstallError(

@@ -91,6 +91,13 @@ def test_install_creates_token_and_renders_units(installer) -> None:
     assert "d /run/spanel 0770 root 1000 -" in runtime
     # The human renderer must accept both install and --check payloads.
     mod._print_human(payload)
+
+
+def test_install_restarts_units_it_rewrote(installer) -> None:
+    inst, fake = installer
+    inst.install(start=True)
+    assert ["systemctl", "restart", mod.PLAN_UNIT] in fake.calls
+    assert ["systemctl", "restart", mod.RELAY_UNIT] in fake.calls
     assert any(call[:2] == ["systemctl", "daemon-reload"] for call in fake.calls)
 
 
