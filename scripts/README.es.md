@@ -504,6 +504,26 @@ sus redes. `--down` elimina únicamente el contenedor phpMyAdmin.
 script. Restringe los hosts aceptados a `mariadb` o nombres terminados en
 `-db`.
 
+### `configure_phpmyadmin_rootless.py`
+
+**Operación de escritura; ejecutar como root.** Descubre el contenedor
+phpMyAdmin compartido, su red/IP/gateway, la dirección de Postgres alcanzable
+desde el host y las celdas listas. Después escribe el `EnvironmentFile` del
+plan-agent, actualiza `SPANEL_PHPMYADMIN_SOURCE_IP` en `.env.docker`, recrea
+app/worker solo si hace falta, abre el rango del broker en UFW y precarga la
+imagen conectora fijada por digest. No hay direcciones hardcodeadas; vuelve a
+ejecutarlo tras recrear phpMyAdmin o Postgres.
+
+```bash
+python3 scripts/configure_phpmyadmin_rootless.py --dry-run
+python3 scripts/configure_phpmyadmin_rootless.py
+```
+
+El plan-agent recibe `SYSTUTOR_DATABASE_URL`, `SPANEL_DB_BROKER_BIND`,
+`SPANEL_DB_BROKER_SOURCES`, `SPANEL_PMA_CONNECTOR_IMAGE` y
+`SPANEL_PMA_CONNECTOR_READ_ONLY=false` mediante
+`/etc/spanel/plan-agent.env` (modo `0600`).
+
 ## Certificados de correo y tareas programadas
 
 ### `install_cert_agent.py`
