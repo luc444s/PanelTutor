@@ -553,6 +553,7 @@ class Plan:
     timeout: int
     data_root: str
     state_file: Path
+    wordpress_image: str = ""
     apps: bool = False
     evidence: dict[str, Any] = field(default_factory=dict)
 
@@ -619,10 +620,13 @@ class LegacyMigrator:
         if statics:
             images.append(DEFAULT_NGINX)
         if wordpress:
-            images.extend(
-                image_of(self.source_info(site), DEFAULT_DB_IMAGE)
-                for site in self.site_by_kind("wordpress")
-            )
+            if self.plan.wordpress_image:
+                images.append(self.plan.wordpress_image)
+            else:
+                images.extend(
+                    image_of(self.source_info(site), DEFAULT_DB_IMAGE)
+                    for site in self.site_by_kind("wordpress")
+                )
             images.append(DEFAULT_DB_IMAGE)
             images.append(DEFAULT_WP_CLI)
         return sorted(set(images))
@@ -789,6 +793,8 @@ class LegacyMigrator:
             if not wp_sources[site.container_name]:
                 raise LegacyError(f"no bind mount for {site.container_name}")
         if not self.plan.apply:
+            if self.plan.wordpress_image:
+                log(f"imagen única WordPress: {self.plan.wordpress_image}")
             for site in sites:
                 log(
                     f"{site.container_name}: se copiaría {wp_sources[site.container_name]}"
@@ -837,14 +843,23 @@ class LegacyMigrator:
                 config = info.get("Config") or {}
                 command = [str(item) for item in (config.get("Cmd") or [])]
                 entrypoint = config.get("Entrypoint")
-                if entrypoint and entrypoint not in (
-                    ["docker-entrypoint.sh"],
-                    ["/usr/local/bin/docker-entrypoint.sh"],
-                ):
-                    log(
-                        f"aviso: {site.container_name} usa entrypoint custom "
-                        f"{entrypoint}; se conserva el de la imagen"
-                    )
+                if self.plan.wordpress_image:
+                    # One stock image for every WordPress site; the bind mount
+                    # (already copied to the volume) contains wp-content and
+                    # wp-config, so the source image command/entrypoint is not
+                    # reused.
+                    image = self.plan.wordpress_image
+                    command = []
+                else:
+                    image = image_of(info, DEFAULT_DB_IMAGE)
+                    if entrypoint and entrypoint not in (
+                        ["docker-entrypoint.sh"],
+                        ["/usr/local/bin/docker-entrypoint.sh"],
+                    ):
+                        log(
+                            f"aviso: {site.container_name} usa entrypoint custom "
+                            f"{entrypoint}; se conserva el de la imagen"
+                        )
                 self.cell.run(
                     "run",
                     "-d",
@@ -866,7 +881,7 @@ class LegacyMigrator:
                     str(env_file),
                     "-v",
                     f"{site.container_name}-html:/var/www/html",
-                    image_of(info, DEFAULT_DB_IMAGE),
+                    image,
                     *command,
                     timeout=180,
                 )
@@ -1059,7 +1074,19 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--shared-network", default=DEFAULT_SHARED_NETWORK)
     p.add_argument("--statics", action="store_true", help="Migrate statics only.")
     p.add_argument(
-        "--wordpress", action="store_true", help="Migrate WordPress/MariaDB only."
+        "--wordpress",
+        action="store_true",
+        help="Migrate WordPress/MariaDB only.",
+    )
+    p.add_argument(
+        "--wordpress-image",
+        nargs="?",
+        const="wordpress:latest",
+        default="",
+        help=(
+            "Use one image for every WordPress site in the cell "
+            "(default when flag is present: wordpress:latest)."
+        ),
     )
     p.add_argument("--all", action="store_true", help="Statics then WordPress.")
     p.add_argument("--apply", action="store_true", help="Mutate; default is dry-run.")
@@ -1164,6 +1191,7 @@ def main(argv: list[str] | None = None) -> int:
         timeout=args.timeout,
         data_root=args.data_root,
         state_file=state,
+        wordpress_image=args.wordpress_image,
     )
     if args.apply and not args.yes:
         print(

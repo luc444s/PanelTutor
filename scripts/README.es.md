@@ -826,6 +826,18 @@ Si un dominio está detrás de Cloudflare, el probe público puede recibir un
 challenge de bot (403) aunque el origen esté sano. Usa `--verify-local` para
 verificar a través del Traefik local (`Host`/SNI) en lugar del DNS público.
 
+La fase WordPress puede reutilizar una sola imagen stock para todos los sitios
+en vez de transferir cada imagen legacy por sitio. El volumen copiado de
+`/var/www/html` sigue llevando `wp-content` y `wp-config.php`:
+
+```bash
+python /tmp/migrate_milton_legacy.py --tenant milton --wordpress \
+  --wordpress-image wordpress:php8.3-apache --apply --yes --verify-local
+```
+
+`--wordpress-image` sin valor usa `wordpress:latest`; fija un tag para
+despliegues reproducibles.
+
 ## Archivos auxiliares
 
 ### Paquetes internos

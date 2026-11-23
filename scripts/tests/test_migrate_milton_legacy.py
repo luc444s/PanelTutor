@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from scripts import migrate_milton_legacy as mod
@@ -84,6 +86,42 @@ def test_verify_timeout_is_parsed() -> None:
 def test_verify_local_is_parsed() -> None:
     args = mod.parser().parse_args(["--statics", "--verify-local"])
     assert args.verify_local is True
+
+
+def test_single_wordpress_image_is_opt_in() -> None:
+    default = mod.parser().parse_args(["--wordpress"])
+    assert default.wordpress_image == ""
+    latest = mod.parser().parse_args(["--wordpress", "--wordpress-image"])
+    assert latest.wordpress_image == "wordpress:latest"
+    pinned = mod.parser().parse_args(
+        ["--wordpress", "--wordpress-image", "wordpress:php8.3-apache"]
+    )
+    assert pinned.wordpress_image == "wordpress:php8.3-apache"
+
+
+def test_images_for_uses_one_wordpress_image_when_requested() -> None:
+    plan = mod.Plan(
+        tenant="milton",
+        cell="milton",
+        shared_db="mariadb",
+        shared_network="milton-shared",
+        statics=False,
+        wordpress=True,
+        apply=False,
+        force=False,
+        precopy=False,
+        timeout=180,
+        data_root="/var/lib/spanel",
+        state_file=Path("/tmp/state.json"),
+        wordpress_image="wordpress:latest",
+    )
+    migrator = object.__new__(mod.LegacyMigrator)
+    migrator.plan = plan
+    assert migrator.images_for(False, True) == [
+        "mariadb:11.7",
+        "wordpress:cli",
+        "wordpress:latest",
+    ]
 
 
 def test_stream_pipes_the_source_into_the_sink(tmp_path) -> None:
