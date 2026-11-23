@@ -15,6 +15,8 @@ User=root
 Group=root
 RuntimeDirectory=spanel
 RuntimeDirectoryMode=0755
+# Shared with plan-agent and edge-relay: preserve the directory on stop.
+RuntimeDirectoryPreserve=yes
 UMask=0077
 ExecStart=/usr/local/bin/spanel-cell-metrics --serve \
   --socket /run/spanel/cell-metrics.sock \

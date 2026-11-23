@@ -28,6 +28,8 @@ Environment=SPANEL_EDGE_RELAY_SOCKET=/run/spanel/edge-relay.sock
 # proxy network when unset). Never a wildcard: an empty allowlist denies all.
 RuntimeDirectory=spanel
 RuntimeDirectoryMode=0750
+# Shared with plan-agent and cell-metrics: preserve the directory on stop.
+RuntimeDirectoryPreserve=yes
 ExecStart=/usr/bin/python3 /opt/spanel/scripts/spanel_tenant.py edge-relay --data-root /var/lib/spanel
 Restart=on-failure
 RestartSec=3

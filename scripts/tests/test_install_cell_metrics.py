@@ -31,6 +31,8 @@ def test_render_unit_uses_configured_paths() -> None:
     assert "--allowed-uids 0,1000" in rendered
     assert "ReadOnlyPaths=/etc/spanel/cell_metrics_token" in rendered
     assert "ExecStart=/usr/local/bin/spanel-cell-metrics --serve" in rendered
+    # Shared runtime dir: do not remove it on stop (see plan-agent/edge-relay).
+    assert "RuntimeDirectoryPreserve=yes" in rendered
     assert rendered.count("--socket") == 1
     assert rendered.count("--token-file") == 1
     assert rendered.count("--allowed-uids 0,1000") == 1

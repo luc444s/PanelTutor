@@ -24,6 +24,9 @@ Environment=SPANEL_PLAN_AGENT_TOKEN_FILE=/etc/spanel/plan_agent_token
 Environment=SPANEL_PLAN_AGENT_ALLOWED_UIDS=<app-container-uid>
 RuntimeDirectory=spanel
 RuntimeDirectoryMode=0750
+# /run/spanel is shared with edge-relay and cell-metrics: never remove it on
+# stop, or the other units keep listening on unlinked sockets.
+RuntimeDirectoryPreserve=yes
 ExecStart=/usr/bin/python3 /opt/spanel/scripts/spanel_tenant.py plan-agent --data-root /var/lib/spanel
 Restart=on-failure
 RestartSec=3
