@@ -663,11 +663,11 @@ def main(argv: Sequence[str] | None = None, client: Client | None = None) -> int
     args = parser.parse_args(argv)
     try:
         if client is None:
-            base = os.environ.get("SPANEL_APPS_API_URL") or os.environ.get(
-                "SPANEL_API_URL"
-            )
+            base = os.environ.get("SPANEL_DOMAIN", "").strip()
+            if base and "://" not in base:
+                base = f"https://{base}"
             if not base:
-                raise CliError("SPANEL_APPS_API_URL is required")
+                raise CliError("SPANEL_DOMAIN is required")
             client = Client(base, read_token())
         _print(run(args, client), args.json)
         return 0

@@ -57,6 +57,9 @@ English | [Español](README.es.md)
 | Refresh/adopt the observed domain inventory | [`domains_sync.py`](#domains_syncpy) / [`domains_adopt.py`](#domains_adoptpy) |
 | Diagnose/repair routes and TLS | [`spanel-repair.py`](#spanel-repairpy) |
 | Manage mail certificates | [`install_cert_agent.py`](#install_cert_agentpy), [`configure_cert_agent_dms.py`](#configure_cert_agent_dmspy) and [`spanel_cert_agent/`](#spanel_cert_agent) |
+| Migrate a tenant to rootless in one run | [`spanel-migrator-to-rootless`](#spanel-migrator-to-rootless) |
+| Install/repair the host plan agent and edge relay | [`install_tenant_agents.py`](#install_tenant_agentspy) |
+| Redeploy Apps into the rootless cell | [`migrate_tenant_apps.py`](#migrate_tenant_appspy) |
 | Migrate legacy SNI certs | [`migrate_legacy_sni.py`](#migrate_legacy_snip)
 
 ## Deployment
@@ -254,7 +257,7 @@ Does not access PostgreSQL, Redis, Docker or SSH directly. Requires the URL and 
 token per environment or standard input:
 
 ```bash
-export SPANEL_APPS_API_URL=https://panel.example.com
+export SPANEL_DOMAIN=panel.example.com
 export SPANEL_APPS_TOKEN='...'
 python3 scripts/spanel_apps.py list
 python3 scripts/spanel_apps.py services UUID_APLICACION
@@ -661,6 +664,113 @@ python3 scripts/unify_tenants.py \
 python3 scripts/unify_tenants.py \
   --rollback logs/unify-tenants-FECHA.json --apply
 ```
+
+## One-run rootless migration
+
+### `spanel-migrator-to-rootless`
+
+**Write operation; run as root on the host.** It orchestrates the existing
+`spanel_tenant.py` (cell and plan), `hosting_migrate_rootless.py` (site
+migration), `install_tenant_agents.py` (plan-agent/edge-relay) and
+`migrate_tenant_apps.py` (Apps signed releases) in one idempotent flow:
+doctor/preflight, agent install, cell provision, resource plan, site plan,
+migration, optional Apps, optional finalize and evidence.
+
+Interactive wizard:
+
+```bash
+sudo ./scripts/spanel-migrator-to-rootless
+```
+
+Non-interactive:
+
+```bash
+sudo ./scripts/spanel-migrator-to-rootless --tenant demo \
+  --memory 1G --cpus 1.5 --pids 512 --storage 10G --yes
+```
+
+Migrate Apps too (token from a file, never argv). The panel origin is read
+automatically from `SPANEL_DOMAIN` in `.env.docker`:
+
+```bash
+sudo ./scripts/spanel-migrator-to-rootless --tenant demo \
+  --memory 1G --cpus 1.5 --pids 512 --storage 10G --yes \
+  --apps --apps-token-file /root/spanel-api-token
+```
+
+Useful flags:
+
+- `--dry-run`: previews every phase without host mutation.
+- `--only static|wordpress` or `--site <id>` (repeatable).
+- `--skip-plan` / `--skip-sites`: partial runs.
+- `--finalize`: removes the rootful copy after a successful migration. The
+  default is **retained**, with a verified backup and rollback available.
+- `--rollback-on-failure`: rolls back every site migrated in this run if a
+  later one fails.
+- `--no-install-agents`: use the agents already installed.
+- `--no-start-services`: fail if plan-agent/edge-relay are inactive instead of
+  starting them.
+- `--skip-service-check`: do not require the plan-agent and edge-relay units
+  (lab or partial runs).
+- `--apps`: redeploy the tenant's Apps signed releases into the cell.
+- `--apps-token-file`, `--app <id>` (repeatable), `--apps-timeout`,
+  `--apps-no-cell-verify`.
+- `--apps-api-url` only to override `SPANEL_DOMAIN`.
+- `--hosting-mode auto|local|container`, `--app-container <name>`.
+- `--state-file <path>`, `--json`.
+
+The hosting CLI runs inside `spanel-app-1` by default: the tool copies it to
+`/tmp/spanel-migrator` and executes it with `/app` on `PYTHONPATH`. Use
+`--hosting-mode local` only when the app's database environment is available
+on the host.
+
+Apps are not copied: each selected App is re-deployed from its already signed
+active release and the Apps worker places it on the tenant's rootless socket.
+Apps without a signed release are reported as `requires_hardening`; they are
+never hardened with guessed service users or writable paths.
+
+Current Hosting limitation: the migrator assumes **one managed MySQL container
+per WordPress**. A tenant-wide shared MySQL is detected as a different topology
+and is not migrated by this tool yet; do not force it with `--site`.
+
+`--storage` is a **declared** limit (A.SPEC 0111), not a filesystem quota. The
+script validates it against free space and records it in the plan/evidence, but
+the effective value is the one saved from the Resources tab (Apps plan API).
+
+Evidence is written to
+`logs/migrator-to-rootless-<tenant>-<UTC>.json` (or `--state-file`).
+
+### `install_tenant_agents.py`
+
+**Write operation; run as root.** Idempotent installer for
+`spanel-plan-agent.service` and `spanel-edge-relay.service`. It creates
+`/etc/spanel/plan_agent_token` mode `0600` once (never rotates), renders the
+units with the real repo/Python/data root, app-container UID and Traefik UID,
+enables them and verifies the sockets plus the `capacity` op.
+
+```bash
+python3 scripts/install_tenant_agents.py --check
+python3 scripts/install_tenant_agents.py --dry-run
+python3 scripts/install_tenant_agents.py --traefik-uid 1000
+```
+
+If a unit already exists with different content it refuses to overwrite it;
+inspect the difference and use `--force` deliberately.
+
+### `migrate_tenant_apps.py`
+
+**Write operation** (Apps redeploy). Re-deploys each App's already signed
+active release through the Apps API so the worker runs it on the tenant's
+rootless cell. Skips Apps whose containers already live in the cell. Apps
+without a signed release are reported as `requires_hardening`, never modified.
+
+```bash
+export SPANEL_APPS_TOKEN=...        # or --token-file
+python3 scripts/migrate_tenant_apps.py --tenant demo --dry-run
+python3 scripts/migrate_tenant_apps.py --tenant demo --apply
+```
+
+The panel origin comes from `SPANEL_DOMAIN` in `.env.docker` (or `--api-url`).
 
 ## Auxiliary files
 
