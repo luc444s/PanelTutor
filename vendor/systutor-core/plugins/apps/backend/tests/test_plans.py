@@ -185,14 +185,14 @@ def test_plan_cpuset_is_used_when_the_compose_does_not_declare_one() -> None:
 # --- override injection -----------------------------------------------------
 
 
-def test_override_without_a_plan_keeps_the_original_defaults() -> None:
+def test_override_without_a_plan_does_not_inject_limits() -> None:
+    """No plan, no backend-chosen limits: the kernel boundary is the gate."""
     rendered = yaml.safe_load(_override(
         {"services": {"web": {"image": "alpine:3.20"}}}, "demo", True
     ))
     web = rendered["services"]["web"]
-    assert web["pids_limit"] == 256
-    assert web["mem_limit"] == "512m"
-    assert web["cpus"] == 1.0
+    for injected in ("pids_limit", "mem_limit", "cpus", "cap_drop", "security_opt"):
+        assert injected not in web
     assert "cgroup_parent" not in web
 
 

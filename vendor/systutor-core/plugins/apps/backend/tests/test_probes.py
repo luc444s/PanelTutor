@@ -240,13 +240,13 @@ def test_isolation_rejects_a_container_without_a_declared_user() -> None:
         )
 
 
-def test_isolation_rejects_published_ports_and_read_only_rootfs() -> None:
+def test_isolation_rejects_published_ports_and_accepts_read_only_rootfs() -> None:
     runner = FakeRunner(container(HostConfig={"PortBindings": {"80/tcp": [{}]}}))
     with pytest.raises(ProbeFailed, match="publishes"):
         check_isolation(runner, {"web": "cid1"})
+    # ``read_only: true`` is a developer choice; it is not an admission gate.
     runner = FakeRunner(container(HostConfig={"ReadonlyRootfs": True}))
-    with pytest.raises(ProbeFailed, match="not writable"):
-        check_isolation(runner, {"web": "cid1"})
+    assert check_isolation(runner, {"web": "cid1"})
 
 
 def test_isolation_accepts_named_volumes_and_rejects_host_binds() -> None:
@@ -287,17 +287,17 @@ def test_isolation_allows_only_unprivileged_port_sysctl() -> None:
         check_isolation(FakeRunner(denied), {"web": "cid1"})
 
 
-def test_isolation_rejects_missing_runtime_security_profiles() -> None:
-    runner = FakeRunner(container(AppArmorProfile="unconfined"))
-    with pytest.raises(ProbeFailed, match="AppArmor"):
-        check_isolation(runner, {"web": "cid1"})
+def test_isolation_no_longer_requires_injected_security_profiles() -> None:
+    """seccomp/AppArmor/no-new-privileges are the developer's Compose decision.
 
-    runner = FakeRunner(container(HostConfig={"SecurityOpt": [
-        "no-new-privileges:true",
-        "apparmor=docker-default",
-    ]}))
-    with pytest.raises(ProbeFailed, match="seccomp"):
-        check_isolation(runner, {"web": "cid1"})
+    The platform stopped injecting them, so requiring them would reject every
+    honest Compose that does not declare them. Kernel isolation is unchanged.
+    """
+    runner = _rootless_runner(container(AppArmorProfile="unconfined"))
+    assert check_isolation(runner, {"web": "cid1"}, baseline=ROOTLESS_BASELINE)
+
+    runner = _rootless_runner(container(HostConfig={"SecurityOpt": []}))
+    assert check_isolation(runner, {"web": "cid1"}, baseline=ROOTLESS_BASELINE)
 
 
 @pytest.mark.parametrize(

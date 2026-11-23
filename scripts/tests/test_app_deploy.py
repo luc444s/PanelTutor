@@ -240,7 +240,7 @@ def test_env_file_must_be_external_private_regular_and_not_symlink(
         app.validate_env_file(internal, root)
 
 
-def test_override_adds_confinement_and_ownership() -> None:
+def test_override_adds_ownership_without_injecting_hardening() -> None:
     rendered = yaml_load(
         app._override(
             {"services": {"worker": {"build": "."}}, "volumes": {"data": {}}},
@@ -251,8 +251,8 @@ def test_override_adds_confinement_and_ownership() -> None:
     service = rendered["services"]["worker"]
     assert service["image"].startswith("spanel-app-")
     assert service["image"].endswith(":latest")
-    assert service["cap_drop"] == ["ALL"]
-    assert service["security_opt"] == ["no-new-privileges:true"]
+    assert "cap_drop" not in service
+    assert "security_opt" not in service
     assert service["labels"][app.OWNER_LABEL] == "demo"
     assert rendered["volumes"]["data"]["labels"][app.OWNER_LABEL] == "demo"
     assert rendered["networks"]["default"]["labels"][app.OWNER_LABEL] == "demo"
@@ -267,7 +267,7 @@ def test_override_keeps_upstream_image_for_non_build_service() -> None:
     service = rendered["services"]["database"]
     assert "image" not in service
     assert service["labels"][app.OWNER_LABEL] == "demo"
-    assert service["cap_drop"] == ["ALL"]
+    assert "cap_drop" not in service
 
 
 def test_override_replaces_repo_env_file_with_staged_private_env(tmp_path: Path) -> None:
@@ -439,7 +439,8 @@ def test_root_user_detection(value: str) -> None:
     assert app._is_root_user(value)
 
 
-def test_post_build_root_image_aborts(tmp_path: Path) -> None:
+def test_image_user_is_not_an_admission_gate(tmp_path: Path) -> None:
+    """UID 0 in the cell is the tenant subuid; the image user is not checked."""
     release = tmp_path / "release"
     runner = SpyRunner(
         [
@@ -447,13 +448,13 @@ def test_post_build_root_image_aborts(tmp_path: Path) -> None:
                 0,
                 json.dumps({"services": {"worker": {"image": "image-id"}}}),
             ),
-            app.Completed(0, "0\n"),
         ],
         tmp_path,
     )
-    with pytest.raises(app.AppDeployError, match="definite non-root"):
-        app._image_users(runner, release, "compose.yaml", "demo", False, ["worker"])
-    assert not any("up" in call for call in runner.calls)
+    images = app._image_users(
+        runner, release, "compose.yaml", "demo", True, ["worker"]
+    )
+    assert images == {"worker": "image-id"}
 
 
 def test_compose_non_root_user_allows_root_default_image(tmp_path: Path) -> None:
@@ -519,7 +520,8 @@ def test_service_environment_inventory_contains_names_not_values() -> None:
 @pytest.mark.parametrize(
     "top", ["PID UID\n22 0\n", "PID UID\n22 root\n", "PID UID\n"]
 )
-def test_effective_root_or_unknown_process_aborts(tmp_path: Path, top: str) -> None:
+def test_namespaced_root_processes_are_accepted(tmp_path: Path, top: str) -> None:
+    """Container uid 0 maps to the tenant subuid, so it is not host root."""
     runner = SpyRunner(
         [
             app.Completed(0, "running healthy\n"),
@@ -529,8 +531,7 @@ def test_effective_root_or_unknown_process_aborts(tmp_path: Path, top: str) -> N
         ],
         tmp_path,
     )
-    with pytest.raises(app.AppDeployError, match="effective processes"):
-        app._verify_containers(runner, {"worker": "container"}, "demo", True, 1)
+    app._verify_containers(runner, {"worker": "container"}, "demo", True, 1)
 
 
 def test_clone_uses_gh_single_branch(

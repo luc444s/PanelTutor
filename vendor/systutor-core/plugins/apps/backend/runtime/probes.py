@@ -361,10 +361,10 @@ def _assert_mandatory(
         str(item).lower().replace(" ", "")
         for item in (host.get("SecurityOpt") or [])
     )
-    if "no-new-privileges" not in options:
-        raise ProbeFailed(f"service {service} allows privilege escalation")
-    if "seccomp=builtin" not in options:
-        raise ProbeFailed(f"service {service} does not use the default seccomp profile")
+    # Container-level profiles (seccomp, no-new-privileges, AppArmor) are the
+    # developer's call: the platform no longer injects them and the kernel
+    # boundary of the cell is what isolates the tenant.  Only kernel-enforced
+    # limits and prohibitions remain mandatory.
     if host.get("Runtime") != "runc":
         raise ProbeFailed(f"service {service} does not use runc")
     pids = host.get("PidsLimit")
@@ -385,8 +385,6 @@ def _assert_mandatory(
         or not 0 < nano_cpus <= MAX_APP_NANO_CPUS
     ):
         raise ProbeFailed(f"service {service} CPU limit is invalid")
-    if host.get("ReadonlyRootfs") is not False:
-        raise ProbeFailed(f"service {service} root filesystem is not writable")
     if str(state.get("Status", "")) != "running":
         raise ProbeFailed(f"service {service} is not running")
     return options, {"pids": pids, "memory": memory, "nano_cpus": nano_cpus}

@@ -22,7 +22,6 @@ import yaml
 
 from ..hardening.contracts import HardeningPolicy
 from ..symlinks import symlink_target
-from .docker_audit import _is_definitely_non_root_user
 from .source import _inside
 from .tenant_plan import TenantPlan, current_tenant_plan, service_limits
 from .transport import Runner
@@ -158,41 +157,11 @@ def _override(
                 f"{project}\0{service}".encode()
             ).hexdigest()[:20]
             config["image"] = f"spanel-app-{image_key}:{image_tag}"
-        if non_root:
-            # Runtime host-resource policy lives only in this override file;
-            # the developer's Compose is never rewritten.  These controls were
-            # previously injected into Compose by the retired hardener, and
-            # `check_isolation` still requires all of them after deployment.
-            source = source_config if isinstance(source_config, dict) else {}
-            raw_caps = source.get("cap_drop") or []
-            if isinstance(raw_caps, str):
-                raw_caps = [raw_caps]
-            caps = [str(item) for item in raw_caps]
-            if "ALL" not in {item.upper() for item in caps}:
-                caps.append("ALL")
-            config["cap_drop"] = caps
-            raw_security = source.get("security_opt") or []
-            if isinstance(raw_security, str):
-                raw_security = [raw_security]
-            security = [
-                str(item) for item in raw_security
-                if not any(
-                    key in str(item).lower().replace(" ", "")
-                    for key in ("no-new-privileges", "apparmor", "seccomp")
-                )
-            ]
-            security.extend((
-                "no-new-privileges:true",
-                "apparmor=docker-default",
-                "seccomp=builtin",
-            ))
-            config["security_opt"] = security
-            if not source.get("pids_limit"):
-                config["pids_limit"] = 256
-            if not source.get("mem_limit"):
-                config["mem_limit"] = "512m"
-            if not source.get("cpus"):
-                config["cpus"] = 1.0
+        # Security is enforced by the kernel boundary of the rootless cell
+        # (user/mount/net namespaces, AppArmor profile, cgroups and nftables).
+        # The platform must not inject container-level hardening the developer
+        # did not ask for: doing so overrode their Compose (e.g. ``init: true``
+        # or ``read_only: true``) and created conflicts the app never had.
         services[service] = config
     if ingress_publish is not None:
         service, host, host_port, target_port = ingress_publish
@@ -491,18 +460,8 @@ def _image_users(
                 f"cannot resolve exactly one image for service {service}"
             )
         image = image.strip()
-        configured_user = service_config.get("user")
-        has_non_root_override = configured_user is not None and (
-            _is_definitely_non_root_user(configured_user)
-        )
-        if not has_non_root_override:
-            image_user = runner.run(
-                ["docker", "image", "inspect", "-f", "{{.Config.User}}", image]
-            ).stdout.strip()
-            if not _is_definitely_non_root_user(image_user):
-                raise AppDeployError(
-                    f"image for service {service} lacks a definite non-root Config.User"
-                )
+        # UID 0 inside the cell is the tenant's own subuid, never host root, so
+        # the image user is a developer decision, not an admission gate.
         images[service] = image
     return images
 
@@ -797,37 +756,9 @@ def _verify_containers(
             raise AppDeployError(
                 f"container {service} does not have the expected ownership label"
             )
-    if non_root:
-        for service, container in containers.items():
-            configured = runner.run(
-                ["docker", "container", "inspect", "-f", "{{.Config.User}}", container]
-            ).stdout.strip()
-            if not _is_definitely_non_root_user(configured):
-                raise AppDeployError(
-                    f"container {service} lacks a definite configured non-root user"
-                )
-            if service in completed:
-                # A completed init container has no processes left to inspect.
-                continue
-            top = runner.run(
-                ["docker", "top", container, "-eo", "pid,uid"], check=False
-            )
-            if top.returncode:
-                raise AppDeployError(
-                    f"cannot inspect effective process users for {service}"
-                )
-            lines = [line.split() for line in top.stdout.splitlines() if line.strip()]
-            try:
-                uid_index = [item.lower() for item in lines[0]].index("uid")
-                users = [row[uid_index].lower() for row in lines[1:]]
-            except (IndexError, ValueError):
-                users = []
-            if not users or any(
-                user == "root" or (user.isdigit() and int(user) == 0) for user in users
-            ):
-                raise AppDeployError(
-                    f"container {service} has root or uninspectable effective processes"
-                )
+    # Process users inside the cell are namespaced: uid 0 maps to the tenant's
+    # own subuid, so the kernel boundary -- not an image-level user check --
+    # decides isolation.
 
 
 def _manifest_data(
