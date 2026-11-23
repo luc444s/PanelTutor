@@ -2,10 +2,47 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from scripts import migrate_milton_legacy as mod
+
+
+def _plan(**overrides):
+    values = {
+        "tenant": "milton",
+        "cell": "milton",
+        "shared_db": "mariadb",
+        "shared_network": "milton-shared",
+        "statics": False,
+        "wordpress": True,
+        "apply": False,
+        "force": False,
+        "precopy": False,
+        "timeout": 180,
+        "data_root": "/var/lib/spanel",
+        "state_file": Path("/tmp/state.json"),
+    }
+    values.update(overrides)
+    return mod.Plan(**values)
+
+
+def _site(container: str, domain: str, kind: str = "wordpress"):
+    return SimpleNamespace(
+        id=container,
+        tenant_id="tenant",
+        kind=kind,
+        container_name=container,
+        domain=domain,
+    )
+
+
+def _migrator(sites, **overrides):
+    migrator = object.__new__(mod.LegacyMigrator)
+    migrator.plan = _plan(**overrides)
+    migrator.sites = sites
+    return migrator
 
 
 def test_mount_for_returns_the_bind_source() -> None:
@@ -87,6 +124,97 @@ def test_verify_timeout_is_parsed() -> None:
 def test_verify_local_is_parsed() -> None:
     args = mod.parser().parse_args(["--statics", "--verify-local"])
     assert args.verify_local is True
+
+
+def test_site_filter_and_canary_are_parsed() -> None:
+    args = mod.parser().parse_args(
+        [
+            "--wordpress",
+            "--site",
+            "gestiongases",
+            "--site",
+            "www.infra.systutor.com",
+            "--canary",
+        ]
+    )
+    assert args.site == ["gestiongases", "www.infra.systutor.com"]
+    assert args.canary is True
+
+
+def test_wordpress_site_filter_matches_container_domain_and_alias() -> None:
+    sites = [
+        _site("gestiongases", "gestiongasesindustriales.com"),
+        _site("infra", "infra.systutor.com"),
+    ]
+    for value in (
+        "gestiongases",
+        "gestiongasesindustriales.com",
+        "www.gestiongasesindustriales.com",
+    ):
+        migrator = _migrator(sites, wordpress=True, site_filters=(value,))
+        assert [site.container_name for site in migrator.wordpress_sites()] == [
+            "gestiongases"
+        ]
+
+
+def test_wordpress_site_filter_rejects_unknown_values() -> None:
+    migrator = _migrator(
+        [_site("infra", "infra.systutor.com")],
+        wordpress=True,
+        site_filters=("missing",),
+    )
+    with pytest.raises(mod.LegacyError, match="WordPress no encontrado"):
+        migrator.wordpress_sites()
+
+
+def test_partial_wordpress_selection_requires_canary_for_apply() -> None:
+    sites = [
+        _site("gestiongases", "gestiongasesindustriales.com"),
+        _site("infra", "infra.systutor.com"),
+    ]
+    migrator = _migrator(
+        sites,
+        wordpress=True,
+        apply=True,
+        canary=False,
+        site_filters=("gestiongases",),
+    )
+    with pytest.raises(mod.LegacyError, match="canary"):
+        migrator.validate_wordpress_selection()
+
+    migrator.plan.canary = True
+    migrator.validate_wordpress_selection()
+
+
+def test_ingress_preflight_accepts_www_and_forwarded_proto() -> None:
+    domain = "gestiongasesindustriales.com"
+    render = (
+        b"server { listen 80 default_server; server_name _; return 404; }\n"
+        b"server { listen 80; server_name gestiongasesindustriales.com "
+        b"www.gestiongasesindustriales.com; location / { "
+        b"proxy_pass http://gestiongases:80; "
+        b"proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto; } }\n"
+    )
+    assert mod.ingress_render_errors(render, [domain]) == []
+
+
+def test_ingress_preflight_rejects_the_stale_render() -> None:
+    domain = "gestiongasesindustriales.com"
+    render = (
+        b"server { listen 80; server_name gestiongasesindustriales.com; "
+        b"location / { proxy_set_header X-Forwarded-Proto $scheme; } }\n"
+    )
+    errors = mod.ingress_render_errors(render, [domain])
+    assert any("server_name" in error for error in errors)
+    assert any("X-Forwarded-Proto" in error for error in errors)
+
+
+def test_ingress_preflight_does_not_require_www_for_an_ip() -> None:
+    render = (
+        b"server { listen 80; server_name 203.0.113.10; location / { "
+        b"proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto; } }\n"
+    )
+    assert mod.ingress_render_errors(render, ["203.0.113.10"]) == []
 
 
 def test_single_wordpress_image_is_opt_in() -> None:

@@ -607,6 +607,53 @@ def _patch_external_verify(function: Any) -> None:
     rootless_migration.verify_external_route = function
 
 
+def ingress_render_errors(render: bytes, domains: list[str]) -> list[str]:
+    """Return the ingress features this migration depends on that are missing.
+
+    The app image bakes systutor-core. A stale copy inside the container still
+    renders valid nginx, but without the ``www`` alias and without preserving
+    Traefik's ``X-Forwarded-Proto``. Catching that here avoids a full data copy
+    followed by a timeout and rollback.
+    """
+    import ipaddress
+
+    text = render.decode(errors="replace")
+    compact = re.sub(r"\s+", " ", text)
+    server_name_sets = [
+        set(match.group(1).split())
+        for match in re.finditer(r"server_name\s+([^;]+);", text)
+    ]
+    errors: list[str] = []
+    for domain in domains:
+        expected = [domain]
+        if not domain.startswith("www."):
+            try:
+                ipaddress.ip_address(domain)
+            except ValueError:
+                expected.append(f"www.{domain}")
+        if not any(set(expected).issubset(names) for names in server_name_sets):
+            errors.append(f"server_name no incluye {' '.join(expected)}")
+    if "proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto;" not in compact:
+        errors.append("X-Forwarded-Proto no conserva $http_x_forwarded_proto")
+    return errors
+
+
+def check_ingress_render(routes: list[Any]) -> None:
+    """Fail fast when the loaded core cannot render the required ingress."""
+    from plugins.hosting.backend.rootless_ingress import RootlessIngress
+
+    errors = ingress_render_errors(
+        RootlessIngress.render(routes), [route.domain for route in routes]
+    )
+    if errors:
+        raise LegacyError(
+            "el core cargado no soporta el ingress necesario: "
+            + "; ".join(errors)
+            + ". Copia vendor/systutor-core/plugins/hosting/backend/"
+            "rootless_ingress.py en la app, borra su __pycache__ y reintenta."
+        )
+
+
 def publish_custom_route(
     app: Any,
     db: Any,
@@ -686,6 +733,8 @@ class Plan:
     data_root: str
     state_file: Path
     wordpress_image: str = ""
+    site_filters: tuple[str, ...] = ()
+    canary: bool = False
     apps: bool = False
     evidence: dict[str, Any] = field(default_factory=dict)
 
@@ -714,6 +763,98 @@ class LegacyMigrator:
     def site_by_kind(self, kind: str) -> list[Any]:
         return [site for site in self.sites if site.kind == kind]
 
+    @staticmethod
+    def _site_keys(site: Any) -> set[str]:
+        domain = str(site.domain).strip().lower().rstrip(".")
+        keys = {str(site.container_name).strip().lower(), domain}
+        if domain and not domain.startswith("www."):
+            keys.add(f"www.{domain}")
+        keys.discard("")
+        return keys
+
+    def wordpress_sites(self) -> list[Any]:
+        """WordPress sites selected by ``--site``, or all of them."""
+        sites = self.site_by_kind("wordpress")
+        filters = [
+            value.strip().lower().rstrip(".")
+            for value in self.plan.site_filters
+            if value.strip()
+        ]
+        if not filters:
+            return sites
+        selected: list[Any] = []
+        matched: set[str] = set()
+        for site in sites:
+            hits = self._site_keys(site).intersection(filters)
+            if hits:
+                selected.append(site)
+                matched.update(hits)
+        missing = [value for value in filters if value not in matched]
+        if missing:
+            available = (
+                ", ".join(
+                    f"{site.container_name} ({site.domain})" for site in sites
+                )
+                or "ninguno"
+            )
+            raise LegacyError(
+                f"WordPress no encontrado para --site: {', '.join(missing)}; "
+                f"disponibles: {available}"
+            )
+        return selected
+
+    def planned_sites(self) -> list[Any]:
+        planned: list[Any] = []
+        if self.plan.statics:
+            planned.extend(self.site_by_kind("static"))
+        if self.plan.wordpress:
+            planned.extend(self.wordpress_sites())
+        seen: set[str] = set()
+        unique: list[Any] = []
+        for site in planned:
+            key = str(site.id)
+            if key in seen:
+                continue
+            seen.add(key)
+            unique.append(site)
+        return unique
+
+    def validate_wordpress_selection(self) -> None:
+        """A strict subset is a canary, not a permanent partial cutover.
+
+        The legacy WordPress sites share one MariaDB container and the script
+        copies its whole data volume. Keeping some sites rootful while others
+        write to the copied volume would make a later full copy overwrite live
+        data. Therefore a subset is only allowed as ``--canary``: it is fully
+        verified and then rolled back.
+        """
+        if not self.plan.wordpress:
+            return
+        selected = self.wordpress_sites()
+        all_wordpress = self.site_by_kind("wordpress")
+        self.plan.evidence["wordpress_selection"] = [
+            site.container_name for site in selected
+        ]
+        if len(selected) < len(all_wordpress):
+            if self.plan.apply and not self.plan.canary:
+                raise LegacyError(
+                    "la MariaDB es compartida: un subconjunto de WordPress solo "
+                    "puede probarse con --canary, que revierte al final. Para "
+                    "migrar de verdad, selecciona los cuatro WordPress."
+                )
+            log(
+                f"selección parcial: {len(selected)}/{len(all_wordpress)} "
+                "WordPress"
+                + ("" if self.plan.apply else " (dry-run; no se ejecuta)")
+                + (
+                    "; canary: se revertirá al final"
+                    if self.plan.canary and self.plan.apply
+                    else ""
+                )
+            )
+        elif self.plan.canary:
+            log("--canary con todos los WordPress: se hará el cutover normal")
+
     def source_info(self, site: Any) -> dict[str, Any]:
         info = self.rootful.inspect(site.container_name)
         if info is None:
@@ -729,9 +870,26 @@ class LegacyMigrator:
         if not self.cell.socket or not Path(self.cell.socket).exists():
             raise LegacyError(f"cell socket is missing: {self.cell.socket}")
         self.cell.run("info", "--format", "{{.ServerVersion}}", timeout=60)
-        for site in self.sites:
+        self.validate_wordpress_selection()
+        planned = self.planned_sites()
+        for site in planned:
             self.source_info(site)
             log(f"{site.kind:9} {site.container_name:28} {site.domain}")
+        if planned:
+            from plugins.hosting.backend.rootless_ingress import RouteSpec
+
+            routes = [
+                RouteSpec(
+                    site.id,
+                    self.tenant.id,
+                    str(site.domain),
+                    site.container_name,
+                    80,
+                )
+                for site in planned
+            ]
+            check_ingress_render(routes)
+            log("ingress: alias www y X-Forwarded-Proto verificados")
         db_info = self.rootful.inspect(self.plan.shared_db)
         if db_info is None:
             raise LegacyError(f"shared database is missing: {self.plan.shared_db}")
@@ -740,9 +898,10 @@ class LegacyMigrator:
             raise LegacyError("shared database is not a legacy bind mount")
         log(f"MYSQL bind: {mount.get('Source')} -> {mount.get('Destination')}")
         self.plan.evidence["preflight"] = {
-            "sites": len(self.sites),
+            "sites": len(planned),
             "shared_db": self.plan.shared_db,
             "mysql_bind": mount.get("Source"),
+            "ingress": "www+x-forwarded-proto",
         }
 
     # -- images ------------------------------------------------------------
@@ -757,7 +916,7 @@ class LegacyMigrator:
             else:
                 images.extend(
                     image_of(self.source_info(site), DEFAULT_DB_IMAGE)
-                    for site in self.site_by_kind("wordpress")
+                    for site in self.wordpress_sites()
                 )
             images.append(DEFAULT_DB_IMAGE)
             images.append(DEFAULT_WP_CLI)
@@ -909,10 +1068,21 @@ class LegacyMigrator:
         from systutor.contracts.site_domain_publisher import get_site_domain_publisher
 
         step("WordPress + MariaDB")
-        sites = self.site_by_kind("wordpress")
+        all_sites = self.site_by_kind("wordpress")
+        sites = self.wordpress_sites()
         if not sites:
             log("no hay WordPress")
             return
+        partial = len(sites) < len(all_sites)
+        canary = self.plan.canary and partial
+        if partial and self.plan.apply and not self.plan.canary:
+            raise LegacyError(
+                "la MariaDB es compartida: un subconjunto de WordPress solo "
+                "puede probarse con --canary, que revierte al final. Para "
+                "migrar de verdad, selecciona los cuatro WordPress."
+            )
+        if canary:
+            step("Canary: se revertirá al final")
         db_info = self.source_info_by_name(self.plan.shared_db)
         db_bind = mount_for(db_info, "/var/lib/mysql")["Source"]
         wp_sources = {
@@ -949,7 +1119,10 @@ class LegacyMigrator:
                     f"{site.container_name}-html",
                 )
         step("Ventana de mantenimiento")
-        for site in sites:
+        # The shared MariaDB is stopped as a whole, so every rootful
+        # WordPress site must stop; otherwise it would serve database errors.
+        # A subset still only copies/cuts over the selected sites.
+        for site in all_sites:
             self.rootful.run("stop", site.container_name, timeout=180, check=False)
         self.rootful.run("stop", self.plan.shared_db, timeout=180, check=False)
         # Final consistent copy.
@@ -1087,19 +1260,32 @@ class LegacyMigrator:
                     self.app, self.db, self.tenant.id, site.kind, site.id, "rootless"
                 )
                 self.db.commit()
-                self.migrated.append(
-                    {
-                        "ok": True,
-                        "site_id": site.id,
-                        "kind": "wordpress",
-                        "container": site.container_name,
-                        "domain": str(site.domain),
-                    }
-                )
+                result = {
+                    "ok": True,
+                    "site_id": site.id,
+                    "kind": "wordpress",
+                    "container": site.container_name,
+                    "domain": str(site.domain),
+                }
+                self.migrated.append(result)
                 log(f"{site.container_name}: ruta publicada y verificada")
         except Exception:
             self._rollback_wordpress(sites, env_files)
             raise
+        if canary:
+            self._rollback_wordpress(sites, env_files)
+            self.plan.evidence["canary"] = {
+                "ok": True,
+                "verified": [site.container_name for site in sites],
+                "rolled_back": True,
+            }
+            # The canary proved the pipeline but did not cut anything over.
+            self.migrated = [
+                item
+                for item in self.migrated
+                if item.get("kind") != "wordpress"
+            ]
+            log("canary verificado: rootful restaurado, sin cutover")
 
     def _start_shared_database(self, db_info: dict[str, Any]) -> None:
         ensure_volume(self.cell, DEFAULT_DB_VOLUME)
@@ -1181,14 +1367,23 @@ class LegacyMigrator:
         self.cell.run("stop", self.plan.shared_db, timeout=120, check=False)
         self.rootful.run("start", self.plan.shared_db, timeout=120, check=False)
         time.sleep(2)
-        for site in sites:
+        # A partial canary stops every rootful WordPress because the shared
+        # database was stopped. Restore all of them, not only the selected
+        # subset, so no site is left down after the rollback.
+        for site in self.site_by_kind("wordpress"):
             self.rootful.run("start", site.container_name, timeout=120, check=False)
-            publisher = get_site_domain_publisher(self.app)
-            if publisher is not None:
-                publisher.publish(site.container_name, str(site.domain))
-            write_resource_runtime(
-                self.app, self.db, self.tenant.id, site.kind, site.id, "rootful"
-            )
+            try:
+                publisher = get_site_domain_publisher(self.app)
+                if publisher is not None:
+                    publisher.publish(site.container_name, str(site.domain))
+            except Exception as exc:  # noqa: BLE001 - rollback keeps going
+                log(f"rollback publisher {site.domain}: {exc}")
+            try:
+                write_resource_runtime(
+                    self.app, self.db, self.tenant.id, site.kind, site.id, "rootful"
+                )
+            except Exception as exc:  # noqa: BLE001 - rollback keeps going
+                log(f"rollback runtime {site.domain}: {exc}")
         self.db.commit()
 
     def source_info_by_name(self, name: str) -> dict[str, Any]:
@@ -1252,6 +1447,24 @@ def parser() -> argparse.ArgumentParser:
         ),
     )
     p.add_argument("--all", action="store_true", help="Statics then WordPress.")
+    p.add_argument(
+        "--site",
+        action="append",
+        default=[],
+        metavar="SITE",
+        help=(
+            "WordPress container or domain to select; repeatable. A strict "
+            "subset requires --canary and is rolled back after verification."
+        ),
+    )
+    p.add_argument(
+        "--canary",
+        action="store_true",
+        help=(
+            "With a subset of --site, verify it and restore rootful instead of "
+            "leaving a partial WordPress cutover."
+        ),
+    )
     p.add_argument("--apply", action="store_true", help="Mutate; default is dry-run.")
     p.add_argument(
         "--dry-run",
@@ -1355,6 +1568,8 @@ def main(argv: list[str] | None = None) -> int:
         data_root=args.data_root,
         state_file=state,
         wordpress_image=args.wordpress_image,
+        site_filters=tuple(args.site or ()),
+        canary=args.canary,
     )
     if args.apply and not args.yes:
         print(

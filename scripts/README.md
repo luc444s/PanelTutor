@@ -852,6 +852,25 @@ python /tmp/migrate_milton_legacy.py --tenant milton --wordpress \
 `--wordpress-image` without a value uses `wordpress:latest`; pin a tag for
 reproducible deploys.
 
+The preflight renders the cell ingress before touching data and aborts if the
+loaded `systutor-core` still lacks the `www` alias or replaces
+`X-Forwarded-Proto` with `$scheme`. This catches a stale baked core in seconds
+instead of after a full copy and rollback.
+
+The shared MariaDB makes a permanent partial cutover unsafe: a later full copy
+would overwrite the already-migrated site's database. To test a single
+WordPress site, select it and use `--canary`; the script runs the real cutover,
+verifies the routes, then restores rootful and reports the canary in the
+evidence file:
+
+```bash
+python /tmp/migrate_milton_legacy.py --tenant milton --wordpress \
+  --site gestiongases --canary --apply --yes --verify-local
+```
+
+`--site` accepts a container name or domain and is repeatable. A real cutover
+must include all four WordPress sites.
+
 ## Auxiliary files
 
 ### Internal packages
