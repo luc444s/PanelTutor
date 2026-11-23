@@ -473,40 +473,67 @@ def verify_via_traefik(
     """
     import socket
     import ssl
+    from urllib.parse import urljoin, urlsplit
 
-    port = 443 if https else 80
     deadline = time.monotonic() + max(0.0, deadline_seconds)
     delay = max(0.0, initial_backoff)
     last_error: Exception | None = None
     while True:
         remaining = deadline - time.monotonic()
         try:
-            raw = socket.create_connection(
-                ("traefik", port), timeout=max(0.1, min(5.0, remaining))
-            )
-            conn = raw
-            if https:
-                context = ssl.create_default_context()
-                conn = context.wrap_socket(raw, server_hostname=domain)
-            with conn:
-                conn.sendall(
-                    (
-                        f"GET / HTTP/1.1\r\nHost: {domain}\r\n"
-                        "Connection: close\r\n\r\n"
-                    ).encode()
+            scheme = "https" if https else "http"
+            host = domain
+            path = "/"
+            visited: set[str] = set()
+            for _hop in range(6):
+                target_key = f"{scheme}://{host}{path}"
+                if target_key in visited:
+                    raise ValueError(f"redirect loop at {target_key}")
+                visited.add(target_key)
+                port = 443 if scheme == "https" else 80
+                raw = socket.create_connection(
+                    ("traefik", port), timeout=max(0.1, min(5.0, remaining))
                 )
-                chunks: list[bytes] = []
-                while True:
-                    chunk = conn.recv(65536)
-                    if not chunk:
-                        break
-                    chunks.append(chunk)
-            head = b"".join(chunks).split(b"\r\n", 1)[0].decode(errors="replace")
-            parts = head.split()
-            status = int(parts[1]) if len(parts) > 1 else 0
-            if status == 200:
-                return
-            last_error = RuntimeError(f"local Traefik returned {status}")
+                conn = raw
+                if scheme == "https":
+                    context = ssl.create_default_context()
+                    conn = context.wrap_socket(raw, server_hostname=host)
+                with conn:
+                    conn.sendall(
+                        (
+                            f"GET {path} HTTP/1.1\r\nHost: {host}\r\n"
+                            "Connection: close\r\n\r\n"
+                        ).encode()
+                    )
+                    chunks: list[bytes] = []
+                    while True:
+                        chunk = conn.recv(65536)
+                        if not chunk:
+                            break
+                        chunks.append(chunk)
+                raw_head, _, _body = b"".join(chunks).partition(b"\r\n\r\n")
+                lines = raw_head.split(b"\r\n")
+                head = lines[0].decode(errors="replace")
+                parts = head.split()
+                status = int(parts[1]) if len(parts) > 1 else 0
+                if status == 200:
+                    return
+                headers = {}
+                for line in lines[1:]:
+                    key, _, value = line.partition(b":")
+                    if value:
+                        headers[key.strip().lower()] = value.strip()
+                location = headers.get(b"location", b"").decode(errors="replace")
+                if status in (301, 302, 303, 307, 308) and location:
+                    target = urlsplit(urljoin(target_key, location))
+                    scheme = target.scheme or scheme
+                    host = target.hostname or host
+                    path = target.path or "/"
+                    if target.query:
+                        path += f"?{target.query}"
+                    continue
+                last_error = RuntimeError(f"local Traefik returned {status}")
+                break
         except (OSError, ssl.SSLError, ValueError) as exc:
             last_error = exc
         remaining = deadline - time.monotonic()
