@@ -206,6 +206,12 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   mount options=(ro, rbind) /var/lib/spanel/cells/{slug}/** -> /var/lib/spanel/cells/{slug}/**,
   mount options=(ro, remount, rbind) /var/lib/spanel/cells/{slug}/** -> /var/lib/spanel/cells/{slug}/**,
   mount options=(ro, nosuid, nodev, noexec, remount, rbind) /var/lib/spanel/cells/{slug}/** -> /var/lib/spanel/cells/{slug}/**,
+  # runc bind-mounts the daemon's docker-init binary into the container rootfs
+  # when a service sets `init: true` (Dokploy/Docker Compose templates do).
+  # Without this narrow source grant AppArmor denies the bind with
+  # `flags=MS_RDONLY|MS_BIND: permission denied` and the container stays Created.
+  mount options in (ro, bind, rbind) /usr/libexec/docker/docker-init -> /var/lib/spanel/cells/{slug}/**,
+  mount options in (ro, bind, rbind) /usr/bin/docker-init -> /var/lib/spanel/cells/{slug}/**,
   mount options=(rw, bind) /dev/** -> /var/lib/spanel/cells/{slug}/**,
   mount options=(rw, bind) /proc/** -> /var/lib/spanel/cells/{slug}/**,
   mount options=(rw, rbind) /proc/** -> /var/lib/spanel/cells/{slug}/**,

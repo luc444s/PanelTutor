@@ -264,6 +264,27 @@ def test_render_profile_keeps_capabilities_ptrace_and_mounts_scoped() -> None:
     assert "/var/lib/spanel/cells/other" not in profile
 
 
+def test_docker_init_bind_mount_is_allowed_for_init_true_services() -> None:
+    """Compose services with ``init: true`` must be able to start rootless.
+
+    Dokploy templates (``docker-compose.dokploy.yml``) set ``init: true``, so
+    runc bind-mounts the daemon's docker-init binary into the container rootfs.
+    The cell profile only allowed mounts whose source is inside the cell tree,
+    so AppArmor denied it with ``flags=MS_RDONLY|MS_BIND: permission denied``
+    and every container stayed in ``Created``.
+    """
+    rule_lines = {
+        line.strip()
+        for line in _profile().splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+    for source in ("/usr/libexec/docker/docker-init", "/usr/bin/docker-init"):
+        assert (
+            f"mount options in (ro, bind, rbind) {source} "
+            "-> /var/lib/spanel/cells/acme/**," in rule_lines
+        )
+
+
 def test_single_path_remount_rule_is_present_for_no_srcname_remounts() -> None:
     """E2E 0109-R2: AppArmor will not match a remount (no srcname) to a
     two-path `src -> dst` rule, so the HEAD single-path rule must be restored.
