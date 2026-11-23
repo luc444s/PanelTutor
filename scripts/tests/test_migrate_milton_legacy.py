@@ -138,9 +138,22 @@ def test_stream_pipes_the_source_into_the_sink(tmp_path) -> None:
 class _FakeDocker:
     def __init__(self, stdout: bytes) -> None:
         self.stdout = stdout
+        self.calls: list[tuple] = []
 
     def run(self, *args, **kwargs):
+        self.calls.append(args)
         return subprocess.CompletedProcess(args, 0, self.stdout, b"")
+
+
+def test_https_proxy_helper_updates_only_the_cell_copy() -> None:
+    docker = _FakeDocker(b"")
+    mod.ensure_wordpress_https_proxy(docker, "infra-html")
+    args = docker.calls[0]
+    assert "infra-html:/var/www/html" in args
+    assert args[-2] == "-r"
+    assert "SPANEL_HTTPS_PROXY" in args[-1]
+    assert "HTTP_X_FORWARDED_PROTO" in args[-1]
+    assert "empty($_SERVER['HTTPS'])" in args[-1]
 
 
 def test_wordpress_web_ids_parses_the_target_image() -> None:

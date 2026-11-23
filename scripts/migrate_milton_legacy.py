@@ -368,6 +368,54 @@ def normalize_volume(
     )
 
 
+def ensure_wordpress_https_proxy(cell: Docker, volume: str) -> None:
+    """Make WordPress see HTTPS when the edge terminates TLS.
+
+    ``is_ssl()`` only trusts ``$_SERVER['HTTPS']``. The ingress forwards the
+    real scheme in ``X-Forwarded-Proto``, but WordPress does not use that
+    header on its own, so sites whose ``home`` is HTTPS redirect forever.
+    The snippet is inserted once in the copied volume, never in the rootful
+    source, and is guarded so a real HTTPS request still wins.
+    """
+    php = r"""
+$p = "/var/www/html/wp-config.php";
+if (!is_file($p)) { exit(0); }
+$s = file_get_contents($p);
+if (strpos($s, "SPANEL_HTTPS_PROXY") !== false) { exit(0); }
+$at = strpos($s, "<?php");
+if ($at === false) {
+    fwrite(STDERR, "wp-config.php has no PHP open tag\n");
+    exit(0);
+}
+$snippet = <<<'PHP'
+if (empty($_SERVER['HTTPS']) && isset($_SERVER['HTTP_X_FORWARDED_PROTO']) && strtolower($_SERVER['HTTP_X_FORWARDED_PROTO']) === 'https') {
+    $_SERVER['HTTPS'] = 'on';
+}
+// SPANEL_HTTPS_PROXY
+PHP;
+$s = substr_replace($s, "\n" . $snippet, $at + 5, 0);
+if (file_put_contents($p, $s) === false) {
+    fwrite(STDERR, "could not update wp-config.php\n");
+    exit(1);
+}
+"""
+    log(f"habilitando HTTPS tras el proxy: {volume}")
+    cell.run(
+        "run",
+        "--rm",
+        "--user",
+        "0",
+        "-v",
+        f"{volume}:/var/www/html",
+        "--entrypoint",
+        "php",
+        DEFAULT_WP_CLI,
+        "-r",
+        php,
+        timeout=120,
+    )
+
+
 def wordpress_web_ids(cell: Docker, image: str) -> tuple[int, int]:
     """Read the target image's www-data uid/gid; fall back to Debian's 33."""
     completed = cell.run(
@@ -494,6 +542,11 @@ def verify_via_traefik(
                 raw = socket.create_connection(
                     ("traefik", port), timeout=max(0.1, min(5.0, remaining))
                 )
+                # The TCP handshake is quick, but a cold WordPress request can
+                # take longer than five seconds. Keep the read timeout close to
+                # the remaining deadline instead of treating a slow first byte
+                # as a missing route.
+                raw.settimeout(max(0.1, min(20.0, remaining)))
                 conn = raw
                 if scheme == "https":
                     context = ssl.create_default_context()
@@ -909,6 +962,8 @@ class LegacyMigrator:
             )
         copy_bind(self.cell, self.rootful, db_bind, DEFAULT_DB_VOLUME)
         for site in sites:
+            volume = f"{site.container_name}-html"
+            ensure_wordpress_https_proxy(self.cell, volume)
             image = self.plan.wordpress_image or image_of(
                 self.source_info(site), DEFAULT_DB_IMAGE
             )
@@ -916,7 +971,7 @@ class LegacyMigrator:
             normalize_volume(
                 self.cell,
                 self.rootful,
-                f"{site.container_name}-html",
+                volume,
                 uid=uid,
                 gid=gid,
             )
