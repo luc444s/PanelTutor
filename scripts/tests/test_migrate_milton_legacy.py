@@ -68,3 +68,13 @@ def test_dry_run_is_an_accepted_explicit_flag() -> None:
     args = mod.parser().parse_args(["--statics", "--dry-run"])
     assert args.dry_run is True
     assert args.apply is False
+
+
+def test_stream_pipes_the_source_into_the_sink(tmp_path) -> None:
+    target = tmp_path / "out"
+    mod.stream(
+        ["sh", "-c", "printf legacy-bytes"],
+        ["sh", "-c", f"cat > {target}"],
+        timeout=30,
+    )
+    assert target.read_text() == "legacy-bytes"

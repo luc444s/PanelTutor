@@ -129,7 +129,8 @@ def stream(source: list[str], sink: list[str], *, timeout: int = 3600) -> None:
     consumer = subprocess.Popen(
         sink, stdin=producer.stdout, stdout=subprocess.PIPE, stderr=subprocess.PIPE
     )
-    assert consumer.stdin is not None
+    # ``Popen.stdin`` is only populated when stdin=PIPE/FILE is requested by
+    # name; passing an already-open pipe leaves the attribute as None.
     producer.stdout.close()
     try:
         _, sink_err = consumer.communicate(timeout=timeout)
