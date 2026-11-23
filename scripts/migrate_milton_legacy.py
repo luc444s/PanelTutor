@@ -1005,6 +1005,12 @@ def parser() -> argparse.ArgumentParser:
             "HTTP probe fails. Verify the route manually before trusting it."
         ),
     )
+    p.add_argument(
+        "--verify-timeout",
+        type=float,
+        default=None,
+        help="Override the external HTTP probe deadline in seconds.",
+    )
     p.add_argument("--yes", action="store_true", help="Skip the confirmation.")
     p.add_argument(
         "--force", action="store_true", help="Recreate target containers/volumes."
@@ -1034,6 +1040,20 @@ def main(argv: list[str] | None = None) -> int:
         rootless_migration.verify_external_route = lambda *a, **k: None
         print(
             "   AVISO: verificación HTTP externa omitida; valida la ruta a mano",
+            flush=True,
+        )
+    elif args.verify_timeout is not None:
+        from plugins.hosting.backend import rootless_migration
+
+        original_verify = rootless_migration.verify_external_route
+
+        def patient_verify(domain, *, https=True, **kwargs):
+            kwargs.setdefault("deadline_seconds", args.verify_timeout)
+            return original_verify(domain, https=https, **kwargs)
+
+        rootless_migration.verify_external_route = patient_verify
+        print(
+            f"   verificación HTTP externa: deadline {args.verify_timeout:g}s",
             flush=True,
         )
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
