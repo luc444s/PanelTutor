@@ -58,16 +58,20 @@ def test_legacy_shared_layout_resolves_the_shared_database(
         "NetworkSettings": {"Networks": {"spanel-demo-shared-db": {}}},
     }
 
-    def fake(data_root, slug, *args):
+    def fake_json(data_root, slug, *args):
         if args[:2] == ("inspect", "ardiffx"):
             return [site]
-        if args and args[0] == "ps":
-            return ["dbid"]
         if args[:2] == ("inspect", "dbid"):
             return [database]
         raise AssertionError(args)
 
-    monkeypatch.setattr(host_agent, "_cell_docker_json", fake)
+    def fake_text(data_root, slug, *args):
+        if args and args[0] == "ps":
+            return "dbid\n"
+        raise AssertionError(args)
+
+    monkeypatch.setattr(host_agent, "_cell_docker_json", fake_json)
+    monkeypatch.setattr(host_agent, "_cell_docker_text", fake_text)
     result = host_agent._legacy_shared_descriptor(
         tmp_path, "demo", "ardiffx", "tenant-id"
     )

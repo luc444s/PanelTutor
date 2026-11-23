@@ -437,7 +437,7 @@ def build_agent_from_env(data_root: str | Path) -> PlanAgent:
     )
 
 
-def _cell_docker_json(data_root: str | Path, slug: str, *args: str) -> Any:
+def _cell_docker_text(data_root: str | Path, slug: str, *args: str) -> str:
     """Run a read-only Docker query inside the tenant cell."""
     allocation = alloc.load_registry(data_root)["allocations"].get(slug)
     if allocation is None:
@@ -456,8 +456,13 @@ def _cell_docker_json(data_root: str | Path, slug: str, *args: str) -> Any:
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()[:200]
         raise ValueError(f"cell docker query failed: {detail}")
+    return completed.stdout
+
+
+def _cell_docker_json(data_root: str | Path, slug: str, *args: str) -> Any:
+    """Run a cell Docker query whose output is JSON."""
     try:
-        return json.loads(completed.stdout or "[]")
+        return json.loads(_cell_docker_text(data_root, slug, *args) or "[]")
     except ValueError as exc:
         raise ValueError("cell docker query returned invalid JSON") from exc
 
@@ -476,7 +481,7 @@ def _legacy_shared_descriptor(
     labels = (site.get("Config") or {}).get("Labels") or {}
     if labels.get("spanel.tenant") != tenant_id or labels.get("spanel.managed") != "true":
         raise ValueError("site container is not owned by this tenant")
-    ids = _cell_docker_json(
+    ids = _cell_docker_text(
         data_root,
         slug,
         "ps",
@@ -485,8 +490,8 @@ def _legacy_shared_descriptor(
         f"label=spanel.tenant={tenant_id}",
         "--filter",
         "label=spanel.role=legacy-shared-db",
-    )
-    if not isinstance(ids, list) or not ids:
+    ).split()
+    if not ids:
         raise ValueError("legacy shared database container not found")
     db_info = _cell_docker_json(data_root, slug, "inspect", str(ids[0]))
     if not isinstance(db_info, list) or not db_info:
