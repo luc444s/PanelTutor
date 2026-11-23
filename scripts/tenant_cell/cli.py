@@ -828,3 +828,7 @@ def edge_relay(
         control.close()
         tcp.close()
         path.unlink(missing_ok=True)
+
+
+if __name__ == "__main__":  # pragma: no cover - module entry point
+    app()
