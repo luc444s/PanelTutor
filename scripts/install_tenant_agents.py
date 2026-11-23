@@ -589,18 +589,29 @@ def _print_human(payload: dict[str, Any]) -> None:
     print(f"traefik:   {payload.get('traefik_uid')}")
     token = payload.get("token")
     print(f"token:     {token}")
-    for name, info in (payload.get("units") or {}).items():
+    # `install` returns per-unit actions as strings and embeds the detailed
+    # inspect payload; `--check` returns the inspect payload directly.
+    detailed = payload.get("inspect") or payload
+    for name, info in (detailed.get("units") or {}).items():
+        if not isinstance(info, dict):
+            continue
         print(
             f"{name}: installed={info.get('installed')} "
             f"matches={info.get('matches')} active={info.get('active')}"
         )
-    sockets = payload.get("sockets") or {}
+    runtime = detailed.get("runtime") or {}
+    if runtime:
+        print(
+            f"runtime:   {runtime.get('path')} "
+            f"installed={runtime.get('installed')} matches={runtime.get('matches')}"
+        )
+    sockets = detailed.get("sockets") or {}
     if sockets:
         print(
             f"sockets:   plan={sockets.get('plan_agent_exists')} "
             f"relay={sockets.get('edge_relay_exists')}"
         )
-    capacity = payload.get("capacity")
+    capacity = detailed.get("capacity") or payload.get("capacity")
     if capacity:
         print(f"capacity:  {capacity}")
 

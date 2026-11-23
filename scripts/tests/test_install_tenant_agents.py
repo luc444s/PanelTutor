@@ -87,6 +87,8 @@ def test_install_creates_token_and_renders_units(installer) -> None:
     assert "ReadWritePaths=" in plan and "/run/spanel" in plan
     runtime = (inst.tmpfiles_path).read_text()
     assert "d /run/spanel 0770 root 1000 -" in runtime
+    # The human renderer must accept both install and --check payloads.
+    mod._print_human(payload)
     assert any(call[:2] == ["systemctl", "daemon-reload"] for call in fake.calls)
 
 
