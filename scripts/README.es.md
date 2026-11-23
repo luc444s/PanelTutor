@@ -60,6 +60,7 @@ python3 scripts/<script>.py --help
 | Migrar un tenant a rootless en una sola ejecución | [`spanel-migrator-to-rootless`](#spanel-migrator-to-rootless) |
 | Instalar/reparar el plan agent y el edge relay del host | [`install_tenant_agents.py`](#install_tenant_agentspy) |
 | Redesplegar Apps en la celda rootless | [`migrate_tenant_apps.py`](#migrate_tenant_appspy) |
+| Migrar la pila legacy de milton (binds/BD compartida) | [`migrate_milton_legacy.py`](#migrate_milton_legacypy) |
 | Migrar certificados SNI legacy | [`migrate_legacy_sni.py`](#migrate_legacy_snip) |
 
 ## Despliegue
@@ -781,6 +782,38 @@ python3 scripts/migrate_tenant_apps.py --tenant demo --apply
 ```
 
 El origen del panel sale de `SPANEL_DOMAIN` en `.env.docker` (o `--api-url`).
+
+### `migrate_milton_legacy.py`
+
+Migración legacy dedicada al tenant `milton`. La pila original es anterior al
+contrato de labels/volúmenes de SPanel: WordPress usa bind mounts, el host de
+la base solo está en `wp-config.php`, el MariaDB compartido es un bind mount y
+`portafolio` es una imagen estática con el contenido dentro, sin volumen.
+
+Se ejecuta **dentro de `spanel-app-1`** y separa el trabajo por fases:
+
+```bash
+# solo estáticos, sin ventana de MariaDB
+docker cp scripts/migrate_milton_legacy.py spanel-app-1:/tmp/
+docker exec -it -e PYTHONPATH=/app:/app/vendor/systutor-core \
+  spanel-app-1 python /tmp/migrate_milton_legacy.py \
+  --tenant milton --statics --dry-run
+
+# aplicar estáticos
+docker exec -it -e PYTHONPATH=/app:/app/vendor/systutor-core \
+  spanel-app-1 python /tmp/migrate_milton_legacy.py \
+  --tenant milton --statics --apply --yes
+
+# WordPress + MariaDB compartido (ventana de mantenimiento)
+docker exec -it -e PYTHONPATH=/app:/app/vendor/systutor-core \
+  spanel-app-1 python /tmp/migrate_milton_legacy.py \
+  --tenant milton --wordpress --apply
+```
+
+Por defecto es dry-run. `--wordpress` para los cuatro WordPress legacy y
+`mariadb`, copia los bind a volúmenes de la celda, arranca el MariaDB
+compartido en la celda y hace el cutover de rutas. Los contenedores y datos
+rootful quedan disponibles para rollback.
 
 ## Archivos auxiliares
 

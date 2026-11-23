@@ -60,6 +60,7 @@ English | [Español](README.es.md)
 | Migrate a tenant to rootless in one run | [`spanel-migrator-to-rootless`](#spanel-migrator-to-rootless) |
 | Install/repair the host plan agent and edge relay | [`install_tenant_agents.py`](#install_tenant_agentspy) |
 | Redeploy Apps into the rootless cell | [`migrate_tenant_apps.py`](#migrate_tenant_appspy) |
+| Migrate the legacy milton stack (binds/shared DB) | [`migrate_milton_legacy.py`](#migrate_milton_legacypy) |
 | Migrate legacy SNI certs | [`migrate_legacy_sni.py`](#migrate_legacy_snip)
 
 ## Deployment
@@ -776,6 +777,38 @@ python3 scripts/migrate_tenant_apps.py --tenant demo --apply
 ```
 
 The panel origin comes from `SPANEL_DOMAIN` in `.env.docker` (or `--api-url`).
+
+### `migrate_milton_legacy.py`
+
+Dedicated legacy migration for the `milton` tenant. The source stack predates
+SPanel labels/volumes: WordPress uses bind mounts, the database host lives only
+in `wp-config.php`, the shared MariaDB is a bind mount, and `portafolio` is a
+baked static image with no volume.
+
+It runs **inside `spanel-app-1`** and phases the work:
+
+```bash
+# statics only, no MariaDB window
+docker cp scripts/migrate_milton_legacy.py spanel-app-1:/tmp/
+docker exec -it -e PYTHONPATH=/app:/app/vendor/systutor-core \
+  spanel-app-1 python /tmp/migrate_milton_legacy.py \
+  --tenant milton --statics --dry-run
+
+# apply statics
+docker exec -it -e PYTHONPATH=/app:/app/vendor/systutor-core \
+  spanel-app-1 python /tmp/migrate_milton_legacy.py \
+  --tenant milton --statics --apply --yes
+
+# WordPress + shared MariaDB (maintenance window)
+docker exec -it -e PYTHONPATH=/app:/app/vendor/systutor-core \
+  spanel-app-1 python /tmp/migrate_milton_legacy.py \
+  --tenant milton --wordpress --apply
+```
+
+Default is dry-run. `--wordpress` stops the four legacy WordPress containers
+and `mariadb`, copies the bind data into cell volumes, starts the shared
+MariaDB in the cell and cuts the routes over. The rootful containers/data stay
+available for rollback.
 
 ## Auxiliary files
 
