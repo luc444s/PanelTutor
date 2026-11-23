@@ -68,6 +68,12 @@ def test_dry_run_is_an_accepted_explicit_flag() -> None:
     args = mod.parser().parse_args(["--statics", "--dry-run"])
     assert args.dry_run is True
     assert args.apply is False
+    assert args.skip_external_verify is False
+
+
+def test_skip_external_verify_is_explicit() -> None:
+    args = mod.parser().parse_args(["--statics", "--skip-external-verify"])
+    assert args.skip_external_verify is True
 
 
 def test_stream_pipes_the_source_into_the_sink(tmp_path) -> None:

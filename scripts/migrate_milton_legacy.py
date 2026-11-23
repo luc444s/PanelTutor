@@ -997,6 +997,14 @@ def parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Explicit preview (default; wins over --apply).",
     )
+    p.add_argument(
+        "--skip-external-verify",
+        action="store_true",
+        help=(
+            "Diagnostic only: keep the rootless cutover even if the public "
+            "HTTP probe fails. Verify the route manually before trusting it."
+        ),
+    )
     p.add_argument("--yes", action="store_true", help="Skip the confirmation.")
     p.add_argument(
         "--force", action="store_true", help="Recreate target containers/volumes."
@@ -1020,6 +1028,14 @@ def main(argv: list[str] | None = None) -> int:
     cell = args.cell or args.tenant
     if args.dry_run:
         args.apply = False
+    if args.skip_external_verify:
+        from plugins.hosting.backend import rootless_migration
+
+        rootless_migration.verify_external_route = lambda *a, **k: None
+        print(
+            "   AVISO: verificación HTTP externa omitida; valida la ruta a mano",
+            flush=True,
+        )
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     state = args.state_file or Path(
         f"/var/lib/spanel/hosting-backups/milton-legacy-{stamp}.json"
