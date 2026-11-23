@@ -62,3 +62,9 @@ def test_cell_docker_uses_an_explicit_socket() -> None:
         "ps",
     ]
     assert mod.Docker().argv("ps") == ["docker", "ps"]
+
+
+def test_dry_run_is_an_accepted_explicit_flag() -> None:
+    args = mod.parser().parse_args(["--statics", "--dry-run"])
+    assert args.dry_run is True
+    assert args.apply is False

@@ -991,6 +991,11 @@ def parser() -> argparse.ArgumentParser:
     )
     p.add_argument("--all", action="store_true", help="Statics then WordPress.")
     p.add_argument("--apply", action="store_true", help="Mutate; default is dry-run.")
+    p.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Explicit preview (default; wins over --apply).",
+    )
     p.add_argument("--yes", action="store_true", help="Skip the confirmation.")
     p.add_argument(
         "--force", action="store_true", help="Recreate target containers/volumes."
@@ -1012,6 +1017,8 @@ def main(argv: list[str] | None = None) -> int:
         args.statics = True
         args.wordpress = True
     cell = args.cell or args.tenant
+    if args.dry_run:
+        args.apply = False
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     state = args.state_file or Path(
         f"/var/lib/spanel/hosting-backups/milton-legacy-{stamp}.json"
