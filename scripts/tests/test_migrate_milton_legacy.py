@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -132,3 +133,17 @@ def test_stream_pipes_the_source_into_the_sink(tmp_path) -> None:
         timeout=30,
     )
     assert target.read_text() == "legacy-bytes"
+
+
+class _FakeDocker:
+    def __init__(self, stdout: bytes) -> None:
+        self.stdout = stdout
+
+    def run(self, *args, **kwargs):
+        return subprocess.CompletedProcess(args, 0, self.stdout, b"")
+
+
+def test_wordpress_web_ids_parses_the_target_image() -> None:
+    docker = _FakeDocker(b"uid=33(www-data) gid=33(www-data) groups=33(www-data)\n")
+    assert mod.wordpress_web_ids(docker, "wordpress:latest") == (33, 33)
+    assert mod.wordpress_web_ids(_FakeDocker(b""), "wordpress:latest") == (33, 33)

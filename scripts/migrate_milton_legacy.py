@@ -41,6 +41,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -299,10 +300,16 @@ def wait_wordpress(
         name,
         "--env-file",
         str(env_file),
+        # The legacy volumes carry Alpine/Debian web uids. The probe only
+        # reads; running it as root (with --allow-root) avoids a false
+        # "not a WordPress installation" caused by directory permissions.
+        "--user",
+        "0",
         DEFAULT_WP_CLI,
         "wp",
         "core",
         "is-installed",
+        "--allow-root",
     )
     while time.monotonic() < deadline:
         completed = run(argv, timeout=120, check=False)
@@ -333,6 +340,51 @@ def ensure_image(cell: Docker, rootful: Docker, image: str) -> None:
         return
     log(f"descargando imagen en la celda: {image}")
     cell.run("pull", image, timeout=1800)
+
+
+def normalize_volume(
+    cell: Docker,
+    rootful: Docker,
+    volume: str,
+    *,
+    uid: int,
+    gid: int,
+) -> None:
+    """Align a copied site volume with the target image's web user."""
+    ensure_image(cell, rootful, DEFAULT_BUSYBOX)
+    log(f"normalizando permisos: {volume} -> {uid}:{gid}")
+    cell.run(
+        "run",
+        "--rm",
+        "-v",
+        f"{volume}:/data",
+        DEFAULT_BUSYBOX,
+        "sh",
+        "-lc",
+        f"chown -R {int(uid)}:{int(gid)} /data && "
+        "find /data -type d -exec chmod 750 {} + && "
+        "find /data -type f -exec chmod 640 {} +",
+        timeout=3600,
+    )
+
+
+def wordpress_web_ids(cell: Docker, image: str) -> tuple[int, int]:
+    """Read the target image's www-data uid/gid; fall back to Debian's 33."""
+    completed = cell.run(
+        "run",
+        "--rm",
+        "--entrypoint",
+        "id",
+        image,
+        "www-data",
+        timeout=60,
+        check=False,
+    )
+    text = (completed.stdout or b"").decode(errors="replace")
+    match = re.search(r"uid=(\d+).*?gid=(\d+)", text)
+    if not match:
+        return 33, 33
+    return int(match.group(1)), int(match.group(2))
 
 
 def copy_bind(cell: Docker, rootful: Docker, source: str, volume: str) -> None:
@@ -829,6 +881,18 @@ class LegacyMigrator:
                 f"{site.container_name}-html",
             )
         copy_bind(self.cell, self.rootful, db_bind, DEFAULT_DB_VOLUME)
+        for site in sites:
+            image = self.plan.wordpress_image or image_of(
+                self.source_info(site), DEFAULT_DB_IMAGE
+            )
+            uid, gid = wordpress_web_ids(self.cell, image)
+            normalize_volume(
+                self.cell,
+                self.rootful,
+                f"{site.container_name}-html",
+                uid=uid,
+                gid=gid,
+            )
         # Start the shared database.
         self._start_shared_database(db_info)
         env_files = {}
@@ -894,6 +958,10 @@ class LegacyMigrator:
                     timeout=60,
                     check=False,
                 )
+            elif not is_running(existing):
+                # A previous failed run can leave the candidate stopped after
+                # rollback. The volume is already copied, so start it again.
+                self.cell.run("start", site.container_name, timeout=120)
             try:
                 wait_wordpress(
                     self.cell,
