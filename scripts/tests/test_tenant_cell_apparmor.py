@@ -264,6 +264,24 @@ def test_render_profile_keeps_capabilities_ptrace_and_mounts_scoped() -> None:
     assert "/var/lib/spanel/cells/other" not in profile
 
 
+def test_container_rootfs_readonly_remount_is_allowed() -> None:
+    """``read_only: true`` services remount their own rootfs read-only.
+
+    runc performs the remount after pivot_root, so AppArmor resolves the
+    destination as ``/`` in the container's mount namespace; a rule scoped to
+    the cell path cannot match it and the container stays in ``Created``.
+    """
+    rule_lines = {
+        line.strip()
+        for line in _profile().splitlines()
+        if line.strip() and not line.strip().startswith("#")
+    }
+    assert (
+        "remount options in (ro, rw, nosuid, nodev, noexec, bind, rbind) /,"
+        in rule_lines
+    )
+
+
 def test_docker_init_bind_mount_is_allowed_for_init_true_services() -> None:
     """Compose services with ``init: true`` must be able to start rootless.
 

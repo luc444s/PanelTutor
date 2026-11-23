@@ -201,6 +201,12 @@ profile spanel-cell-{slug} flags=(attach_disconnected) {{
   # E2E reported `failed flags match` / DENIED when only the two-path rule was
   # present. Keep this HEAD rule so BuildKit's `ro, remount, rbind` succeeds.
   remount options in (ro, rw, nosuid, nodev, noexec, bind, rbind) /var/lib/spanel/cells/{slug}/**,
+  # Compose services with ``read_only: true`` make runc remount the container
+  # rootfs read-only. After pivot_root the destination is ``/`` inside the
+  # container's own mount namespace, so no source-scoped rule can match it.
+  # This stays inside the container namespace: the cell daemon is unprivileged
+  # and cannot remount the host root without CAP_SYS_ADMIN in the init userns.
+  remount options in (ro, rw, nosuid, nodev, noexec, bind, rbind) /,
   # BuildKit reads the Dockerfile by rbind-mounting a read-only snapshot, then
   # remounts it read-only; runc remounts resolv.conf/hosts inside the rootfs.
   mount options=(ro, rbind) /var/lib/spanel/cells/{slug}/** -> /var/lib/spanel/cells/{slug}/**,
