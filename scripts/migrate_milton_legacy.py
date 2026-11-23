@@ -1013,13 +1013,21 @@ class LegacyMigrator:
             staged.append(route)
         try:
             for site in sites:
+                domain = str(site.domain)
+                alias = "" if domain.startswith("www.") else f"www.{domain}"
                 publisher = get_site_domain_publisher(self.app)
                 if publisher is not None:
-                    publisher.unpublish(str(site.domain))
-                https = RootlessRoutePublisher(self.app, self.db).publish(
-                    self.tenant.id, str(site.domain)
-                )
-                verify_external_route(str(site.domain), https=https)
+                    publisher.unpublish(domain)
+                    if alias:
+                        publisher.unpublish(alias)
+                route_publisher = RootlessRoutePublisher(self.app, self.db)
+                https = route_publisher.publish(self.tenant.id, domain)
+                if alias:
+                    # WordPress canonical URLs often use www; the ingress now
+                    # serves both names, so publish the same relay route for
+                    # the alias too.
+                    route_publisher.publish(self.tenant.id, alias)
+                verify_external_route(domain, https=https)
                 write_resource_runtime(
                     self.app, self.db, self.tenant.id, site.kind, site.id, "rootless"
                 )
@@ -1102,7 +1110,12 @@ class LegacyMigrator:
         ingress = RootlessIngress(self.db, target)
         for site in sites:
             try:
-                RootlessRoutePublisher(self.app, self.db).unpublish(str(site.domain))
+                domain = str(site.domain)
+                alias = "" if domain.startswith("www.") else f"www.{domain}"
+                route_publisher = RootlessRoutePublisher(self.app, self.db)
+                route_publisher.unpublish(domain)
+                if alias:
+                    route_publisher.unpublish(alias)
             except Exception as exc:  # noqa: BLE001 - rollback keeps going
                 log(f"rollback route {site.domain}: {exc}")
             try:

@@ -99,6 +99,19 @@ class RouteSpec:
     port: int
 
 
+def _server_names(domain: str) -> str:
+    """Apex routes also answer the conventional www alias."""
+    names = [domain]
+    if not domain.startswith("www."):
+        try:
+            import ipaddress
+
+            ipaddress.ip_address(domain)
+        except ValueError:
+            names.append(f"www.{domain}")
+    return " ".join(names)
+
+
 class RootlessIngress:
     def __init__(self, db: Session, runtime: ContainerRuntimeHandle) -> None:
         if runtime.runtime != "rootless":
@@ -131,7 +144,7 @@ class RootlessIngress:
         for route in sorted(routes, key=lambda item: item.domain):
             blocks.append(
                 "server { listen 80; "
-                f"server_name {route.domain}; "
+                f"server_name {_server_names(route.domain)}; "
                 "location / { "
                 f"proxy_pass http://{route.target}:{route.port}; "
                 "proxy_set_header Host $host; "
