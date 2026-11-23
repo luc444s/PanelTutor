@@ -15,7 +15,9 @@ PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
 ReadWritePaths=/var/lib/spanel /etc/systemd/system /run/systemd/system /sys/fs/cgroup /run/spanel
-RestrictAddressFamilies=AF_UNIX
+# AF_UNIX is the control socket; AF_INET/AF_INET6 are required by the
+# optional rootless phpMyAdmin broker, which queries Postgres over TCP.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 RestrictSUIDSGID=true
 # A.SPEC 0102: the local mutation gate exists ONLY in this host process.
 Environment=SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1

@@ -378,6 +378,16 @@ def test_mutation_gate_is_only_in_the_agent_service(tmp_path: Path) -> None:
     assert "systemctl" not in client_source
 
 
+def test_plan_agent_can_reach_postgres_for_the_pma_broker() -> None:
+    unit = (ROOT / "scripts/tenant_cell/deploy/spanel-plan-agent.service").read_text()
+    family = next(
+        line for line in unit.splitlines() if line.startswith("RestrictAddressFamilies=")
+    )
+    assert "AF_UNIX" in family
+    assert "AF_INET" in family
+    assert "AF_INET6" in family
+
+
 def test_host_wiring_lab_is_explicitly_non_production(tmp_path: Path) -> None:
     from scripts.tenant_cell import host_wiring_lab
 
