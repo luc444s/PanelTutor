@@ -1011,7 +1011,9 @@ class Migrator:
                 continue
             if not item.get("ok"):
                 message = item.get("error") or "site cannot be migrated"
-                if self.plan.dry_run and not item.get("site_id"):
+                if self.plan.dry_run and (
+                    not item.get("site_id") or "cell is unavailable" in message.lower()
+                ):
                     self.console.warn(f"site preview unavailable: {message}")
                     return []
                 raise PreflightError(f"site {site_id or '?'}: {message}")

@@ -297,6 +297,23 @@ def test_rollback_on_failure_rolls_back_migrated_sites(tmp_path) -> None:
     del original
 
 
+def test_dry_run_tolerates_missing_cell_when_listing_sites(tmp_path) -> None:
+    ops = FakeOperator()
+    ops.site_plans = [
+        {
+            "ok": False,
+            "site_id": "s1",
+            "error": "The tenant cell is unavailable",
+        }
+    ]
+    migrator, _ops, _console, _journal = make_migrator(
+        tmp_path, ops=ops, plan=make_plan(dry_run=True)
+    )
+    payload = migrator.run()
+    assert payload["ok"] is True
+    assert payload["migrated"] == []
+
+
 def test_shared_db_is_forwarded_to_hosting(tmp_path) -> None:
     migrator, ops, _console, _journal = make_migrator(
         tmp_path, plan=make_plan(shared_db="mariadb")
