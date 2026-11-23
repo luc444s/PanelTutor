@@ -44,9 +44,12 @@ PLAN_UNIT = "spanel-plan-agent.service"
 RELAY_UNIT = "spanel-edge-relay.service"
 PLAN_TEMPLATE = TEMPLATES / PLAN_UNIT
 RELAY_TEMPLATE = TEMPLATES / RELAY_UNIT
+RUNTIME_TMPFILES = "spanel.conf"
+RUNTIME_TEMPLATE = TEMPLATES / "spanel-runtime.conf"
 DEFAULT_DATA_ROOT = "/var/lib/spanel"
 DEFAULT_APP_CONTAINER = "spanel-app-1"
 DEFAULT_TRAEFIK_UID = 1000
+DEFAULT_TMPFILES_DIR = Path("/etc/tmpfiles.d")
 AGENT_SOCKET = "/run/spanel/plan-agent.sock"
 RELAY_SOCKET = "/run/spanel/edge-relay.sock"
 
@@ -221,11 +224,22 @@ def capacity_check(socket_path: Path, token_path: Path) -> dict[str, Any]:
 
 
 def interpreter_ready(python: str) -> tuple[bool, str]:
-    checked = run([python, "-c", "import typer, sqlalchemy"], timeout=30)
+    # The unit only needs typer at startup. SQLAlchemy is imported lazily for
+    # the optional db-relay operation, so it is reported separately and does
+    # not block installing the agent.
+    checked = run([python, "-c", "import typer"], timeout=30)
     if checked.returncode == 0:
         return True, ""
     detail = (checked.stderr or checked.stdout).strip()[-300:]
-    return False, f"{python} cannot import typer/sqlalchemy: {detail}"
+    return False, f"{python} cannot import typer: {detail}"
+
+
+def sqlalchemy_ready(python: str) -> tuple[bool, str]:
+    checked = run([python, "-c", "import sqlalchemy"], timeout=30)
+    if checked.returncode == 0:
+        return True, ""
+    detail = (checked.stderr or checked.stdout).strip()[-300:]
+    return False, f"{python} cannot import sqlalchemy: {detail}"
 
 
 class Installer:
@@ -239,6 +253,7 @@ class Installer:
         etc_dir: Path = Path("/etc/spanel"),
         unit_dir: Path = Path("/etc/systemd/system"),
         runtime_dir: Path = Path("/run/spanel"),
+        tmpfiles_dir: Path = DEFAULT_TMPFILES_DIR,
         python: str | None = None,
     ) -> None:
         self.repo = repo
@@ -248,15 +263,16 @@ class Installer:
         self.etc_dir = etc_dir
         self.unit_dir = unit_dir
         self.runtime_dir = runtime_dir
+        self.tmpfiles_dir = tmpfiles_dir
         venv_python = repo / ".venv" / "bin" / "python"
         system_python = Path("/usr/bin/python3")
         candidates: list[str] = []
         for candidate in (
             python,
             os.environ.get("SPANEL_PYTHON"),
-            str(system_python) if system_python.is_file() else None,
             str(venv_python) if venv_python.is_file() else None,
             sys.executable,
+            str(system_python) if system_python.is_file() else None,
         ):
             if candidate and candidate not in candidates:
                 candidates.append(candidate)
@@ -269,6 +285,7 @@ class Installer:
         self.token_path = etc_dir / "plan_agent_token"
         self.agent_socket = runtime_dir / "plan-agent.sock"
         self.relay_socket = runtime_dir / "edge-relay.sock"
+        self.tmpfiles_path = tmpfiles_dir / RUNTIME_TMPFILES
 
     def inspect(self) -> dict[str, Any]:
         plan_template = read_text(
@@ -277,7 +294,8 @@ class Installer:
         relay_template = read_text(
             self.repo / "scripts" / "tenant_cell" / "deploy" / RELAY_UNIT
         )
-        if not plan_template or not relay_template:
+        runtime_template = read_text(RUNTIME_TEMPLATE)
+        if not plan_template or not relay_template or not runtime_template:
             raise InstallError("agent unit templates are missing")
         try:
             traefik_uid = resolve_traefik_uid(self.traefik_uid_override)
@@ -308,6 +326,9 @@ class Installer:
             data_root=self.data_root,
             replacements={"<SPANEL_TRAEFIK_UID>": traefik_uid or DEFAULT_TRAEFIK_UID},
         )
+        runtime = runtime_template.replace(
+            "<SPANEL_TRAEFIK_UID>", str(traefik_uid or DEFAULT_TRAEFIK_UID)
+        )
         units = {}
         for name, content in ((PLAN_UNIT, plan), (RELAY_UNIT, relay)):
             path = self.unit_dir / name
@@ -324,11 +345,16 @@ class Installer:
             else None
         )
         interpreter_ok, interpreter_error = interpreter_ready(self.python)
+        sqlalchemy_ok, sqlalchemy_error = sqlalchemy_ready(self.python)
         result: dict[str, Any] = {
             "ok": True,
             "repo": str(self.repo),
             "python": self.python,
-            "interpreter": {"ok": interpreter_ok, "error": interpreter_error},
+            "interpreter": {
+                "ok": interpreter_ok,
+                "error": interpreter_error,
+                "sqlalchemy": {"ok": sqlalchemy_ok, "error": sqlalchemy_error},
+            },
             "data_root": self.data_root,
             "app_container": self.app_container,
             "app_uid": app_uid,
@@ -339,6 +365,11 @@ class Installer:
                 "mode": f"{token_mode:o}" if token_mode is not None else None,
             },
             "units": units,
+            "runtime": {
+                "path": str(self.tmpfiles_path),
+                "installed": self.tmpfiles_path.is_file(),
+                "matches": read_text(self.tmpfiles_path) == runtime,
+            },
             "sockets": {
                 "plan_agent": str(self.agent_socket),
                 "plan_agent_exists": self.agent_socket.is_socket(),
@@ -391,6 +422,9 @@ class Installer:
         relay_template = read_text(
             self.repo / "scripts" / "tenant_cell" / "deploy" / RELAY_UNIT
         )
+        runtime_template = read_text(RUNTIME_TEMPLATE)
+        if not plan_template or not relay_template or not runtime_template:
+            raise InstallError("agent unit templates are missing")
         plan = render_unit(
             plan_template,
             script="plan-agent",
@@ -407,6 +441,7 @@ class Installer:
             data_root=self.data_root,
             replacements={"<SPANEL_TRAEFIK_UID>": traefik_uid},
         )
+        runtime = runtime_template.replace("<SPANEL_TRAEFIK_UID>", str(traefik_uid))
 
         ensure_directory(self.etc_dir, 0o755, dry_run=dry_run)
         token = ensure_token(self.token_path, dry_run=dry_run)
@@ -433,6 +468,9 @@ class Installer:
             results["units"][name] = write_unit(
                 path, content, dry_run=dry_run, force=force
             )
+        results["runtime"] = write_unit(
+            self.tmpfiles_path, runtime, dry_run=dry_run, force=force
+        )
         if dry_run:
             results["started"] = False
             return results
@@ -441,6 +479,14 @@ class Installer:
             raise InstallError(
                 "systemctl daemon-reload failed: "
                 + (reloaded.stderr or reloaded.stdout).strip()[:300]
+            )
+        created = run(
+            ["systemd-tmpfiles", "--create", str(self.tmpfiles_path)], timeout=60
+        )
+        if created.returncode != 0:
+            raise InstallError(
+                "systemd-tmpfiles --create failed: "
+                + (created.stderr or created.stdout).strip()[:300]
             )
         if start:
             for name in (PLAN_UNIT, RELAY_UNIT):
@@ -499,6 +545,9 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--etc-dir", type=Path, default=Path("/etc/spanel"))
     parser.add_argument("--unit-dir", type=Path, default=Path("/etc/systemd/system"))
     parser.add_argument("--runtime-dir", type=Path, default=Path("/run/spanel"))
+    parser.add_argument(
+        "--tmpfiles-dir", type=Path, default=DEFAULT_TMPFILES_DIR
+    )
     return parser
 
 
@@ -511,6 +560,7 @@ def main(argv: list[str] | None = None) -> int:
         etc_dir=args.etc_dir,
         unit_dir=args.unit_dir,
         runtime_dir=args.runtime_dir,
+        tmpfiles_dir=args.tmpfiles_dir,
         python=args.python,
     )
     try:

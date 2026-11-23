@@ -43,6 +43,7 @@ def installer(tmp_path, monkeypatch):
         etc_dir=tmp_path / "etc",
         unit_dir=tmp_path / "units",
         runtime_dir=tmp_path / "run",
+        tmpfiles_dir=tmp_path / "tmpfiles",
         python="/usr/bin/python3",
     ), fake
 
@@ -79,12 +80,13 @@ def test_install_creates_token_and_renders_units(installer) -> None:
     assert "spanel_tenant.py plan-agent --data-root /var/lib/spanel" in plan
     assert "Environment=SPANEL_PLAN_AGENT_ALLOWED_UIDS=0" in plan
     assert "User=1000" in relay
-    # /run/spanel is owned by edge-relay (Traefik uid). Only that unit manages
-    # the shared RuntimeDirectory; the root units just write their sockets.
-    assert "RuntimeDirectory=spanel" not in plan
+    # /run/spanel is managed by the tmpfiles.d entry owned by root:traefik-gid.
+    # None of the units may declare RuntimeDirectory (systemd would chown it).
+    assert "RuntimeDirectory=" not in plan
+    assert "RuntimeDirectory=" not in relay
     assert "ReadWritePaths=" in plan and "/run/spanel" in plan
-    assert "RuntimeDirectoryPreserve=yes" in relay
-    assert "RuntimeDirectory=spanel" in relay
+    runtime = (inst.tmpfiles_path).read_text()
+    assert "d /run/spanel 0770 root 1000 -" in runtime
     assert any(call[:2] == ["systemctl", "daemon-reload"] for call in fake.calls)
 
 
