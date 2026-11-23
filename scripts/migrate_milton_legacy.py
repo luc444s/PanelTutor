@@ -1059,13 +1059,23 @@ def main(argv: list[str] | None = None) -> int:
     except LegacyError as exc:
         payload = {"ok": False, "error": str(exc)[:500]}
     except Exception as exc:  # noqa: BLE001 - operator boundary
-        payload = {"ok": False, "error": f"unexpected failure: {exc}"[:500]}
+        import traceback
+
+        detail = str(exc) or type(exc).__name__
+        payload = {
+            "ok": False,
+            "error": f"unexpected failure: {detail}"[:500],
+            "exception": type(exc).__name__,
+            "traceback": traceback.format_exc()[-1500:],
+        }
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True, default=str))
     elif payload.get("ok"):
         print("\nOK")
     else:
         print(f"\nERROR: {payload.get('error')}", file=sys.stderr)
+        if payload.get("traceback"):
+            print(payload["traceback"], file=sys.stderr)
     return 0 if payload.get("ok") else 1
 
 
