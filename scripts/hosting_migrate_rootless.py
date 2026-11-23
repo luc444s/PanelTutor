@@ -78,6 +78,11 @@ def _parser() -> argparse.ArgumentParser:
         item = sub.add_parser(name)
         item.add_argument("--site", required=True)
         item.add_argument("--json", action="store_true")
+    item = sub.add_parser("verify-pma")
+    item.add_argument("--site")
+    item.add_argument("--tenant")
+    item.add_argument("--all", action="store_true")
+    item.add_argument("--json", action="store_true")
     return parser
 
 
@@ -93,11 +98,69 @@ def _sites(db: Any, args: argparse.Namespace) -> list[HostingSite]:
     if tenant is None:
         raise ValueError("tenant not found")
     stmt = select(HostingSite).where(HostingSite.tenant_id == tenant.id)
-    if args.kind:
-        stmt = stmt.where(HostingSite.kind == args.kind)
-    rows = [row for row in db.scalars(stmt) if row.id not in set(args.exclude)]
+    kind = getattr(args, "kind", None)
+    if kind:
+        stmt = stmt.where(HostingSite.kind == kind)
+    excluded = set(getattr(args, "exclude", []) or [])
+    rows = [row for row in db.scalars(stmt) if row.id not in excluded]
     order = {"static": 0, "wordpress": 1}
     return sorted(rows, key=lambda row: (order.get(row.kind, 9), row.id))
+
+
+def _verify_pma_site(service: RootlessMigrationService, site: HostingSite) -> dict[str, Any]:
+    """Exercise the same broker + login path as the phpMyAdmin button."""
+    import secrets
+
+    from plugins.hosting.backend.phpmyadmin_broker import close_relay_quietly
+    from plugins.hosting.backend.phpmyadmin_proxy import PmaClient, validate_url
+    from plugins.hosting.backend.service import HostingService
+    from systutor.kernel.tenants.context import TenantContext
+
+    settings = service.settings
+    hosting = HostingService(service.db, settings=settings, app=service.app)
+    # The audit row stays tenant-scoped; there is no interactive user in a
+    # migration job, so the actor is deliberately null.
+    context = TenantContext(site.tenant_id, None, None, (), None)  # type: ignore[arg-type]
+    relay: dict[str, str] | None = None
+    try:
+        relay = hosting.phpmyadmin_relay_server(
+            site, context, secrets.token_urlsafe(32)
+        )
+        client = PmaClient(
+            validate_url(settings.phpmyadmin_internal_url),
+            settings.phpmyadmin_timeout,
+        )
+        cookies = hosting.phpmyadmin_login_credentials(
+            site,
+            context,
+            client,
+            server=relay["server"] if relay else None,
+        )
+        if not cookies:
+            raise RuntimeError("phpMyAdmin returned no session cookie")
+        return {
+            "ok": True,
+            "site_id": site.id,
+            "domain": str(site.domain),
+            "kind": site.kind,
+            "relay": bool(relay),
+        }
+    except Exception as exc:  # noqa: BLE001 - operator CLI reports the boundary
+        return {
+            "ok": False,
+            "site_id": site.id,
+            "domain": str(site.domain),
+            "kind": site.kind,
+            "error": str(exc)[:300],
+            "code": getattr(exc, "code", None),
+        }
+    finally:
+        if relay is not None:
+            close_relay_quietly(
+                settings,
+                relay.get("tenant_slug"),
+                relay.get("relay_id"),
+            )
 
 
 def execute(args: argparse.Namespace) -> dict[str, Any]:
@@ -132,6 +195,18 @@ def execute(args: argparse.Namespace) -> dict[str, Any]:
                     args, "continue_on_failure", False
                 ):
                     break
+            if len(results) == 1 and args.site:
+                return results[0]
+            return {"ok": all(row.get("ok") for row in results), "results": results}
+        if args.command == "verify-pma":
+            sites = [site for site in _sites(db, args) if site.kind == "wordpress"]
+            if not sites:
+                return {
+                    "ok": False,
+                    "error": "no WordPress site selected for phpMyAdmin verification",
+                    "results": [],
+                }
+            results = [_verify_pma_site(service, site) for site in sites]
             if len(results) == 1 and args.site:
                 return results[0]
             return {"ok": all(row.get("ok") for row in results), "results": results}

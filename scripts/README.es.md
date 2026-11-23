@@ -730,6 +730,9 @@ Opciones útiles:
   vez, lo arranca en la celda y migra los sitios contra él. Es una ventana de
   mantenimiento y nunca se activa automáticamente.
 - `--skip-plan` / `--skip-sites`: ejecuciones parciales.
+- Tras cada WordPress migrado abre phpMyAdmin por el broker rootless real y
+  hace login antes de `--finalize`; si falla, los sitios quedan retained y con
+  rollback. `--skip-pma-verify` desactiva esta comprobación.
 - `--finalize`: elimina la copia rootful tras migrar. Por defecto el estado es
   **retained**, con backup verificado y rollback disponible.
 - `--rollback-on-failure`: revierte todos los sitios migrados en esta ejecución

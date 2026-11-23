@@ -100,6 +100,45 @@ def test_recovery_commands_reuse_backend(monkeypatch, capsys) -> None:
     assert service.calls[-1] == ("finalize", "s1", "op-1", "site.test")
 
 
+def test_verify_pma_dispatches_for_a_wordpress_site(monkeypatch, capsys) -> None:
+    service = FakeService()
+    db = FakeDb([SimpleNamespace(id="s1", kind="wordpress", domain="site.test")])
+
+    @contextmanager
+    def context():
+        yield service, db
+
+    monkeypatch.setattr(cli, "service_context", context)
+    monkeypatch.setattr(
+        cli,
+        "_verify_pma_site",
+        lambda _service, site: {
+            "ok": True,
+            "site_id": site.id,
+            "domain": site.domain,
+        },
+    )
+    assert cli.main(["verify-pma", "--site", "s1", "--json"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["site_id"] == "s1"
+
+
+def test_verify_pma_rejects_a_static_site(monkeypatch, capsys) -> None:
+    service = FakeService()
+    db = FakeDb([SimpleNamespace(id="s1", kind="static", domain="site.test")])
+
+    @contextmanager
+    def context():
+        yield service, db
+
+    monkeypatch.setattr(cli, "service_context", context)
+    assert cli.main(["verify-pma", "--site", "s1", "--json"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert "no WordPress" in payload["error"]
+
+
 def test_host_cli_replaces_a_container_only_plugins_path(monkeypatch) -> None:
     monkeypatch.setenv("SYSTUTOR_PLUGINS_DIR", "/app/plugins")
     cli._ensure_plugins_dir()

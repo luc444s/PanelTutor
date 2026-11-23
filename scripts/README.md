@@ -727,6 +727,9 @@ Useful flags:
   database volume once, starts it in the cell and migrates the sites against it.
   This is a maintenance window and is never enabled automatically.
 - `--skip-plan` / `--skip-sites`: partial runs.
+- After every migrated WordPress site, it opens phpMyAdmin through the real
+  rootless broker and logs in before `--finalize`; a failure leaves the sites
+  retained and rollbackable. `--skip-pma-verify` disables this check.
 - `--finalize`: removes the rootful copy after a successful migration. The
   default is **retained**, with a verified backup and rollback available.
 - `--rollback-on-failure`: rolls back every site migrated in this run if a

@@ -52,6 +52,7 @@ class FakeOperator:
         }
         self.finalize_result: dict = {"ok": True, "state": "finalized"}
         self.rollback_result: dict = {"ok": True, "state": "rolled_back"}
+        self.pma_result: dict = {"ok": True, "site_id": "s1"}
         self.plan_apply_result: dict = {"ok": True}
         self.plan_verify_result: dict = {"ok": True}
         self.doctor_result: dict = {"ok": True, "ready": True}
@@ -98,6 +99,10 @@ class FakeOperator:
     def hosting_migrate(self, site_id, *, shared_db=None):
         self.calls.append(("hosting_migrate", site_id, shared_db))
         return dict(self.migrate_result)
+
+    def hosting_verify_pma(self, site_id):
+        self.calls.append(("hosting_verify_pma", site_id))
+        return dict(self.pma_result)
 
     def hosting_finalize(self, site_id, operation_id, domain):
         self.calls.append(("hosting_finalize", site_id, operation_id, domain))
@@ -220,6 +225,50 @@ def test_happy_path_orders_phases_and_finalizes(tmp_path) -> None:
     assert "hosting_status" in actions
     assert journal.path.is_file()
     assert json.loads(journal.path.read_text())["ok"] is True
+
+
+def test_wordpress_pma_is_verified_before_finalize(tmp_path) -> None:
+    ops = FakeOperator()
+    ops.site_plans = [
+        {
+            "ok": True,
+            "site_id": "s1",
+            "kind": "wordpress",
+            "from_runtime": "rootful",
+            "inventory": {"domain": "example.test"},
+        }
+    ]
+    migrator, _ops, _console, journal = make_migrator(
+        tmp_path, ops=ops, plan=make_plan(finalize=True)
+    )
+    payload = migrator.run()
+    assert payload["ok"] is True
+    assert payload["pma"] == [{"ok": True, "site_id": "s1"}]
+    assert ("hosting_verify_pma", "s1") in ops.calls
+    verify_at = ops.calls.index(("hosting_verify_pma", "s1"))
+    finalize_at = ops.calls.index(("hosting_finalize", "s1", "op-1", "example.test"))
+    assert verify_at < finalize_at
+    assert any(event["phase"] == "pma" for event in journal.events)
+
+
+def test_pma_failure_blocks_finalize(tmp_path) -> None:
+    ops = FakeOperator()
+    ops.site_plans = [
+        {
+            "ok": True,
+            "site_id": "s1",
+            "kind": "wordpress",
+            "from_runtime": "rootful",
+            "inventory": {"domain": "example.test"},
+        }
+    ]
+    ops.pma_result = {"ok": False, "site_id": "s1", "error": "broker unavailable"}
+    migrator, _ops, _console, _journal = make_migrator(
+        tmp_path, ops=ops, plan=make_plan(finalize=True)
+    )
+    with pytest.raises(mod.MigratorError):
+        migrator.run()
+    assert not any(call[0] == "hosting_finalize" for call in ops.calls)
 
 
 def test_site_plan_skips_already_rootless(tmp_path) -> None:

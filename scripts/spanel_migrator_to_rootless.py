@@ -551,6 +551,9 @@ class Operator:
             args.extend(["--shared-db", shared_db])
         return self.hosting(*args, timeout=3600)
 
+    def hosting_verify_pma(self, site_id: str) -> dict[str, Any]:
+        return self.hosting("verify-pma", "--site", site_id, timeout=300)
+
     def hosting_finalize(
         self, site_id: str, operation_id: str, domain: str
     ) -> dict[str, Any]:
@@ -656,6 +659,7 @@ class MigrationPlan:
     shared_db: str | None = None
     skip_plan: bool = False
     skip_sites: bool = False
+    pma_verify: bool = True
     finalize: bool = False
     rollback_on_failure: bool = False
     dry_run: bool = False
@@ -1067,6 +1071,38 @@ class Migrator:
             )
         return self.migrated
 
+    def verify_pma_sites(self) -> list[dict[str, Any]]:
+        """Prove the phpMyAdmin button before removing the rootful copy.
+
+        A failed check leaves every migrated site retained and rollbackable.
+        """
+        if self.plan.skip_sites or not self.plan.pma_verify or self.plan.dry_run:
+            return []
+        self.console.step("Verify phpMyAdmin")
+        results: list[dict[str, Any]] = []
+        for entry in self.migrated:
+            site = entry["site"]
+            if site.get("kind") != "wordpress":
+                continue
+            site_id = str(site["site_id"])
+            result = self.ops.hosting_verify_pma(site_id)
+            self.journal.event(
+                "pma", "verify", ok=bool(result.get("ok")), detail=result
+            )
+            results.append(result)
+            if not result.get("ok"):
+                self.console.fail(
+                    f"{site_id}: phpMyAdmin verification failed: "
+                    f"{result.get('error') or result.get('code') or 'unknown error'}"
+                )
+                raise MigratorError(
+                    "phpMyAdmin verification failed; migrated sites stay retained"
+                )
+            self.console.ok(f"{site_id}: phpMyAdmin verified")
+        if not results:
+            self.console.info("no WordPress sites to verify")
+        return results
+
     def finalize_sites(self) -> list[dict[str, Any]]:
         if self.plan.skip_sites or not self.plan.finalize or self.rolled_back:
             return []
@@ -1174,6 +1210,7 @@ class Migrator:
         self.apply_plan()
         self.plan_sites()
         self.migrate_sites()
+        pma = self.verify_pma_sites()
         apps = self.migrate_apps()
         self.finalize_sites()
         self.status_summary()
@@ -1183,6 +1220,7 @@ class Migrator:
             "tenant": self.plan.tenant,
             "dry_run": self.plan.dry_run,
             "migrated": [entry["result"] for entry in self.migrated],
+            "pma": pma,
             "finalized": self.finalized,
             "skipped": self.skipped,
             "apps": apps,
@@ -1192,8 +1230,9 @@ class Migrator:
             {
                 "ok": ok,
                 "migrated": payload["migrated"],
+                "pma": pma,
                 "finalized": payload["finalized"],
-                "skipped": payload["skipped"],
+                "skipped": self.skipped,
                 "apps": apps,
             }
         )
@@ -1268,6 +1307,14 @@ def _parser() -> argparse.ArgumentParser:
         "--skip-sites",
         action="store_true",
         help="Provision and plan the cell, but do not migrate Hosting sites.",
+    )
+    parser.add_argument(
+        "--skip-pma-verify",
+        action="store_true",
+        help=(
+            "Do not open phpMyAdmin for every migrated WordPress site before "
+            "finalize (not recommended: PMA failures block finalize)."
+        ),
     )
     parser.add_argument(
         "--finalize",
@@ -1483,6 +1530,7 @@ def build_plan(
         shared_db=args.shared_db,
         skip_plan=args.skip_plan,
         skip_sites=args.skip_sites,
+        pma_verify=not args.skip_pma_verify,
         finalize=args.finalize,
         rollback_on_failure=args.rollback_on_failure,
         dry_run=args.dry_run,
