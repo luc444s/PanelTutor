@@ -23,6 +23,7 @@ import json
 import os
 import socket
 import struct
+import subprocess
 import threading
 import time
 from collections.abc import Callable
@@ -436,6 +437,83 @@ def build_agent_from_env(data_root: str | Path) -> PlanAgent:
     )
 
 
+def _cell_docker_json(data_root: str | Path, slug: str, *args: str) -> Any:
+    """Run a read-only Docker query inside the tenant cell."""
+    allocation = alloc.load_registry(data_root)["allocations"].get(slug)
+    if allocation is None:
+        raise ValueError(f"tenant {slug} has no cell allocation")
+    env = os.environ.copy()
+    env["DOCKER_HOST"] = f"unix://{Path(data_root) / 'cells' / slug / 'docker.sock'}"
+    env["XDG_RUNTIME_DIR"] = f"/run/user/{int(allocation['uid'])}"
+    completed = subprocess.run(
+        ["docker", *args],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        timeout=30,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout).strip()[:200]
+        raise ValueError(f"cell docker query failed: {detail}")
+    try:
+        return json.loads(completed.stdout or "[]")
+    except ValueError as exc:
+        raise ValueError("cell docker query returned invalid JSON") from exc
+
+
+def _legacy_shared_descriptor(
+    data_root: str | Path,
+    slug: str,
+    container: str,
+    tenant_id: str,
+) -> dict[str, Any]:
+    """Resolve the legacy one-MariaDB-per-tenant layout (milton)."""
+    info = _cell_docker_json(data_root, slug, "inspect", container)
+    if not isinstance(info, list) or not info:
+        raise ValueError(f"site container not found: {container}")
+    site = info[0]
+    labels = (site.get("Config") or {}).get("Labels") or {}
+    if labels.get("spanel.tenant") != tenant_id or labels.get("spanel.managed") != "true":
+        raise ValueError("site container is not owned by this tenant")
+    ids = _cell_docker_json(
+        data_root,
+        slug,
+        "ps",
+        "-q",
+        "--filter",
+        f"label=spanel.tenant={tenant_id}",
+        "--filter",
+        "label=spanel.role=legacy-shared-db",
+    )
+    if not isinstance(ids, list) or not ids:
+        raise ValueError("legacy shared database container not found")
+    db_info = _cell_docker_json(data_root, slug, "inspect", str(ids[0]))
+    if not isinstance(db_info, list) or not db_info:
+        raise ValueError("legacy shared database is not inspectable")
+    db = db_info[0]
+    site_networks = set((site.get("NetworkSettings") or {}).get("Networks") or {})
+    db_networks = set((db.get("NetworkSettings") or {}).get("Networks") or {})
+    shared = sorted(
+        (site_networks & db_networks) - {"bridge", "host", "none", "spanel-hosting"}
+    )
+    if not shared:
+        shared = sorted(db_networks - {"bridge", "host", "none"})
+    if not shared:
+        raise ValueError("shared database network not found")
+    allocation = alloc.load_registry(data_root)["allocations"].get(slug)
+    if allocation is None:
+        raise ValueError(f"tenant {slug} has no cell allocation")
+    name = str(db.get("Name") or "").lstrip("/")
+    if not name:
+        raise ValueError("shared database container has no name")
+    return {
+        "db_container": name,
+        "private_network": shared[0],
+        "target_host": network.loopback_address(int(allocation["index"])),
+    }
+
+
 def _site_descriptor(data_root: str | Path, slug: str, site_id: str) -> dict[str, Any]:
     """Resolve site -> managed DB container/network from the panel database."""
     import os
@@ -450,7 +528,7 @@ def _site_descriptor(data_root: str | Path, slug: str, site_id: str) -> dict[str
         with engine.connect() as conn:
             row = conn.execute(
                 sa.text(
-                    "SELECT s.container_name, s.kind, r.runtime "
+                    "SELECT s.container_name, s.kind, r.runtime, s.tenant_id "
                     "FROM hosting_sites s "
                     "JOIN tenants t ON t.id = s.tenant_id "
                     "LEFT JOIN tenant_resource_runtimes r "
@@ -463,9 +541,13 @@ def _site_descriptor(data_root: str | Path, slug: str, site_id: str) -> dict[str
         engine.dispose()
     if row is None:
         raise ValueError("site not found for this tenant")
-    container, kind, runtime = row
+    container, kind, runtime, tenant_id = row
     if kind != "wordpress" or runtime != "rootless":
         raise ValueError("site is not a rootless WordPress database")
+    if not (container.startswith("spanel-") and container.endswith("-wp")):
+        return _legacy_shared_descriptor(
+            data_root, slug, str(container), str(tenant_id)
+        )
     suffix = container.removeprefix("spanel-").removesuffix("-wp")
     allocation = alloc.load_registry(data_root)["allocations"].get(slug)
     if allocation is None:

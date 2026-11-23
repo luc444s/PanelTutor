@@ -39,6 +39,43 @@ def _agent(tmp_path: Path, handler: Any) -> PlanAgent:
     )
 
 
+def test_legacy_shared_layout_resolves_the_shared_database(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _cell(tmp_path, "demo")
+    site = {
+        "Name": "/ardiffx",
+        "Config": {
+            "Labels": {"spanel.tenant": "tenant-id", "spanel.managed": "true"}
+        },
+        "NetworkSettings": {
+            "Networks": {"spanel-demo-shared-db": {}, "spanel-hosting": {}}
+        },
+    }
+    database = {
+        "Name": "/mariadb",
+        "Config": {"Labels": {}},
+        "NetworkSettings": {"Networks": {"spanel-demo-shared-db": {}}},
+    }
+
+    def fake(data_root, slug, *args):
+        if args[:2] == ("inspect", "ardiffx"):
+            return [site]
+        if args and args[0] == "ps":
+            return ["dbid"]
+        if args[:2] == ("inspect", "dbid"):
+            return [database]
+        raise AssertionError(args)
+
+    monkeypatch.setattr(host_agent, "_cell_docker_json", fake)
+    result = host_agent._legacy_shared_descriptor(
+        tmp_path, "demo", "ardiffx", "tenant-id"
+    )
+    assert result["db_container"] == "mariadb"
+    assert result["private_network"] == "spanel-demo-shared-db"
+    assert result["target_host"].startswith("127.")
+
+
 def _request(op: str, *, tenant: str = "demo", slug: str = "demo", **extra: Any):
     request: dict[str, Any] = {
         "op": op,
