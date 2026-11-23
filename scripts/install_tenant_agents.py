@@ -250,16 +250,21 @@ class Installer:
         self.runtime_dir = runtime_dir
         venv_python = repo / ".venv" / "bin" / "python"
         system_python = Path("/usr/bin/python3")
+        candidates: list[str] = []
+        for candidate in (
+            python,
+            os.environ.get("SPANEL_PYTHON"),
+            str(system_python) if system_python.is_file() else None,
+            str(venv_python) if venv_python.is_file() else None,
+            sys.executable,
+        ):
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+        # Prefer an interpreter that can actually import the agent runtime; the
+        # system python on hosts with a dedicated host-venv often cannot.
         self.python = (
-            python
-            or os.environ.get("SPANEL_PYTHON")
-            or (
-                str(system_python)
-                if system_python.is_file()
-                else str(venv_python)
-                if venv_python.is_file()
-                else sys.executable
-            )
+            next((item for item in candidates if interpreter_ready(item)[0]), "")
+            or (candidates[0] if candidates else sys.executable)
         )
         self.token_path = etc_dir / "plan_agent_token"
         self.agent_socket = runtime_dir / "plan-agent.sock"

@@ -26,9 +26,12 @@ Environment=SPANEL_EDGE_RELAY_BIND=172.18.0.1
 Environment=SPANEL_EDGE_RELAY_SOCKET=/run/spanel/edge-relay.sock
 # Optional override: SPANEL_EDGE_RELAY_SOURCES=<traefik-ip> (detected from the
 # proxy network when unset). Never a wildcard: an empty allowlist denies all.
+# This unit owns /run/spanel: it runs as Traefik's uid and must be able to
+# create its socket. plan-agent and cell-metrics run as root and only write
+# their own sockets, so they must not declare RuntimeDirectory. Preserve the
+# directory on stop so their listening sockets are not unlinked.
 RuntimeDirectory=spanel
 RuntimeDirectoryMode=0750
-# Shared with plan-agent and cell-metrics: preserve the directory on stop.
 RuntimeDirectoryPreserve=yes
 ExecStart=/usr/bin/python3 /opt/spanel/scripts/spanel_tenant.py edge-relay --data-root /var/lib/spanel
 Restart=on-failure

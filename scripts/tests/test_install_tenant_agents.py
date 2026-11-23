@@ -79,10 +79,12 @@ def test_install_creates_token_and_renders_units(installer) -> None:
     assert "spanel_tenant.py plan-agent --data-root /var/lib/spanel" in plan
     assert "Environment=SPANEL_PLAN_AGENT_ALLOWED_UIDS=0" in plan
     assert "User=1000" in relay
-    # /run/spanel is shared by plan-agent, edge-relay and cell-metrics; stopping
-    # any of them must not unlink the other units' listening sockets.
-    assert "RuntimeDirectoryPreserve=yes" in plan
+    # /run/spanel is owned by edge-relay (Traefik uid). Only that unit manages
+    # the shared RuntimeDirectory; the root units just write their sockets.
+    assert "RuntimeDirectory=spanel" not in plan
+    assert "ReadWritePaths=" in plan and "/run/spanel" in plan
     assert "RuntimeDirectoryPreserve=yes" in relay
+    assert "RuntimeDirectory=spanel" in relay
     assert any(call[:2] == ["systemctl", "daemon-reload"] for call in fake.calls)
 
 

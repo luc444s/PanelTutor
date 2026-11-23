@@ -402,7 +402,6 @@ def main(argv: list[str] | None = None) -> int:
             unit_path.chmod(0o644)
         if not args.dry_run:
             socket_path.parent.mkdir(parents=True, exist_ok=True)
-            socket_path.parent.chmod(0o755)
         _run(["systemctl", "daemon-reload"], dry_run=args.dry_run)
         try:
             _run(["systemctl", "enable", "--now", UNIT_NAME], dry_run=args.dry_run)

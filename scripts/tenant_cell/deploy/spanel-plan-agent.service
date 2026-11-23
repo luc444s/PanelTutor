@@ -14,7 +14,7 @@ NoNewPrivileges=true
 PrivateTmp=true
 ProtectHome=true
 ProtectSystem=strict
-ReadWritePaths=/var/lib/spanel /etc/systemd/system /run/systemd/system /sys/fs/cgroup
+ReadWritePaths=/var/lib/spanel /etc/systemd/system /run/systemd/system /sys/fs/cgroup /run/spanel
 RestrictAddressFamilies=AF_UNIX
 RestrictSUIDSGID=true
 # A.SPEC 0102: the local mutation gate exists ONLY in this host process.
@@ -22,11 +22,9 @@ Environment=SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1
 Environment=SPANEL_PLAN_AGENT_SOCKET=/run/spanel/plan-agent.sock
 Environment=SPANEL_PLAN_AGENT_TOKEN_FILE=/etc/spanel/plan_agent_token
 Environment=SPANEL_PLAN_AGENT_ALLOWED_UIDS=<app-container-uid>
-RuntimeDirectory=spanel
-RuntimeDirectoryMode=0750
-# /run/spanel is shared with edge-relay and cell-metrics: never remove it on
-# stop, or the other units keep listening on unlinked sockets.
-RuntimeDirectoryPreserve=yes
+# /run/spanel is owned by the edge-relay unit (it runs as Traefik's uid). This
+# root unit only writes its socket; it must not declare RuntimeDirectory, or
+# systemd would chown the shared directory back to root.
 ExecStart=/usr/bin/python3 /opt/spanel/scripts/spanel_tenant.py plan-agent --data-root /var/lib/spanel
 Restart=on-failure
 RestartSec=3
