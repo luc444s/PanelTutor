@@ -58,6 +58,11 @@ from systutor.contracts.domain_ownership import (
     list_sites,
     resolve_site,
 )
+from systutor.contracts.rootless_ingress import (
+    is_rootless_site,
+    refresh_rootless_site,
+    remove_rootless_site,
+)
 from systutor.contracts.site_namespace import get_site_suffix
 from systutor.core.errors import AppError, NotFoundError
 from systutor.kernel.audit.service import record_audit
@@ -148,12 +153,19 @@ def release_application_routes(
 
 
 def refresh_application_routes(
-    db: Session, app: FastAPI, tenant_id: str, application_id: str
+    db: Session,
+    app: FastAPI,
+    tenant_id: str,
+    application_id: str,
+    *,
+    strict: bool = False,
 ) -> None:
     """Re-publish an app's routes after a deployment replaced its containers.
 
     Only rewrites Domains-owned documents and reconnects the current containers
-    to the proxy network. A failing proxy never fails the deployment.
+    to the proxy network. A failing proxy never fails the deployment unless the
+    caller is an explicit repair (``strict=True``), which must not report
+    success when the route is still broken.
     """
     prefix = f"{application_id}:"
     rows = list(
@@ -176,6 +188,8 @@ def refresh_application_routes(
                 extra={"domain": domain, "application_id": application_id},
                 exc_info=True,
             )
+            if strict:
+                raise
     db.commit()
 
 
@@ -423,11 +437,19 @@ class DomainsService:
 
     def _publish(
         self,
+        tenant_id: str,
         operations: ProxyOperations,
         site: SiteOption,
         primary: str,
         www: bool,
     ) -> None:
+        if is_rootless_site(self._app, self._db, tenant_id, site.site_id):
+            raise AppError(
+                "Rootless Apps publish their Host through the cell ingress; "
+                "use the App service route editor",
+                status_code=409,
+                code="domains.rootless_ingress_required",
+            )
         try:
             operations.add(site.container, primary, www=www, wait=0, set_wordpress_url=False)
         except ProxyError as exc:
@@ -789,6 +811,94 @@ class DomainsService:
             primary_domain=site.primary_domain,
         )
 
+    def _rootless(self, tenant_id: str, site_id: str) -> bool:
+        return is_rootless_site(self._app, self._db, tenant_id, site_id)
+
+    def _sync_app_host(self, tenant_id: str, row: DomainRoute) -> None:
+        """Keep the Domains Host in sync when the route editor saves a rootless App."""
+        application_id, separator, service = row.site_id.partition(":")
+        if not separator or not application_id or not service:
+            raise AppError(
+                "The route service is not a rootless App",
+                status_code=409,
+                code="domains.route_target_unavailable",
+            )
+        owner = domain_owner(self._app, self._db, row.domain)
+        if owner is not None and owner != tenant_id:
+            raise AppError(
+                f"{row.domain} is managed by another tenant",
+                status_code=409,
+                code="domains.already_owned",
+            )
+        if owner is None and not claim_domain(
+            self._app, self._db, tenant_id, row.domain
+        ):
+            raise AppError(
+                "Domain ownership provider is unavailable",
+                status_code=503,
+                code="domains.namespace_unavailable",
+            )
+        host = self._db.scalar(
+            select(DomainAppHost).where(
+                DomainAppHost.tenant_id == tenant_id,
+                DomainAppHost.application_id == application_id,
+                DomainAppHost.service == service,
+            )
+        )
+        if host is None:
+            self._db.add(
+                DomainAppHost(
+                    tenant_id=tenant_id,
+                    application_id=application_id,
+                    service=service,
+                    domain=row.domain,
+                    https=row.https,
+                )
+            )
+        else:
+            if host.domain != row.domain:
+                release_domain(self._app, self._db, tenant_id, host.domain)
+                host.domain = row.domain
+            host.https = row.https
+        self._db.flush()
+
+    def _drop_app_host(self, tenant_id: str, site_id: str, domain: str) -> None:
+        application_id, separator, service = site_id.partition(":")
+        if not separator or not application_id or not service:
+            return
+        host = self._db.scalar(
+            select(DomainAppHost).where(
+                DomainAppHost.tenant_id == tenant_id,
+                DomainAppHost.application_id == application_id,
+                DomainAppHost.service == service,
+            )
+        )
+        if host is not None:
+            self._db.delete(host)
+            self._db.flush()
+        release_domain(self._app, self._db, tenant_id, domain)
+
+    def _apply_route_change(
+        self,
+        tenant_id: str,
+        site_id: str,
+        row: DomainRoute,
+        domains: list[str],
+    ) -> None:
+        """Publish a saved route through the ingress that owns its runtime."""
+        if self._rootless(tenant_id, site_id):
+            if row.path != "/":
+                raise AppError(
+                    "Rootless Apps only support the / path",
+                    status_code=422,
+                    code="domains.rootless_path_unsupported",
+                )
+            self._sync_app_host(tenant_id, row)
+            refresh_rootless_site(self._app, self._db, tenant_id, site_id)
+            return
+        for domain in dict.fromkeys(domains):
+            self._publish_domain_routes(tenant_id, domain, ready=True)
+
     @staticmethod
     def _route_item(row: DomainRoute, available: bool) -> RouteItem:
         return RouteItem(
@@ -813,6 +923,14 @@ class DomainsService:
         ready: bool,
     ) -> None:
         rows = self._route_rows(tenant_id, domain=domain)
+        if any(
+            is_rootless_site(self._app, self._db, tenant_id, row.site_id)
+            for row in rows
+        ):
+            # Rootless Apps publish through the cell ingress and the relay.
+            # Writing a container document here would overwrite it with a
+            # stopped rootful target (the production 502).
+            return
         routes: list[PathRoute] = []
         for row in rows:
             site = self._route_site(tenant_id, row.site_id)
@@ -994,7 +1112,7 @@ class DomainsService:
         self._db.add(row)
         self._db.flush()
         try:
-            self._publish_domain_routes(tenant_id, domain, ready=True)
+            self._apply_route_change(tenant_id, site.site_id, row, [domain])
         except Exception:
             rollback = getattr(self._db, "rollback", None)
             if rollback is not None:
@@ -1051,9 +1169,12 @@ class DomainsService:
             setattr(row, key, value)
         self._db.flush()
         try:
-            self._publish_domain_routes(tenant_id, previous_domain, ready=True)
-            if row.domain != previous_domain:
-                self._publish_domain_routes(tenant_id, row.domain, ready=True)
+            self._apply_route_change(
+                tenant_id,
+                row.site_id,
+                row,
+                [previous_domain, row.domain],
+            )
         except Exception:
             rollback = getattr(self._db, "rollback", None)
             if rollback is not None:
@@ -1082,10 +1203,25 @@ class DomainsService:
         if row is None:
             raise NotFoundError("Unknown route")
         domain = row.domain
+        site_id = row.site_id
         self._db.delete(row)
         self._db.flush()
         try:
-            self._publish_domain_routes(tenant_id, domain, ready=True)
+            if self._rootless(tenant_id, site_id):
+                remaining = self._db.scalar(
+                    select(DomainRoute).where(
+                        DomainRoute.tenant_id == tenant_id,
+                        DomainRoute.site_id == site_id,
+                        DomainRoute.path == "/",
+                    )
+                )
+                if remaining is None:
+                    self._drop_app_host(tenant_id, site_id, domain)
+                remove_rootless_site(
+                    self._app, self._db, tenant_id, site_id, domain
+                )
+            else:
+                self._publish_domain_routes(tenant_id, domain, ready=True)
         except Exception:
             rollback = getattr(self._db, "rollback", None)
             if rollback is not None:
@@ -1169,7 +1305,7 @@ class DomainsService:
         self._claim_free(tenant_id, candidates)
 
         operations = self._ready()
-        self._publish(operations, site, primary, www)
+        self._publish(tenant_id, operations, site, primary, www)
 
         self._audit(
             tenant_context,
@@ -1272,7 +1408,7 @@ class DomainsService:
         self._claim_free(tenant_id, candidates)
 
         operations = self._ready()
-        self._publish(operations, site, primary, www)
+        self._publish(tenant_id, operations, site, primary, www)
 
         self._audit(
             tenant_context,

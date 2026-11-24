@@ -47,6 +47,21 @@ modelos desde Apps:
 rutas adicionales: el ingress de la celda solo publica `/`. Dominios es la única
 fuente del Host; no existe fallback a `apps_applications.domain`.
 
+## `rootless_ingress`
+
+Delegación del ingress de Apps rootless sin que Domains importe Apps:
+
+- `register_rootless_ingress(app, name, RootlessIngress(is_rootless, refresh,
+  remove))` lo registra Apps.
+- `is_rootless_site(app, db, tenant_id, site_id)` responde con el runtime
+  persistido en `tenant_resource_runtimes`.
+- `refresh_rootless_site` reconcilia `tenant_ingress_routes`, el nginx de la
+  celda y el documento del relay. `remove_rootless_site` retira la ruta y
+  despublica el Host del relay.
+
+El editor de rutas de Dominios usa este contrato para que “Guardar y publicar”
+nunca escriba un documento de contenedor cuando el sitio es rootless.
+
 ## `cell_ingress`
 
 - `register_cell_ingress_provider(app, name, provider)` registra el handle

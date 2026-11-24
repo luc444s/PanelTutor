@@ -26,6 +26,10 @@ from systutor.contracts.resource_runtime import (
     ManagedResource,
     register_resource_provider,
 )
+from systutor.contracts.rootless_ingress import (
+    RootlessIngress,
+    register_rootless_ingress,
+)
 from systutor.sdk.context import PluginContext
 
 
@@ -208,6 +212,27 @@ def build_runtime_recorder(settings: AppsSettings):
     return record
 
 
+def _application_id(site_id: str) -> str | None:
+    application_id, separator, _service = site_id.partition(":")
+    return application_id if separator and application_id else None
+
+
+def app_is_rootless(db: Session, tenant_id: str, application_id: str) -> bool:
+    """Runtime marker written by the tenant inventory for one App."""
+    from plugins.tenant.backend.models import TenantResourceRuntime
+
+    runtime = db.scalar(
+        select(TenantResourceRuntime.runtime)
+        .where(
+            TenantResourceRuntime.tenant_id == tenant_id,
+            TenantResourceRuntime.kind == "app",
+            TenantResourceRuntime.resource_id.startswith(f"{application_id}:"),
+        )
+        .limit(1)
+    )
+    return runtime == "rootless"
+
+
 def register(context: PluginContext) -> None:
     settings = AppsSettings.from_env()
     production = os.environ.get("SYSTUTOR_ENV") == "production"
@@ -241,14 +266,64 @@ def register(context: PluginContext) -> None:
 
         register_site_provider(app, "apps", resolve_sites)
         register_resource_provider(app, "apps", resolve_resources)
+
+        def is_rootless_site(db: Session, tenant_id: str, site_id: str) -> bool:
+            application_id = _application_id(site_id)
+            return bool(application_id) and app_is_rootless(
+                db, tenant_id, application_id
+            )
+
+        def refresh_rootless_site(
+            db: Session, tenant_id: str, site_id: str
+        ) -> None:
+            application_id = _application_id(site_id)
+            if not application_id:
+                raise ValueError("invalid app site id")
+            if rootless is None:
+                raise RuntimeError("rootless relay is not configured")
+            from .cell_ingress import AppsIngress
+
+            AppsIngress(app, db).reconcile(tenant_id, application_id)
+            published = rootless.refresh(db, tenant_id, application_id)
+            if not published.get("complete"):
+                raise RuntimeError(f"relay publication failed for {site_id}")
+
+        def remove_rootless_site(
+            db: Session, tenant_id: str, site_id: str, domain: str
+        ) -> None:
+            application_id = _application_id(site_id)
+            if not application_id:
+                return
+            if rootless is None:
+                raise RuntimeError("rootless relay is not configured")
+            from .cell_ingress import AppsIngress
+
+            AppsIngress(app, db).remove(tenant_id, application_id)
+            if list_app_hosts(app, db, tenant_id, application_id):
+                # Another service of the same App still owns Hosts.
+                AppsIngress(app, db).reconcile(tenant_id, application_id)
+            rootless.unpublish(domain)
+
+        register_rootless_ingress(
+            app,
+            "apps",
+            RootlessIngress(
+                is_rootless=is_rootless_site,
+                refresh=refresh_rootless_site,
+                remove=remove_rootless_site,
+            ),
+        )
         if rootless is not None and context.db_session_provider is not None:
             def refresh_domain_route(event) -> None:
                 site_id = str(event.payload.get("site_id") or "")
-                application_id, separator, _service = site_id.rpartition(":")
-                if not separator or not application_id or not event.tenant_id:
+                if not site_id or not event.tenant_id:
                     return
                 with context.db_session_provider() as db:
-                    rootless.refresh(db, event.tenant_id, application_id)
+                    # The Host was just added in Domains: create the kernel
+                    # ingress row and the cell nginx route before publishing the
+                    # relay document. Refreshing only the relay would leave the
+                    # cell answering 404 for a domain added after the deploy.
+                    refresh_rootless_site(db, event.tenant_id, site_id)
 
             context.register_event_handler(
                 "domains.domain.added", refresh_domain_route

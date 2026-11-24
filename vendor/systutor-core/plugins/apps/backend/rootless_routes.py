@@ -111,6 +111,10 @@ class RootlessRoutes:
             "endpoint": endpoint.as_dict(),
         }
 
+    def unpublish(self, domain: str) -> bool:
+        """Remove only the relay document of one Host."""
+        return self.publisher.unpublish(domain)
+
     def cleanup(self, db: Any, tenant_id: str, application_id: str) -> dict[str, Any]:
         """Remove the App's kernel ingress rows and its relay documents."""
         removed: list[str] = []

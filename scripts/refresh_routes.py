@@ -26,6 +26,7 @@ from plugins.domains.backend.service import (
     refresh_application_routes,
 )
 from plugins.domains.backend.settings import register_domains_settings
+from plugins.tenant.backend.models import TenantResourceRuntime
 from sqlalchemy import select
 from systutor.contracts.app_hosts import list_app_hosts, register_app_host_provider
 from systutor.contracts.domain_ownership import register_site_provider
@@ -41,6 +42,28 @@ def select_applications(db, application_id: str | None, slug: str | None) -> lis
     elif slug:
         stmt = stmt.where(Application.slug == slug)
     return list(db.scalars(stmt.order_by(Application.created_at)).all())
+
+
+def application_runtimes(db, application_id: str) -> set[str]:
+    """Runtime markers persisted by the tenant inventory for one App."""
+    rows = db.scalars(
+        select(TenantResourceRuntime.runtime).where(
+            TenantResourceRuntime.kind == "app",
+            TenantResourceRuntime.resource_id.startswith(f"{application_id}:"),
+        )
+    )
+    return set(rows)
+
+
+def is_rootless_app(hosts: bool, runtimes: set[str], configured: bool) -> bool:
+    """Declared runtime wins; pre-inventory Apps keep the legacy heuristic."""
+    if not hosts:
+        return False
+    if "rootless" in runtimes:
+        return True
+    if runtimes == {"rootful"}:
+        return False
+    return configured
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -66,10 +89,13 @@ def main(argv: Sequence[str] | None = None) -> int:
             if not applications:
                 print("No applications match")
                 return 2
+            targeted = bool(args.slug or args.application_id)
+            failed = False
             for application in applications:
                 hosts = list_app_hosts(
                     fastapi_app, db, application.tenant_id, application.id
                 )
+                runtimes = application_runtimes(db, application.id)
                 cut_over = db.scalar(
                     select(TenantIngressRoute.route_id).where(
                         TenantIngressRoute.tenant_id == application.tenant_id,
@@ -77,10 +103,28 @@ def main(argv: Sequence[str] | None = None) -> int:
                         TenantIngressRoute.owner_id == application.id,
                     )
                 ) is not None
-                rootless_app = bool(hosts) and (rootless is not None or cut_over)
+                rootless_app = is_rootless_app(
+                    bool(hosts), runtimes, configured=rootless is not None or cut_over
+                )
                 if args.dry_run:
+                    if "rootless" in runtimes and not hosts:
+                        print(
+                            f"{application.slug}: rootless but no AppHost; "
+                            "assign a domain in Domains",
+                            file=sys.stderr,
+                        )
+                        failed = failed or targeted
+                        continue
                     mode = "rootless ingress + relay" if rootless_app else "routes"
                     print(f"{application.slug}: its {mode} would be refreshed")
+                    continue
+                if "rootless" in runtimes and not hosts:
+                    print(
+                        f"{application.slug}: rootless but no AppHost; "
+                        "assign a domain in Domains",
+                        file=sys.stderr,
+                    )
+                    failed = failed or targeted
                     continue
                 if rootless_app:
                     if rootless is None:
@@ -89,21 +133,47 @@ def main(argv: Sequence[str] | None = None) -> int:
                             "refusing to overwrite the relay document",
                             file=sys.stderr,
                         )
+                        failed = True
                         continue
-                    # A rootless App's document points at the relay; rendering
-                    # it again with the container target would overwrite it.
-                    AppsIngress(fastapi_app, db).reconcile(
-                        application.tenant_id, application.id
-                    )
-                    rootless.refresh(
-                        db, application.tenant_id, application.id
-                    )
-                    print(f"{application.slug}: rootless ingress and relay refreshed")
+                    try:
+                        # A rootless App's document points at the relay; rendering
+                        # it again with the container target would overwrite it.
+                        routes = AppsIngress(fastapi_app, db).reconcile(
+                            application.tenant_id, application.id
+                        )
+                        published = rootless.refresh(
+                            db, application.tenant_id, application.id
+                        )
+                        if not published.get("complete"):
+                            raise RuntimeError(
+                                "relay publication is incomplete"
+                            )
+                        print(
+                            f"{application.slug}: rootless ingress and relay "
+                            f"refreshed ({len(routes)} routes)"
+                        )
+                    except Exception as exc:  # noqa: BLE001 - report and fail
+                        print(
+                            f"{application.slug}: rootless refresh failed: {exc}",
+                            file=sys.stderr,
+                        )
+                        failed = True
                     continue
-                refresh_application_routes(
-                    db, fastapi_app, application.tenant_id, application.id
-                )
-                print(f"{application.slug}: routes refreshed")
+                try:
+                    refresh_application_routes(
+                        db,
+                        fastapi_app,
+                        application.tenant_id,
+                        application.id,
+                        strict=True,
+                    )
+                    print(f"{application.slug}: routes refreshed")
+                except Exception as exc:  # noqa: BLE001 - report and fail
+                    print(
+                        f"{application.slug}: route refresh failed: {exc}",
+                        file=sys.stderr,
+                    )
+                    failed = True
         if args.restart_proxy and not args.dry_run:
             subprocess.run(
                 ["docker", "restart", args.proxy_container],
@@ -111,7 +181,7 @@ def main(argv: Sequence[str] | None = None) -> int:
                 stdout=subprocess.DEVNULL,
             )
             print(f"{args.proxy_container}: restarted to retry ACME")
-        return 0
+        return 1 if failed else 0
     except Exception as exc:  # noqa: BLE001 - mensaje operativo sin secretos
         print(f"refresh_routes: {exc}", file=sys.stderr)
         return 1
