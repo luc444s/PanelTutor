@@ -909,7 +909,26 @@ class RootlessMigrationService:
             RootlessRoutePublisher(self.app, self.db).publish(site.tenant_id, site.domain)
         return {**self.status(site_id), "reconciled": True}
     def _cleanup_runtime(self, site: HostingSite, runtime) -> list[str]:
-        slug = site.container_name.removeprefix("spanel-").rsplit("-", 1)[0]
-        cleaner = StaticProvisioner if site.kind == "static" else Provisioner
-        names = StaticNames(slug) if site.kind == "static" else SiteNames(slug)
-        return cleaner(self.settings, runtime).cleanup(names, site.tenant_id)
+        if site.kind == "static":
+            slug = site.container_name.removeprefix("spanel-").removesuffix("-web")
+            return StaticProvisioner(self.settings, runtime).cleanup(
+                StaticNames(slug), site.tenant_id
+            )
+
+        slug = site.container_name.removeprefix("spanel-").removesuffix("-wp")
+        names = SiteNames(slug)
+        cleaner = Provisioner(self.settings, runtime)
+        # Legacy WordPress containers keep their original names in the cell
+        # instead of the canonical ``spanel-<slug>-wp/db`` pair. Remove those
+        # exact candidates first; the normal cleanup below handles canonical
+        # resources plus the private network and volumes.
+        failures = cleaner.cleanup(
+            names,
+            site.tenant_id,
+            resources=[
+                ("container", f"{site.container_name}-db"),
+                ("container", site.container_name),
+            ],
+        )
+        failures.extend(cleaner.cleanup(names, site.tenant_id))
+        return failures

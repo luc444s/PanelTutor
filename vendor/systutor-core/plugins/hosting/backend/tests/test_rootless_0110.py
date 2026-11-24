@@ -306,8 +306,8 @@ def test_migration_cleanup_selects_the_site_provisioner(monkeypatch) -> None:
         def __init__(self, _settings, runtime):
             self.runtime = runtime
 
-        def cleanup(self, names, tenant_id):
-            calls.append(("wordpress", names.wp, tenant_id, self.runtime))
+        def cleanup(self, names, tenant_id, resources=None):
+            calls.append(("wordpress", names.wp, tenant_id, self.runtime, resources))
             return []
 
     monkeypatch.setattr(rootless_migration, "StaticProvisioner", StaticCleaner)
@@ -325,7 +325,14 @@ def test_migration_cleanup_selects_the_site_provisioner(monkeypatch) -> None:
     assert service._cleanup_runtime(wordpress, runtime) == []
     assert calls == [
         ("static", "spanel-legacy-web", "t1", runtime),
-        ("wordpress", "spanel-blog-wp", "t1", runtime),
+        (
+            "wordpress",
+            "spanel-blog-wp",
+            "t1",
+            runtime,
+            [("container", "spanel-blog-wp-db"), ("container", "spanel-blog-wp")],
+        ),
+        ("wordpress", "spanel-blog-wp", "t1", runtime, None),
     ]
 
 
