@@ -582,15 +582,22 @@ def deploy_scoped(
         missing = _ingress_labels_missing(
             runner, previous_containers, all_services, tenant_id
         )
-        if missing:
-            # A noop plan would keep unlabeled containers alive and the cell
-            # ingress could never publish them.  Recreate only what is missing.
-            forced = sorted(set(effective) | set(missing))
+        # A.SPEC 0114 removes the per-App host publish that collided with
+        # ``spanel-cell-ingress``.  Deployments written before this contract
+        # must be recreated once even when their labels are already correct.
+        stale_contract = previous.get("ingress_contract") != 2
+        if missing or stale_contract:
+            if stale_contract:
+                forced = list(all_services)
+                reason = "ingress_contract_migration"
+            else:
+                forced = sorted(set(effective) | set(missing))
+                reason = "ingress_labels_missing"
             plan = DeployPlan(
                 requested_scope="global",
                 effective_services=tuple(forced),
                 strategy="fallback",
-                fallback_reason="ingress_labels_missing",
+                fallback_reason=reason,
             )
             effective = forced
             force_recreate = True
@@ -674,6 +681,9 @@ def deploy_scoped(
             "effective_services": list(plan.effective_services),
             "strategy": plan.strategy,
             "fallback_reason": plan.fallback_reason,
+            # A.SPEC 0114: the relay targets the cell ingress; Apps never
+            # publish their own host port.
+            "ingress_contract": 2,
             "service_release_paths": _merged_paths(
                 previous_paths, all_services, staged, effective
             ),

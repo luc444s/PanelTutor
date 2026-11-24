@@ -135,17 +135,12 @@ class AppsWorker:
             elif kind == "rollback":
                 if application_id is None:
                     raise RuntimeError("Application not found")
-                with self.session_factory() as db:
-                    app = db.get(Application, application_id)
-                    rollback_tenant = app.tenant_id if app is not None else None
+                # A.SPEC 0114: the relay targets the cell ingress, never a
+                # container port.  The App must not publish its own host port.
                 result = self.execution.rollback_operation(
                     operation_id,
                     application_id,
-                    ingress_publish=(
-                        self._ingress_publish(rollback_tenant)
-                        if rollback_tenant is not None
-                        else None
-                    ),
+                    ingress_publish=None,
                 )
             else:
                 if application_id is None:
@@ -243,9 +238,10 @@ class AppsWorker:
             tenant_id = app.tenant_id
             previous_deployment_id = app.active_deployment_id
             previous_status = app.status
-        ingress_publish = self._ingress_publish(tenant_id)
+        # A.SPEC 0114: the cell ingress owns the publish port; Kubernetes-like
+        # per-App host publishing would collide with ``spanel-cell-ingress``.
         result = self._source_operation(
-            operation_id, application_id, "deploy", ingress_publish=ingress_publish
+            operation_id, application_id, "deploy", ingress_publish=None
         )
         try:
             resource_ids = self._publish_and_verify_rootless_route(
