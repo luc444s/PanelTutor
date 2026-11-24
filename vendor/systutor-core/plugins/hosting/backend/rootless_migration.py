@@ -237,6 +237,28 @@ class RootlessMigrationService:
                 return candidate
         return raw
 
+    @staticmethod
+    def _database_belongs_to_site(
+        site: HostingSite, db_name: str, database: dict, wp: dict
+    ) -> bool:
+        """Accept the panel label, or a legacy site-named DB on a shared net.
+
+        Rootful databases created before the ownership labels exist (for
+        example ``legalattorney-clean-db``) have no ``spanel.tenant`` label.
+        Requiring it would make every legacy WordPress site unmigratable.
+        """
+        labels = (database.get("Config") or {}).get("Labels") or {}
+        owner = labels.get("spanel.tenant")
+        if owner:
+            return owner == site.tenant_id
+        if db_name != f"{site.container_name}-db":
+            return False
+        wp_nets = set(((wp.get("NetworkSettings") or {}).get("Networks") or {}).keys())
+        db_nets = set(
+            ((database.get("NetworkSettings") or {}).get("Networks") or {}).keys()
+        )
+        return bool(wp_nets & db_nets)
+
     def _stop_source(self, site: HostingSite, source) -> None:
         source.command(("stop", site.container_name))
         database = self._database_name(site, source)
@@ -470,8 +492,7 @@ class RootlessMigrationService:
             )
             return site.container_name, 80
 
-        labels = (database.get("Config") or {}).get("Labels") or {}
-        if labels.get("spanel.tenant") != site.tenant_id:
+        if not self._database_belongs_to_site(site, db_name, database, wp):
             raise RuntimeError("WordPress database ownership mismatch")
         db_mount = self._mount(database, "/var/lib/mysql")
         if db_mount is None:

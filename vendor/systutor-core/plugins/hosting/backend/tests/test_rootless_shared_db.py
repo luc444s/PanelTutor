@@ -97,6 +97,27 @@ def test_database_name_is_none_for_non_wordpress() -> None:
     assert service._database_name(site, object()) is None
 
 
+def test_legacy_unlabeled_db_is_accepted_by_name_and_network() -> None:
+    site = SimpleNamespace(tenant_id="t1", container_name="legalattorney-clean")
+    wp = {"NetworkSettings": {"Networks": {"legalattorney-clean_clean_internal": {}}}}
+    db = {"NetworkSettings": {"Networks": {"legalattorney-clean_clean_internal": {}}}}
+    assert RootlessMigrationService._database_belongs_to_site(
+        site, "legalattorney-clean-db", db, wp
+    )
+
+
+def test_foreign_unlabeled_db_is_rejected() -> None:
+    site = SimpleNamespace(tenant_id="t1", container_name="legalattorney-clean")
+    wp = {"NetworkSettings": {"Networks": {"site_net": {}}}}
+    db = {"NetworkSettings": {"Networks": {"other_net": {}}}}
+    assert not RootlessMigrationService._database_belongs_to_site(
+        site, "legalattorney-clean-db", db, wp
+    )
+    assert not RootlessMigrationService._database_belongs_to_site(
+        site, "mariadb", db, wp
+    )
+
+
 def test_mount_detects_binds_and_named_volumes() -> None:
     info = {
         "Mounts": [
