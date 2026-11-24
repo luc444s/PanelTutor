@@ -238,6 +238,25 @@ class RootlessMigrationService:
         return raw
 
     @staticmethod
+    def _database_alias(site: HostingSite, source, db_name: str) -> str | None:
+        """Return the host name WordPress uses when it differs from the container."""
+        info = source.inspect("container", site.container_name) or {}
+        try:
+            raw_host, *_ = resolve_database_binding(
+                {"_SPANEL_RUNTIME_HANDLE": source},
+                site.container_name,
+                info,
+                inspector=lambda name: source.inspect("container", name),
+                resolve_alias=resolver_alias_de_contenedor,
+            )
+        except AppError:
+            raw_host = env_of(info).get("WORDPRESS_DB_HOST", "")
+        alias = raw_host.split(":", 1)[0].strip()
+        if alias == db_name or not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{0,62}", alias):
+            return None
+        return alias
+
+    @staticmethod
     def _database_belongs_to_site(
         site: HostingSite, db_name: str, database: dict, wp: dict
     ) -> bool:
@@ -521,27 +540,31 @@ class RootlessMigrationService:
             f"{site.container_name}/db.env",
             render_env(env_of(database)).encode(),
         )
-        target.command(
-            (
-                "run",
-                "-d",
-                "--name",
-                db_name,
-                "--network",
-                private,
-                "--label",
-                "spanel.managed=true",
-                "--label",
-                f"spanel.tenant={site.tenant_id}",
-                "--label",
-                f"spanel.site={site.container_name.removeprefix('spanel-').removesuffix('-wp')}",
-                "--env-file",
-                db_file,
-                "-v",
-                f"{db_volume}:/var/lib/mysql",
-                str((database.get("Config") or {}).get("Image") or self.settings.db_image),
-            )
+        db_args = (
+            "run",
+            "-d",
+            "--name",
+            db_name,
+            "--network",
+            private,
         )
+        db_alias = self._database_alias(site, source, db_name)
+        if db_alias is not None:
+            db_args += ("--network-alias", db_alias)
+        db_args += (
+            "--label",
+            "spanel.managed=true",
+            "--label",
+            f"spanel.tenant={site.tenant_id}",
+            "--label",
+            f"spanel.site={site.container_name.removeprefix('spanel-').removesuffix('-wp')}",
+            "--env-file",
+            db_file,
+            "-v",
+            f"{db_volume}:/var/lib/mysql",
+            str((database.get("Config") or {}).get("Image") or self.settings.db_image),
+        )
+        target.command(db_args)
         self._wait_container(target, db_name)
         target.command(
             (

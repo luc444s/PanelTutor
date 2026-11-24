@@ -91,6 +91,30 @@ def test_database_name_falls_back_when_the_alias_is_ambiguous(monkeypatch) -> No
     assert service._database_name(site, Source()) == "legalattorney-clean-db"
 
 
+def test_database_alias_keeps_the_wordpress_raw_host(monkeypatch) -> None:
+    service = object.__new__(RootlessMigrationService)
+    site = SimpleNamespace(kind="wordpress", container_name="legalattorney-clean")
+    info = {"Config": {"Env": ["WORDPRESS_DB_HOST=db:3306"]}}
+
+    class Source:
+        def inspect(self, kind, name):
+            assert kind == "container"
+            return info if name == site.container_name else None
+
+    monkeypatch.setattr(
+        "plugins.hosting.backend.rootless_migration.resolve_database_binding",
+        lambda *_args, **_kwargs: (
+            "db:3306",
+            "legalattorney-clean-db",
+            "wp",
+            "user",
+            "pw",
+        ),
+    )
+
+    assert service._database_alias(site, Source(), "legalattorney-clean-db") == "db"
+
+
 def test_database_name_is_none_for_non_wordpress() -> None:
     service = object.__new__(RootlessMigrationService)
     site = SimpleNamespace(kind="static", container_name="legalattorney-static")
