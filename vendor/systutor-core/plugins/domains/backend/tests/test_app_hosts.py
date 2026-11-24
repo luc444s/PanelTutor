@@ -81,6 +81,30 @@ def test_migration_upgrade_downgrade_upgrade_backfills_legacy_host() -> None:
         engine.dispose()
 
 
+def test_migration_skips_backfill_when_legacy_columns_are_gone() -> None:
+    migration = _migration()
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    try:
+        Tenant.__table__.create(engine)
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE TABLE apps_applications ("
+                    "id VARCHAR(36) PRIMARY KEY, tenant_id VARCHAR(36) NOT NULL)"
+                )
+            )
+        with Session(engine) as db:
+            migration.upgrade(db)
+            db.commit()
+        assert "domains_app_hosts" in inspect(engine).get_table_names()
+        with engine.connect() as connection:
+            assert connection.execute(
+                text("SELECT count(*) FROM domains_app_hosts")
+            ).scalar_one() == 0
+    finally:
+        engine.dispose()
+
+
 def test_migration_boolean_default_is_valid_postgresql() -> None:
     ddl = str(
         CreateTable(_migration().app_hosts).compile(dialect=postgresql.dialect())

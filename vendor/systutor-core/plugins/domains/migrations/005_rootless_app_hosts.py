@@ -55,6 +55,15 @@ def upgrade(db) -> None:
         app_hosts.create(bind)
     if "apps_applications" not in names:
         return
+    # A.SPEC 0114: the Apps plugin drops ``domain``/``ingress_service``. This
+    # migration may run again after every boot (the registry is recreated), so
+    # the legacy backfill must disappear with the columns instead of failing.
+    columns = {
+        column["name"]
+        for column in inspect(bind).get_columns("apps_applications")
+    }
+    if not {"domain", "ingress_service"}.issubset(columns):
+        return
     rows = db.execute(
         text(
             "SELECT id, tenant_id, ingress_service, domain "

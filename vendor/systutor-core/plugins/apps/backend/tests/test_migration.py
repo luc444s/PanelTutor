@@ -3,7 +3,7 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session
 
 import systutor.kernel.models  # noqa: F401
@@ -55,6 +55,64 @@ def test_github_app_migration_is_additive_and_idempotent(tmp_path: Path) -> None
         ))
         db.commit()
     assert Application.__tablename__ == "apps_applications"
+
+
+def test_drop_legacy_migration_backfills_hosts_before_dropping(tmp_path: Path) -> None:
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'legacy.db'}")
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE TABLE apps_applications ("
+                    "id VARCHAR(36) PRIMARY KEY, tenant_id VARCHAR(36) NOT NULL, "
+                    "domain VARCHAR(255), ingress_service VARCHAR(255), "
+                    "ingress_port INTEGER)"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE TABLE apps_deployments ("
+                    "id VARCHAR(36) PRIMARY KEY, ingress_service VARCHAR(255), "
+                    "ingress_port INTEGER)"
+                )
+            )
+            connection.execute(
+                text(
+                    "CREATE TABLE domains_app_hosts ("
+                    "id VARCHAR(36) PRIMARY KEY, tenant_id VARCHAR(36) NOT NULL, "
+                    "application_id VARCHAR(36) NOT NULL, "
+                    "service VARCHAR(255) NOT NULL, domain VARCHAR(253) NOT NULL, "
+                    "https BOOLEAN NOT NULL)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO apps_applications VALUES "
+                    "('a1', 't1', 'Legacy.Example.', 'web', 8080)"
+                )
+            )
+        migration = load(
+            MIGRATIONS / "009_drop_apps_legacy_ingress.py",
+            "apps_migration_009",
+        )
+        with Session(engine) as db:
+            migration.upgrade(db)
+            db.commit()
+        with engine.connect() as connection:
+            hosts = connection.execute(
+                text(
+                    "SELECT application_id, service, domain, https "
+                    "FROM domains_app_hosts"
+                )
+            ).all()
+            columns = {
+                column["name"]
+                for column in inspect(engine).get_columns("apps_applications")
+            }
+        assert hosts == [("a1", "web", "legacy.example", 1)]
+        assert not {"domain", "ingress_service", "ingress_port"} & columns
+    finally:
+        engine.dispose()
 
 
 def test_migration_ddl_accepts_both_engine_and_session(tmp_path: Path) -> None:
