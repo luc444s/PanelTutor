@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import shlex
 from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any
@@ -416,6 +417,26 @@ def _ingress_labels_missing(
     return missing
 
 
+def _rewrite_override(runner: Runner, staged: Path, override: str) -> None:
+    """Replace ``override.yaml`` in a release reused by a rollback."""
+    path = staged / "override.yaml"
+    if runner.transport == "ssh":
+        result = runner.run(
+            [
+                "sh",
+                "-c",
+                f"umask 077; cat > {shlex.quote(str(path))}",
+            ],
+            stdin=override.encode(),
+            check=False,
+        )
+        if result.returncode:
+            raise AppDeployError("cannot rewrite the remote compose override")
+        return
+    path.write_text(override, encoding="utf-8")
+    path.chmod(0o600)
+
+
 def deploy_scoped(
     runner: Runner,
     release: TrustedRelease,
@@ -475,6 +496,11 @@ def deploy_scoped(
         else _release_dir(state_root, project, staging_id)
     )
     reusing = staging_release is not None
+    override = _override(
+        result.data, project, True, _env_path(staged), staging_id,
+        ingress_publish=publish,
+        tenant_id=tenant_id,
+    )
     if not reusing:
         if runner.transport == "local" and staged.exists():
             raise AppDeployError(
@@ -491,12 +517,12 @@ def deploy_scoped(
                     "cannot verify remote project release availability"
                 )
         _ensure_owned(runner, project)
-        override = _override(
-            result.data, project, True, _env_path(staged), staging_id,
-            ingress_publish=publish,
-            tenant_id=tenant_id,
-        )
         _stage_release(runner, result.root, staged, release.compose_path, override, env_file)
+    else:
+        # A reused release directory may carry an override from a previous
+        # version without the spanel.* labels (A.SPEC 0114).  Rewrite it with
+        # the current contract instead of inheriting stale state.
+        _rewrite_override(runner, staged, override)
     compose_rel = release.compose_path
     # Compose services behind an inactive profile are never started by
     # `docker compose up` (they stay in `created`).  Exclude them from the
@@ -522,6 +548,7 @@ def deploy_scoped(
         pass
     all_services = sorted(name for name in result.data["services"] if name in active)
     effective = [item for item in plan.effective_services if item in all_services]
+    force_recreate = False
     if any(item not in result.data["services"] for item in plan.effective_services):
         raise AppDeployError("plan references services outside the verified release")
     initial = not isinstance(previous_manifest, Mapping) or not previous_manifest
@@ -566,6 +593,7 @@ def deploy_scoped(
                 fallback_reason="ingress_labels_missing",
             )
             effective = forced
+            force_recreate = True
     state = active_state(previous, release, plan, all_services)
     options = DeployOptions(
         repo=release.repo,
@@ -718,7 +746,8 @@ def deploy_scoped(
                 started = runner.run(
                     _compose_command(
                         staged, compose_rel, project, True,
-                        "up", "-d", "--no-recreate",
+                        "up", "-d",
+                        "--force-recreate" if force_recreate else "--no-recreate",
                     ),
                     timeout=timeout,
                     check=False,
@@ -738,7 +767,9 @@ def deploy_scoped(
                     started = runner.run(
                         _compose_command(
                             staged, compose_rel, project, True,
-                            "up", "-d", "--no-deps", "--no-recreate", service,
+                            "up", "-d", "--no-deps",
+                            "--force-recreate" if force_recreate else "--no-recreate",
+                            service,
                         ),
                         timeout=timeout,
                         check=False,
