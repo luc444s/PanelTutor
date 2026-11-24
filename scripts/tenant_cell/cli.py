@@ -290,7 +290,12 @@ def doctor(
 
 @app.command()
 def provision(
-    slug: str = typer.Option(..., "--slug", help="Validated tenant slug."),
+    slug: str = typer.Option(..., "--slug", help="Validated cell slug."),
+    tenant_slug: str | None = typer.Option(
+        None,
+        "--tenant-slug",
+        help="Kernel tenant slug (may contain dots/uppercase); defaults to --slug.",
+    ),
     json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
     data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
     dry_run: bool = typer.Option(False, "--dry-run", help="Preview without mutation."),
@@ -303,7 +308,9 @@ def provision(
         _emit(result, json_output)
         return
     result = _execute(
-        lambda: _service(data_root).provision(slug), json_output, "provision"
+        lambda: _service(data_root).provision(slug, tenant_slug=tenant_slug),
+        json_output,
+        "provision",
     )
     _emit(result, json_output)
 

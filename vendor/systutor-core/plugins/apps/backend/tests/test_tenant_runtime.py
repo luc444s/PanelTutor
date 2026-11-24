@@ -196,3 +196,22 @@ def test_release_execution_uses_tenant_runner_when_injected() -> None:
     assert execution._runner("tenant-1") is tenant_runner
     # A missing tenant id still falls back to the old global path.
     assert execution._runner(None) is fallback
+
+
+def test_cell_slug_is_derived_from_free_form_tenant_slug() -> None:
+    assert tr._cell_slug("demo") == "demo"
+    assert tr._cell_slug("Legalattorney.pe") == "legalattorney-pe"
+    assert tr._cell_slug("Consorciozia") == "consorciozia"
+    assert tr._cell_slug("Gestión gases industriales") == "gestion-gases-industriales"
+    with pytest.raises(AppDeployError):
+        tr._cell_slug("")
+
+
+def test_tenant_slug_resolves_the_cell_slug_from_the_db_row() -> None:
+    from types import SimpleNamespace
+
+    class Session:
+        def get(self, _model, _key):
+            return SimpleNamespace(slug="Legalattorney.pe")
+
+    assert tr.tenant_slug(Session(), "t1") == "legalattorney-pe"

@@ -769,6 +769,17 @@ for a tenant-exclusive legacy database.
 script validates it against free space and records it in the plan/evidence, but
 the effective value is the one saved from the Resources tab (Apps plan API).
 
+`--tenant` is the tenant slug **as shown in the panel**, not the domain or an
+invented name: it may contain dots or uppercase (e.g. `Legalattorney.pe`).
+Rootless cells require a canonical `[a-z0-9][a-z0-9-]{0,61}` slug, so the
+migrator derives the cell slug deterministically (`Legalattorney.pe` →
+`legalattorney-pe`) and reports it as `cell slug` in the summary and evidence.
+The original slug is persisted on the cell allocation (`registry.json`,
+`tenant_slug`) so the privileged agent can resolve it for database lookups;
+the cell slug is used only for paths, units, cgroups, AppArmor and the rootless
+socket. Two tenants deriving the same cell slug are refused with
+`SlugCollision`.
+
 Evidence is written to
 `logs/migrator-to-rootless-<tenant>-<UTC>.json` (or `--state-file`).
 

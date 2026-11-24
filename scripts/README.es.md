@@ -773,6 +773,18 @@ filesystem. El script lo valida contra el espacio libre y lo registra en el plan
 y la evidencia, pero el valor efectivo es el que se guarda desde la pestaña
 Recursos (API de planes de Apps).
 
+El `--tenant` es el slug del tenant **tal como aparece en el panel**, no el
+dominio ni un nombre inventado: puede contener puntos o mayúsculas (p. ej.
+`Legalattorney.pe`). La celda rootless, en cambio, exige un slug canónico
+`[a-z0-9][a-z0-9-]{0,61}`. El migrador deriva ese slug de celda de forma
+determinista (`Legalattorney.pe` → `legalattorney-pe`) y lo muestra como
+`cell slug` en el resumen y en la evidencia. El slug original se guarda en la
+asignación de la celda (`registry.json`, campo `tenant_slug`) para que el agente
+privilegiado pueda resolverlo en las consultas de base de datos; el slug de la
+celda se usa solo para rutas, unidades, cgroups, AppArmor y el socket rootless.
+Dos tenants que deriven al mismo slug de celda son rechazados con
+`SlugCollision`.
+
 La evidencia se escribe en
 `logs/migrator-to-rootless-<tenant>-<UTC>.json` (o `--state-file`).
 

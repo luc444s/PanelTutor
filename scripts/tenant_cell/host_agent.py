@@ -528,6 +528,10 @@ def _site_descriptor(data_root: str | Path, slug: str, site_id: str) -> dict[str
     url = os.environ.get("SYSTUTOR_DATABASE_URL", "").strip()
     if not url:
         raise ValueError("SYSTUTOR_DATABASE_URL is not configured")
+    # The agent only ever sees the canonical cell slug.  The kernel tenant
+    # slug is arbitrary text (dots, uppercase), so resolve it from the cell
+    # allocation before querying tenants.
+    tenant_slug = alloc.tenant_slug_for(data_root, slug)
     engine = sa.create_engine(url, pool_pre_ping=True)
     try:
         with engine.connect() as conn:
@@ -538,9 +542,9 @@ def _site_descriptor(data_root: str | Path, slug: str, site_id: str) -> dict[str
                     "JOIN tenants t ON t.id = s.tenant_id "
                     "LEFT JOIN tenant_resource_runtimes r "
                     "  ON r.resource_id = s.id AND r.kind = s.kind "
-                    "WHERE s.id = :site_id AND t.slug = :slug"
+                    "WHERE s.id = :site_id AND t.slug = :tenant_slug"
                 ),
-                {"site_id": site_id, "slug": slug},
+                {"site_id": site_id, "tenant_slug": tenant_slug},
             ).first()
     finally:
         engine.dispose()

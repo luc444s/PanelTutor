@@ -12,6 +12,7 @@ import json
 import os
 import re
 import subprocess
+import unicodedata
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
@@ -29,6 +30,27 @@ def validate_slug(slug: str) -> str:
     return slug
 
 
+def _cell_slug(tenant_slug: str) -> str:
+    """Derive the canonical cell slug from a free-form kernel tenant slug.
+
+    Mirrors ``scripts/tenant_cell/slugs.py::cell_slug_for`` on the host.  The
+    plugin cannot import operator tooling, so the small deterministic rule is
+    duplicated here; both sides are covered by the same derivation tests.
+    """
+    if not isinstance(tenant_slug, str) or not tenant_slug.strip():
+        raise AppDeployError("invalid tenant slug")
+    raw = tenant_slug.strip()
+    if SLUG_RE.fullmatch(raw):
+        return raw
+    plain = unicodedata.normalize("NFKD", raw).encode("ascii", "ignore").decode()
+    candidate = re.sub(r"[^a-z0-9]+", "-", plain.lower()).strip("-")
+    candidate = candidate[:62].rstrip("-")
+    try:
+        return validate_slug(candidate)
+    except AppDeployError as exc:
+        raise AppDeployError("tenant slug has no valid cell slug") from exc
+
+
 def tenant_slug(session: Any, tenant_id: str) -> str:
     """Resolve the cell slug from the kernel tenant table, never from a request."""
     from systutor.kernel.tenants.models import Tenant
@@ -36,7 +58,7 @@ def tenant_slug(session: Any, tenant_id: str) -> str:
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
         raise AppDeployError("tenant not found")
-    return validate_slug(tenant.slug)
+    return _cell_slug(tenant.slug)
 
 
 def _read(path: Path) -> str:

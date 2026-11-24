@@ -210,3 +210,43 @@ def test_untrusted_peer_never_reaches_the_handler(tmp_path: Path) -> None:
     )
     assert _error(response) == host_agent.ERR_PEER
     assert calls == []
+
+
+def test_site_descriptor_resolves_the_db_tenant_slug(tmp_path: Path, monkeypatch) -> None:
+    """The agent sees only the cell slug; the SQL must use the mapped DB slug."""
+    import sqlalchemy as sa
+
+    _cell(tmp_path, "legalattorney-pe")
+    alloc.update_allocation(
+        tmp_path, "legalattorney-pe", tenant_slug="Legalattorney.pe"
+    )
+    monkeypatch.setenv("SYSTUTOR_DATABASE_URL", "sqlite://")
+    captured: dict[str, Any] = {}
+
+    class FakeResult:
+        def first(self):
+            return ("spanel-legalattorney-wp", "wordpress", "rootless", "t1")
+
+    class FakeConn:
+        def execute(self, _statement, params):
+            captured.update(params)
+            return FakeResult()
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+    class FakeEngine:
+        def connect(self):
+            return FakeConn()
+
+        def dispose(self):
+            return None
+
+    monkeypatch.setattr(sa, "create_engine", lambda *_a, **_k: FakeEngine())
+    descriptor = host_agent._site_descriptor(tmp_path, "legalattorney-pe", "s1")
+
+    assert captured["tenant_slug"] == "Legalattorney.pe"
+    assert descriptor["db_container"] == "spanel-legalattorney-db"

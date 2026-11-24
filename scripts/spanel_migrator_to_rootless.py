@@ -86,6 +86,10 @@ SIZE_MULT = {
 }
 KINDS = ("static", "wordpress")
 
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+from scripts.tenant_cell.slugs import cell_slug_for
+
 
 class MigratorError(RuntimeError):
     """A failure already explained to the operator."""
@@ -467,16 +471,20 @@ class Operator:
         self,
         slug: str,
         *,
+        tenant_slug: str | None = None,
         dry_run: bool = False,
         timeout: float = 240.0,
         sleep: Callable[[float], None] = time.sleep,
     ) -> dict[str, Any]:
+        mapping = ("--tenant-slug", tenant_slug) if tenant_slug else ()
         if dry_run:
-            return self.tenant("provision", "--slug", slug, "--dry-run", timeout=120)
+            return self.tenant(
+                "provision", "--slug", slug, *mapping, "--dry-run", timeout=120
+            )
         deadline = time.monotonic() + timeout
         last: dict[str, Any] = {}
         while time.monotonic() < deadline:
-            last = self.tenant("provision", "--slug", slug, timeout=600)
+            last = self.tenant("provision", "--slug", slug, *mapping, timeout=600)
             if last.get("state") == "ready" and self.cell_socket(slug).exists():
                 return last
             if last.get("error"):
@@ -649,6 +657,7 @@ class Operator:
 @dataclass
 class MigrationPlan:
     tenant: str
+    cell_slug: str = ""
     memory: str | None = None
     cpus: float | None = None
     pids: int | None = None
@@ -679,6 +688,10 @@ class MigrationPlan:
     app_container: str = DEFAULT_APP_CONTAINER
     hosting_mode: str = "auto"
     env_file: Path | None = None
+
+    def __post_init__(self) -> None:
+        if not self.cell_slug:
+            self.cell_slug = cell_slug_for(self.tenant)
 
 
 @dataclass
@@ -927,7 +940,8 @@ class Migrator:
             "Provision cell" + (" (preview)" if self.plan.dry_run else "")
         )
         result = self.ops.provision(
-            self.plan.tenant,
+            self.plan.cell_slug,
+            tenant_slug=self.plan.tenant,
             dry_run=self.plan.dry_run,
             timeout=self.plan.provision_timeout,
             sleep=self.sleep,
@@ -953,7 +967,7 @@ class Migrator:
                 "memory, cpus and pids are required unless --skip-plan is used"
             )
         result = self.ops.plan_apply(
-            self.plan.tenant,
+            self.plan.cell_slug,
             memory=self.plan.memory,
             cpus=self.plan.cpus,
             pids=self.plan.pids,
@@ -979,7 +993,7 @@ class Migrator:
         if self.plan.dry_run:
             self.console.info("dry-run: plan not written and not verified")
             return result
-        verified = self.ops.plan_verify(self.plan.tenant)
+        verified = self.ops.plan_verify(self.plan.cell_slug)
         self.journal.event(
             "plan", "verify", ok=bool(verified.get("ok")), detail=verified
         )
@@ -1177,7 +1191,7 @@ class Migrator:
         self.console.step("Migrate Apps" + (" (preview)" if self.plan.dry_run else ""))
         try:
             result = self.ops.migrate_apps(
-                self.plan.tenant,
+                self.plan.cell_slug,
                 api_url=self.plan.apps_api_url,
                 token_file=self.plan.apps_token_file,
                 env_file=self.plan.env_file,
@@ -1218,6 +1232,7 @@ class Migrator:
         payload = {
             "ok": ok,
             "tenant": self.plan.tenant,
+            "cell_slug": self.plan.cell_slug,
             "dry_run": self.plan.dry_run,
             "migrated": [entry["result"] for entry in self.migrated],
             "pma": pma,
@@ -1271,7 +1286,10 @@ def _parser() -> argparse.ArgumentParser:
             "container unless --hosting-mode local is used."
         ),
     )
-    parser.add_argument("--tenant", help="Validated tenant slug.")
+    parser.add_argument(
+        "--tenant",
+        help="Kernel tenant slug as stored in the panel (e.g. Legalattorney.pe).",
+    )
     parser.add_argument("--memory", help="Plan RAM, e.g. 512M or 1G.")
     parser.add_argument("--cpus", type=float, help="Plan CPU quota in cores, e.g. 1.5.")
     parser.add_argument("--pids", type=int, help="Plan TasksMax (positive integer).")
@@ -1446,8 +1464,15 @@ def _parser() -> argparse.ArgumentParser:
 
 
 def _tenant_slug(raw: str) -> str:
-    slug = raw.strip().lower()
-    if not SLUG_RE.fullmatch(slug):
+    """Return the authoritative kernel tenant slug, exactly as stored in the DB.
+
+    Tenant slugs are free-form text (the panel allows dots and uppercase, e.g.
+    ``Legalattorney.pe``).  The canonical *cell* slug is derived separately in
+    :func:`build_plan`; never lowercase or rewrite the DB slug here, or the
+    Hosting CLI will no longer find the tenant.
+    """
+    slug = (raw or "").strip()
+    if not slug or len(slug) > 100 or any(ord(ch) < 32 for ch in slug):
         raise UsageError(f"invalid tenant slug: {raw!r}")
     return slug
 
@@ -1463,8 +1488,12 @@ def build_plan(
 
     tenant_raw = args.tenant
     if not tenant_raw:
-        tenant_raw = console.ask("Tenant slug")
+        tenant_raw = console.ask("Tenant slug (as shown in the panel)")
     tenant = _tenant_slug(tenant_raw)
+    try:
+        cell_slug = cell_slug_for(tenant)
+    except ValueError as exc:
+        raise UsageError(f"tenant {tenant!r} has no valid cell slug: {exc}") from exc
 
     memory = args.memory
     cpus = args.cpus
@@ -1473,7 +1502,7 @@ def build_plan(
     if not args.skip_plan:
         existing: dict[str, Any] | None = None
         if interactive and (memory is None or cpus is None or pids is None):
-            existing = ops.plan_show(tenant)
+            existing = ops.plan_show(cell_slug)
         current = (existing or {}).get("plan") or {}
         if memory is None:
             memory = console.ask(
@@ -1520,6 +1549,7 @@ def build_plan(
     kinds = (args.only,) if args.only else KINDS
     return MigrationPlan(
         tenant=tenant,
+        cell_slug=cell_slug,
         memory=memory,
         cpus=cpus,
         pids=pids,
@@ -1556,6 +1586,8 @@ def build_plan(
 def print_summary(plan: MigrationPlan, console: Console) -> None:
     console.step("Migration plan")
     console.info(f"tenant:        {plan.tenant}")
+    if plan.cell_slug != plan.tenant:
+        console.info(f"cell slug:     {plan.cell_slug}")
     console.info(f"data root:     {plan.data_root}")
     if plan.skip_plan:
         console.info("resources:     keep the current plan")

@@ -50,6 +50,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.spanel_apps import Client, CliError
+from scripts.tenant_cell.slugs import cell_slug_for
 
 DEFAULT_DATA_ROOT = "/var/lib/spanel"
 
@@ -485,7 +486,9 @@ def api_url(override: str | None, *, env_file: Path | None = None) -> str:
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="migrate_tenant_apps.py", description=__doc__)
-    parser.add_argument("--tenant", required=True, help="Tenant cell slug.")
+    parser.add_argument(
+        "--tenant", required=True, help="Tenant slug (DB); the cell slug is derived."
+    )
     parser.add_argument("--api-url", default=None)
     parser.add_argument("--token-file", type=Path, default=None)
     parser.add_argument(
@@ -527,9 +530,10 @@ def main(argv: list[str] | None = None) -> int:
         client = Client(
             api_url(args.api_url, env_file=args.env_file), token, timeout=60
         )
+        cell_slug = cell_slug_for(args.tenant)
         migrator = AppsMigrator(
             client,
-            tenant=args.tenant,
+            tenant=cell_slug,
             data_root=args.data_root,
             dry_run=not args.apply,
             app_ids=tuple(args.app),
@@ -543,6 +547,7 @@ def main(argv: list[str] | None = None) -> int:
         serialized = {
             "ok": ok,
             "tenant": args.tenant,
+            "cell_slug": cell_slug,
             "dry_run": not args.apply,
             "apps": [
                 {

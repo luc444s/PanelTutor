@@ -39,6 +39,10 @@ class SlugRetired(ValueError):
     """Raised when a retired slug tries to reclaim its (never-reused) block."""
 
 
+class SlugCollision(ValueError):
+    """Two DB tenant slugs derived the same cell slug."""
+
+
 def validate_slug(slug: str) -> str:
     """Validate before ANY filesystem or system change (INVARIANT 2)."""
     if not isinstance(slug, str) or not SLUG_RE.fullmatch(slug):
@@ -86,12 +90,27 @@ def save_registry(data_root: str | Path, registry: dict[str, Any]) -> None:
     tmp.replace(path)
 
 
-def allocate(data_root: str | Path, slug: str) -> dict[str, Any]:
-    """Return the existing allocation or create a fresh, never-reused one."""
+def allocate(
+    data_root: str | Path, slug: str, *, tenant_slug: str | None = None
+) -> dict[str, Any]:
+    """Return the existing allocation or create a fresh, never-reused one.
+
+    ``tenant_slug`` is the authoritative kernel tenant slug (it may contain
+    dots or uppercase).  It is persisted on the allocation so host-side
+    consumers can map a cell slug back to the DB tenant.
+    """
     slug = validate_slug(slug)
+    owner = str(tenant_slug).strip() if tenant_slug is not None else slug
+    if not owner:
+        raise SlugCollision("tenant slug must not be empty")
     reg = load_registry(data_root)
     allocations: dict[str, dict[str, Any]] = reg["allocations"]
     if slug in allocations:
+        existing = str(allocations[slug].get("tenant_slug", slug))
+        if existing != owner:
+            raise SlugCollision(
+                f"cell slug {slug!r} is already owned by tenant {existing!r}"
+            )
         return dict(allocations[slug])
     if any(t["slug"] == slug for t in reg["tombstones"]):
         raise SlugRetired(f"slug {slug!r} is retired; uid blocks are never reused")
@@ -112,6 +131,7 @@ def allocate(data_root: str | Path, slug: str) -> dict[str, Any]:
         "state": "provisioning",
         "applied": {},
         "cgroup_driver": DEFAULT_CGROUP_DRIVER,
+        "tenant_slug": owner,
     }
     allocations[slug] = alloc
     reg["next_index"] = index + 1
@@ -132,6 +152,19 @@ def update_allocation(
     reg["allocations"][slug] = alloc
     save_registry(data_root, reg)
     return dict(alloc)
+
+
+def tenant_slug_for(data_root: str | Path, cell_slug: str) -> str:
+    """Map a validated cell slug back to its kernel tenant slug.
+
+    Allocations provisioned before this mapping existed fall back to their
+    cell slug: those tenants already had canonical DB slugs.
+    """
+    cell_slug = validate_slug(cell_slug)
+    cell = load_registry(data_root)["allocations"].get(cell_slug)
+    if cell is None:
+        return cell_slug
+    return str(cell.get("tenant_slug") or cell_slug)
 
 
 def retire(data_root: str | Path, slug: str) -> bool:

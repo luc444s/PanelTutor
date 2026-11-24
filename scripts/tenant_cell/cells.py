@@ -143,7 +143,9 @@ class CellService:
             for cell in alloc.list_allocations(self.data_root)
         ]
 
-    def provision(self, slug: str) -> dict[str, Any]:
+    def provision(
+        self, slug: str, *, tenant_slug: str | None = None
+    ) -> dict[str, Any]:
         """Refuse with zero cell changes unless doctor is green; else apply once."""
         slug = alloc.validate_slug(slug)  # INVARIANT 2: before any change
         report = run_doctor(self.probe)
@@ -157,7 +159,7 @@ class CellService:
             )
             raise ProvisionRefused(report)
 
-        cell = alloc.allocate(self.data_root, slug)
+        cell = alloc.allocate(self.data_root, slug, tenant_slug=tenant_slug)
         applied: dict[str, bool] = dict(cell.get("applied", {}))
         name = f"spanel-{slug}"
         driver = cgroup_driver(cell)

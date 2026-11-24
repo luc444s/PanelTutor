@@ -76,8 +76,11 @@ class FakeOperator:
             return {"ok": True, "plan": {"memory": "512M", "cpus": 1.0, "pids": 256}}
         raise AssertionError(f"unexpected tenant call: {args}")
 
-    def provision(self, slug, *, dry_run=False, timeout=240.0, sleep=None):
+    def provision(
+        self, slug, *, tenant_slug=None, dry_run=False, timeout=240.0, sleep=None
+    ):
         self.calls.append(("provision", slug, dry_run))
+        self.tenant_slug = tenant_slug
         return self.provision_result
 
     def plan_apply(self, slug, *, memory, cpus, pids, dry_run=False):
@@ -425,7 +428,7 @@ def test_build_plan_rejects_invalid_tenant() -> None:
         [
             "--non-interactive",
             "--tenant",
-            "Bad Slug",
+            "a" * 101,
             "--memory",
             "1G",
             "--cpus",
@@ -436,6 +439,37 @@ def test_build_plan_rejects_invalid_tenant() -> None:
     )
     with pytest.raises(mod.UsageError):
         mod.build_plan(args, FakeOperator(), RecordingConsole())
+
+
+def test_build_plan_derives_cell_slug_from_a_dotted_tenant() -> None:
+    args = mod._parser().parse_args(
+        [
+            "--non-interactive",
+            "--tenant",
+            "Legalattorney.pe",
+            "--memory",
+            "1G",
+            "--cpus",
+            "1",
+            "--pids",
+            "128",
+        ]
+    )
+    plan = mod.build_plan(args, FakeOperator(), RecordingConsole())
+    assert plan.tenant == "Legalattorney.pe"
+    assert plan.cell_slug == "legalattorney-pe"
+
+
+def test_migration_uses_db_slug_for_hosting_and_cell_slug_for_cell(tmp_path) -> None:
+    plan = make_plan(tenant="Legalattorney.pe", cell_slug="legalattorney-pe")
+    ops = FakeOperator()
+    migrator, _, _, _ = make_migrator(tmp_path, ops=ops, plan=plan)
+    migrator.run()
+    cell_calls = [call for call in ops.calls if call[0] in {"provision", "plan_apply", "plan_verify"}]
+    assert cell_calls
+    assert all(call[1] == "legalattorney-pe" for call in cell_calls)
+    hosting = [call for call in ops.calls if call[0] == "hosting_sites"]
+    assert hosting and hosting[0][1] == "Legalattorney.pe"
 
 
 def test_operator_container_mode_copies_and_execs(monkeypatch, tmp_path) -> None:
