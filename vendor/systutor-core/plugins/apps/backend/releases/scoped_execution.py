@@ -346,8 +346,10 @@ def _start_failure(
     project: str,
     *,
     prefix: str,
+    detail: str = "",
 ) -> str:
     """Add the effective service state to a Compose start failure."""
+    tail = " ".join(detail.strip().splitlines()[-3:])[:300]
     result = runner.run(
         _compose_command(
             staged, compose_rel, project, True,
@@ -359,8 +361,8 @@ def _start_failure(
         payload = parse_compose_ps_json(result.stdout)
         reason = compose_failure_reason(payload)
         if reason:
-            return f"{prefix}: {reason}"
-    return prefix
+            return f"{prefix}: {reason}" + (f" ({tail})" if tail else "")
+    return f"{prefix} ({tail})" if tail else prefix
 
 
 def _merged_paths(    previous: Mapping[str, Path | None],
@@ -770,6 +772,7 @@ def deploy_scoped(
                             "Compose services failed to start "
                             f"(exit {started.returncode})"
                         ),
+                        detail=started.stderr,
                     ))
             else:
                 for service in effective:
@@ -792,6 +795,7 @@ def deploy_scoped(
                                 f"service {service} failed to start "
                                 f"(exit {started.returncode})"
                             ),
+                            detail=started.stderr,
                         ))
         containers = _containers(
             runner, staged, compose_rel, project, True, all_services
