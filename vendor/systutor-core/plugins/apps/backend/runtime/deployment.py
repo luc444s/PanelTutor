@@ -140,12 +140,19 @@ def _override(
     plan: TenantPlan | None = None,
     *,
     ingress_publish: tuple[str, str, int, int] | None = None,
+    tenant_id: str | None = None,
 ) -> str:
     if not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}", image_tag):
         raise AppDeployError("release image tag is invalid")
+    service_labels: dict[str, str] = {OWNER_LABEL: project}
+    if tenant_id:
+        # The cell ingress only publishes a target that proves both ownership
+        # and tenant identity, exactly like Hosting containers.
+        service_labels["spanel.managed"] = "true"
+        service_labels["spanel.tenant"] = str(tenant_id)
     services: dict[str, Any] = {}
     for service, source_config in data["services"].items():
-        config: dict[str, Any] = {"labels": {OWNER_LABEL: project}}
+        config: dict[str, Any] = {"labels": dict(service_labels)}
         if (
             isinstance(source_config, dict)
             and source_config.get("x-spanel-external-env") is True
@@ -887,6 +894,7 @@ def deploy(
         options.non_root,
         _env_path(release),
         options.release_id or "latest",
+        tenant_id=options.tenant_id,
     )
     _stage_release(runner, result.root, release, compose_rel, override, env_file)
     services = sorted(result.data["services"])

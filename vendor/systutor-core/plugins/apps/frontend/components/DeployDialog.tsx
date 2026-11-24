@@ -83,10 +83,6 @@ export function DeployDialog({ application, open, blocked, onClose, onAccepted }
   return <Dialog open={open} title={t("Deploy {name}", { name: application.name })} onClose={close}>
     <div className="space-y-4">
       <Alert title={t("Untrusted code")}>{t("Docker build will run code from the repository. The hardening gate is the authority; if it fails, nothing is deployed.")}</Alert>
-      <dl className="grid grid-cols-2 gap-2 text-sm">
-        <div><dt className="text-muted-foreground">{t("Domain")}</dt><dd>{application.domain ?? t("Not published")}</dd></div>
-        <div><dt className="text-muted-foreground">{t("Ingress")}</dt><dd>{application.ingress_service ? `${application.ingress_service}:${application.ingress_port}` : t("No ingress")}</dd></div>
-      </dl>
 
       <div className="space-y-2 rounded-md border border-border p-3">
         <label className="block space-y-2 text-sm">

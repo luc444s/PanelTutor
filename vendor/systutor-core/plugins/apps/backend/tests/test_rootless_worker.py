@@ -82,9 +82,23 @@ class FakeSession:
 
 class Routes:
     def __init__(self, *, fail=False):
+        from fastapi import FastAPI
+
+        from systutor.contracts.app_hosts import AppHost, register_app_host_provider
+
         self.fail = fail
         self.refreshed = []
         self.cleaned = []
+        self.app = FastAPI()
+        register_app_host_provider(
+            self.app,
+            "fake",
+            lambda _db, _tenant, _application: [
+                AppHost(
+                    "a1:web", "a1", "web", "app.example.test", True, 8080
+                )
+            ],
+        )
 
     def endpoint(self, slug):
         return CellEndpoint(
@@ -106,7 +120,6 @@ class Routes:
 def _cutover_worker(*, fail_route=False, recorder=None):
     app = SimpleNamespace(
         tenant_id="t1", active_deployment_id="old", status="running",
-        domain="app.example.test",
     )
     deployment = SimpleNamespace(id="new", manifest={"containers": {"web": "cid"}})
     rows = {
@@ -123,12 +136,16 @@ def _cutover_worker(*, fail_route=False, recorder=None):
 
     routes = Routes(fail=fail_route)
     restored_routes = []
+    ingress = []
     worker = AppsWorker(
         factory,
         None,
         runtime_registry=object(),
         runtime_recorder=recorder,
         rootless_routes=routes,
+        apps_ingress=lambda _db, tenant, application: ingress.append(
+            (tenant, application)
+        ),
         route_refresh=lambda _db, tenant, application: restored_routes.append(
             (tenant, application)
         ),
@@ -299,20 +316,32 @@ def test_public_surface_domain_is_published_as_the_host() -> None:
                 bind="172.25.0.1",
             )
 
-    class Db:
-        def get(self, _model, _application_id):
-            return SimpleNamespace(domain="editor.lab")
+    from fastapi import FastAPI
 
-    routes = RootlessRoutes(
-        Client(), Publisher(), slug_resolver=lambda _db, _t: "acme", https=False
+    from systutor.contracts.app_hosts import AppHost, register_app_host_provider
+
+    app = FastAPI()
+    register_app_host_provider(
+        app,
+        "fake",
+        lambda _db, _tenant, _application: [
+            AppHost("a1:web", "a1", "web", "editor.lab", False, 8080)
+        ],
     )
-    result = routes.refresh(Db(), "t1", "a1")
+    routes = RootlessRoutes(
+        Client(), Publisher(), slug_resolver=lambda _db, _t: "acme",
+        https=False, app=app,
+    )
+    result = routes.refresh(SimpleNamespace(), "t1", "a1")
 
     assert published == [("editor.lab", "172.25.0.1", 40020, False)]
     assert result["host"] == "editor.lab"
     assert result["published"] == ["editor.lab"]
 
-    # No domain assigned by the public surface -> no Host is published.
+    # No Host assigned in Domains -> nothing is published.
     published.clear()
-    routes.refresh(SimpleNamespace(get=lambda *_a: SimpleNamespace(domain=None)), "t1", "a1")
+    routes = RootlessRoutes(
+        Client(), Publisher(), slug_resolver=lambda _db, _t: "acme", https=False
+    )
+    routes.refresh(SimpleNamespace(), "t1", "a1")
     assert published == []

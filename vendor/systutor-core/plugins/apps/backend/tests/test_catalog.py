@@ -193,19 +193,18 @@ def test_application_inventory_scope_is_platform_only(tmp_path: Path) -> None:
     assert error.value.code == "apps.platform_scope_forbidden"
 
 
-def test_new_application_does_not_claim_or_publish_legacy_ingress(tmp_path: Path) -> None:
+def test_new_application_does_not_accept_legacy_ingress_fields(tmp_path: Path) -> None:
     db = database(tmp_path)
     user = db.get(User, "u1")
     app = catalog.create_application(
         db, context(), user,
         ApplicationCreate(
             name="Demo", installation_id="i1", repository_id="r1",
-            domain="legacy.example.com", ingress_service="web", ingress_port=8000,
         ),
     )
-    assert app.domain is None
-    assert app.ingress_service is None
-    assert app.ingress_port is None
+    assert not hasattr(app, "domain")
+    assert not hasattr(app, "ingress_service")
+    assert not hasattr(app, "ingress_port")
 
 
 @pytest.mark.parametrize(

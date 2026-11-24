@@ -49,13 +49,16 @@ class FakePublisher:
         return True
 
 
-class _App:
-    domain = DOMAIN
-
-
-class _Db:
-    def get(self, _model: Any, _application_id: str) -> _App:
-        return _App()
+def _hosts_app(domain: str = DOMAIN, *, https: bool = True) -> FastAPI:
+    app = FastAPI()
+    register_app_host_provider(
+        app,
+        "fake",
+        lambda _db, _tenant, _application: [
+            AppHost("app1:web", "app1", "web", domain, https, 8080)
+        ],
+    )
+    return app
 
 
 def _endpoint() -> CellEndpoint:
@@ -70,10 +73,18 @@ def _endpoint() -> CellEndpoint:
 
 
 def _routes(
-    client: FakeClient, publisher: FakePublisher, **kwargs: Any
+    client: FakeClient,
+    publisher: FakePublisher,
+    *,
+    app: FastAPI | None = None,
+    **kwargs: Any,
 ) -> RootlessRoutes:
     return RootlessRoutes(
-        client, publisher, slug_resolver=lambda _db, _t: "acme", **kwargs
+        client,
+        publisher,
+        slug_resolver=lambda _db, _t: "acme",
+        app=app or _hosts_app(),
+        **kwargs,
     )
 
 
@@ -116,7 +127,7 @@ def test_refresh_propagates_explicit_https() -> None:
     publisher = FakePublisher()
     routes = _routes(FakeClient(_endpoint()), publisher, https=True)
 
-    result = routes.refresh(_Db(), "t1", "app1")
+    result = routes.refresh(object(), "t1", "app1")
 
     assert result["published"] == [DOMAIN]
     assert publisher.published == [(DOMAIN, "172.25.0.1", 40020, True)]
@@ -129,7 +140,7 @@ def test_refresh_propagates_https_from_host_settings(
     publisher = FakePublisher()
     routes = _routes(FakeClient(_endpoint()), publisher)
 
-    routes.refresh(_Db(), "t1", "app1")
+    routes.refresh(object(), "t1", "app1")
 
     assert publisher.published == [(DOMAIN, "172.25.0.1", 40020, True)]
 
@@ -141,7 +152,7 @@ def test_refresh_defaults_to_https_without_the_flag(
     publisher = FakePublisher()
     routes = _routes(FakeClient(_endpoint()), publisher)
 
-    routes.refresh(_Db(), "t1", "app1")
+    routes.refresh(object(), "t1", "app1")
 
     assert publisher.published == [(DOMAIN, "172.25.0.1", 40020, True)]
 
@@ -151,25 +162,21 @@ def test_no_endpoint_never_publishes_even_with_https() -> None:
     client = FakeClient(error=PlanAgentUnavailable("no cell endpoint"))
     routes = _routes(client, publisher, https=True)
 
-    result = routes.refresh(_Db(), "t1", "app1")
+    result = routes.refresh(object(), "t1", "app1")
 
     assert result["published"] == []
     assert publisher.published == []
 
 
-def test_domains_contract_wins_over_legacy_application_domain() -> None:
-    app = FastAPI()
-    register_app_host_provider(
-        app,
-        "fake",
-        lambda _db, _tenant, _application: [
-            AppHost("app1:web", "app1", "web", "owned.example", False)
-        ],
-    )
+def test_only_domains_providers_are_published() -> None:
     publisher = FakePublisher()
-    routes = _routes(FakeClient(_endpoint()), publisher, app=app)
+    routes = _routes(
+        FakeClient(_endpoint()), publisher,
+        app=_hosts_app("owned.example", https=False),
+    )
 
-    result = routes.refresh(_Db(), "t1", "app1")
+    result = routes.refresh(object(), "t1", "app1")
 
     assert result["published"] == ["owned.example"]
+    assert result["complete"] is True
     assert publisher.published == [("owned.example", "172.25.0.1", 40020, False)]

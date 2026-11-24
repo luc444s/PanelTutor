@@ -61,27 +61,18 @@ class RootlessRoutes:
 
     def _domains(
         self, db: Any, tenant_id: str, application_id: str
-    ) -> list[tuple[str, bool]]:
-        """Prefer Domains-owned Hosts, with the explicit legacy Apps fallback."""
+    ) -> list[Any]:
+        """Domains is the only source of truth for an App Host."""
         from systutor.contracts.app_hosts import list_app_hosts
 
-        hosts = list_app_hosts(self.app, db, tenant_id, application_id)
-        if hosts:
-            return [(host.domain, host.https) for host in hosts]
-        from .models import Application
-
-        app = db.get(Application, application_id)
-        domain = getattr(app, "domain", None)
-        if not isinstance(domain, str) or not domain.strip():
-            return []
-        return [(domain, self._https())]
+        return list(list_app_hosts(self.app, db, tenant_id, application_id))
 
     def endpoint(self, slug: str) -> CellEndpoint:
         """Resolve the cell relay endpoint; the plan-agent is the only source."""
         return self.endpoint_client.endpoint(slug)
 
     def refresh(self, db: Any, tenant_id: str, application_id: str) -> dict[str, Any]:
-        """Publish the app domain to the relay; no endpoint means no route."""
+        """Publish every Domains Host to the relay; no endpoint means no route."""
         hosts = self._domains(db, tenant_id, application_id)
         if not hosts:
             return {"published": []}
@@ -95,7 +86,8 @@ class RootlessRoutes:
             )
             return {"published": [], "slug": slug, "error": str(exc)}
         published: list[str] = []
-        for domain, https in hosts:
+        for host in hosts:
+            domain, https = host.domain, host.https
             self.publisher.publish(domain, endpoint.bind, endpoint.relay_port, https=https)
             published.append(domain)
             # A.SPEC 0109-R3: make the published Host observable in the
@@ -110,20 +102,32 @@ class RootlessRoutes:
                     "https": https,
                 },
             )
+        expected = [host.domain for host in hosts]
         return {
             "published": published,
+            "complete": sorted(published) == sorted(expected),
             "host": published[0] if published else None,
             "slug": slug,
             "endpoint": endpoint.as_dict(),
         }
 
     def cleanup(self, db: Any, tenant_id: str, application_id: str) -> dict[str, Any]:
-        """Remove only the rootless documents this hook owns."""
-        domains = [domain for domain, _https in self._domains(db, tenant_id, application_id)]
+        """Remove the App's kernel ingress rows and its relay documents."""
         removed: list[str] = []
-        for domain in domains:
-            if self.publisher.unpublish(domain):
-                removed.append(domain)
+        hosts = self._domains(db, tenant_id, application_id)
+        try:
+            from .cell_ingress import AppsIngress
+
+            AppsIngress(self.app, db).remove(tenant_id, application_id)
+        except Exception:  # noqa: BLE001 - relay cleanup must still run
+            logger.warning(
+                "rootless_ingress_cleanup_failed",
+                extra={"application_id": application_id},
+                exc_info=True,
+            )
+        for host in hosts:
+            if self.publisher.unpublish(host.domain):
+                removed.append(host.domain)
         return {"removed": removed, "tenant_id": tenant_id}
 
 
@@ -144,6 +148,16 @@ def build_rootless_routes(app: Any | None = None) -> RootlessRoutes | None:
         settings = AppsSettings.from_env()
         if not str(settings.plan_agent_socket):
             return None
+        from systutor.contracts.cell_ingress import register_cell_ingress_provider
+        from systutor.contracts.container_runtime import resolve_container_runtime
+
+        def cell_ingress_handle(db, tenant_id):
+            if app is None:  # pragma: no cover - only registered with an app
+                raise ValueError("cell ingress requires the host application")
+            return resolve_container_runtime(app, db, tenant_id, "rootless")
+
+        if app is not None:
+            register_cell_ingress_provider(app, "apps", cell_ingress_handle)
         client = HostPlanMaterializerClient(
             settings.plan_agent_socket,
             settings.plan_agent_token_file,

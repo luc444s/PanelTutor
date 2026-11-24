@@ -36,6 +36,12 @@ The kernel provides:
   `systutor.contracts.domain_ownership` exposes the domain namespace: hosting
   publishes each site's primary domain and the domains plugin publishes the
   extra routes it owns, so a Host can never be claimed twice.
+  `systutor.contracts.cell_ingress` exposes the kernel cell-ingress service:
+  plugins register the tenant's rootless handle and the kernel owns
+  `tenant_ingress_routes`, renders `default.conf`/`apps-routes.conf` and runs
+  `nginx -t` before reloading the cell ingress.
+  `systutor.contracts.app_hosts` is the read-only App Host view owned by the
+  domains plugin (domain, root-route port and unsupported paths).
 
 The kernel deliberately contains no business domain logic. Business
 modules are external plugins that declare identity, version, permissions,

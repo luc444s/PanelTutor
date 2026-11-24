@@ -168,15 +168,10 @@ def test_real_github_worker_ssh_proxy_flow_leaves_application_running() -> None:
     name = os.environ.get("SPANEL_APP_LIVE_NAME", "Editors live E2E")
     application = next((item for item in applications if item["name"] == name), None)
     if application is None:
-        domain = os.environ.get("SPANEL_APP_LIVE_DOMAIN", "")
-        service = os.environ.get("SPANEL_APP_LIVE_INGRESS_SERVICE", "frontend")
-        port = int(os.environ.get("SPANEL_APP_LIVE_INGRESS_PORT", "80"))
-        assert domain, "SPANEL_APP_LIVE_DOMAIN is required"
         status, application = api.request("POST", "/api/v1/plugins/apps/applications", {
             "name": name, "installation_id": installation_id,
             "repository_id": repository_id, "branch": branch,
             "compose_file": os.environ.get("SPANEL_APP_LIVE_COMPOSE_FILE") or None,
-            "domain": domain, "ingress_service": service, "ingress_port": port,
         })
         assert status == 201
     assert application["source_installation_id"] == installation_id
@@ -213,7 +208,15 @@ def test_real_github_worker_ssh_proxy_flow_leaves_application_running() -> None:
         top = runner.run(["docker", "top", identifier, "-eo", "user="]).stdout.splitlines()
         assert top and all(value.strip() not in {"", "root", "0"} for value in top)
 
-    domain = application["domain"]
+    # Domains is the only source of truth for the App Host (A.SPEC 0114).
+    _, hosts = api.request(
+        "GET",
+        f"/api/v1/plugins/domains/app-hosts?application_id={application['id']}",
+    )
+    domain = os.environ.get("SPANEL_APP_LIVE_DOMAIN", "") or (
+        hosts["items"][0]["domain"] if hosts.get("items") else ""
+    )
+    assert domain, "assign a Domains Host to the App (or set SPANEL_APP_LIVE_DOMAIN)"
     with urllib.request.urlopen(f"https://{domain}", timeout=30, context=ssl.create_default_context()) as response:
         assert 200 <= response.status < 400
 

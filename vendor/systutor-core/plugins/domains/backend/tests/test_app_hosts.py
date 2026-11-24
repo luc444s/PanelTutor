@@ -12,7 +12,7 @@ from sqlalchemy.dialects import postgresql
 from sqlalchemy.orm import Session
 from sqlalchemy.schema import CreateTable
 
-from plugins.domains.backend.models import DomainAppHost
+from plugins.domains.backend.models import DomainAppHost, DomainRoute
 from plugins.domains.backend.schemas import AppHostCreate
 from plugins.domains.backend.service import DomainsService, provide_app_hosts
 from systutor.contracts.app_hosts import (
@@ -97,6 +97,7 @@ def test_contract_resolves_registered_domains_provider() -> None:
     try:
         Tenant.__table__.create(engine)
         DomainAppHost.__table__.create(engine)
+        DomainRoute.__table__.create(engine)
         with Session(engine) as db:
             db.add(Tenant(id="t1", name="One", slug="one"))
             db.add(
@@ -140,6 +141,7 @@ def test_service_claims_and_releases_only_the_current_tenant(monkeypatch) -> Non
     try:
         Tenant.__table__.create(engine)
         DomainAppHost.__table__.create(engine)
+        DomainRoute.__table__.create(engine)
         with Session(engine) as db:
             db.add(Tenant(id="t1", name="One", slug="one"))
             db.commit()

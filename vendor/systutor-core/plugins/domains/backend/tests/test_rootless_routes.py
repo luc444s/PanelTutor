@@ -25,6 +25,7 @@ from plugins.domains.backend.proxy.files import LocalFiles
 from plugins.domains.backend.proxy.operations import ProxyOperations
 from plugins.domains.backend.proxy.transport import CommandResult
 from plugins.domains.backend.publisher import RootlessRoutePublisher
+from systutor.contracts.app_hosts import AppHost, register_app_host_provider
 
 DOMAIN = "rootless-e2e.lab"
 
@@ -288,13 +289,18 @@ class FakePublisher:
         return True
 
 
-class _App:
-    domain = DOMAIN
+def _hosts_app() -> Any:
+    from fastapi import FastAPI
 
-
-class _Db:
-    def get(self, _model: Any, _application_id: str) -> _App:
-        return _App()
+    app = FastAPI()
+    register_app_host_provider(
+        app,
+        "fake",
+        lambda _db, _tenant, _application: [
+            AppHost("app1:web", "app1", "web", DOMAIN, True, 8080)
+        ],
+    )
+    return app
 
 
 def test_rootless_routes_refresh_and_cleanup_use_the_resolved_endpoint() -> None:
@@ -308,23 +314,29 @@ def test_rootless_routes_refresh_and_cleanup_use_the_resolved_endpoint() -> None
     )
     client = FakeClient(endpoint)
     publisher = FakePublisher()
-    routes = RootlessRoutes(client, publisher, slug_resolver=lambda _db, _t: "acme")
+    routes = RootlessRoutes(
+        client, publisher, slug_resolver=lambda _db, _t: "acme",
+        app=_hosts_app(),
+    )
 
-    result = routes.refresh(_Db(), "t1", "app1")
+    result = routes.refresh(object(), "t1", "app1")
 
     assert result["published"] == [DOMAIN]
     assert client.slugs == ["acme"]
     assert publisher.published == [(DOMAIN, "172.18.0.1", 40003, True)]
-    routes.cleanup(_Db(), "t1", "app1")
+    routes.cleanup(object(), "t1", "app1")
     assert publisher.removed == [DOMAIN]
 
 
 def test_rootless_routes_fails_closed_when_the_cell_has_no_endpoint() -> None:
     client = FakeClient(error=PlanAgentUnavailable("no cell endpoint"))
     publisher = FakePublisher()
-    routes = RootlessRoutes(client, publisher, slug_resolver=lambda _db, _t: "ghost")
+    routes = RootlessRoutes(
+        client, publisher, slug_resolver=lambda _db, _t: "ghost",
+        app=_hosts_app(),
+    )
 
-    result = routes.refresh(_Db(), "t1", "app1")
+    result = routes.refresh(object(), "t1", "app1")
 
     assert result["published"] == []
     assert client.slugs == ["ghost"]

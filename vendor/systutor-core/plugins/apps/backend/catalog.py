@@ -178,12 +178,6 @@ def create_application(
         source_repository_id=repository.id,
         source_status="connected",
         runtime_project=f"app-{uuid4().hex[:24]}",
-        # Ingress belongs to Dominios. Historic input columns stay readable
-        # for existing rows, but new applications never publish an automatic
-        # second route from Apps.
-        domain=None,
-        ingress_service=None,
-        ingress_port=None,
     )
     db.add(app)
     db.flush()
@@ -444,8 +438,7 @@ def application_detail(db: Session, tenant_id: str, application_id: str) -> dict
     return {
         "id": app.id, "name": app.name, "slug": app.slug,
         "repository": app.repository, "branch": app.branch,
-        "compose_file": app.compose_file, "domain": app.domain,
-        "ingress_service": app.ingress_service, "ingress_port": app.ingress_port,
+        "compose_file": app.compose_file,
         "status": app.status,
         "source_installation_id": app.source_installation_id,
         "source_repository_id": app.source_repository_id,
@@ -573,7 +566,6 @@ def _deployment_view(row: Deployment) -> dict:
     return {
         "id": row.id, "status": row.status, "commit": row.commit,
         "tree_hash": row.tree_hash, "compose_file": row.compose_file,
-        "ingress_service": row.ingress_service, "ingress_port": row.ingress_port,
         "release": row.release, "public_error": row.public_error,
         "release_id": release.get("release_id") if release else None,
         "release_summary": release,

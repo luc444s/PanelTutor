@@ -397,6 +397,7 @@ def deploy_scoped(
     staging_release: Path | None = None,
     probe_target: tuple[str, int] | None = None,
     ingress_publish: tuple[str, int] | None = None,
+    tenant_id: str | None = None,
 ) -> dict[str, Any]:
     """Execute exactly the planned subset and publish state only when green."""
 
@@ -455,6 +456,7 @@ def deploy_scoped(
         override = _override(
             result.data, project, True, _env_path(staged), staging_id,
             ingress_publish=publish,
+            tenant_id=tenant_id,
         )
         _stage_release(runner, result.root, staged, release.compose_path, override, env_file)
     compose_rel = release.compose_path

@@ -13,6 +13,10 @@ This tool:
 * reads each active deployment and requires a signed
   ``release_summary.operation_id``;
 * skips applications whose containers already exist in the cell socket;
+* reports whether those containers carry the ``spanel.managed``/
+  ``spanel.tenant`` labels required by the cell ingress (A.SPEC 0114);
+* optionally re-deploys already rootless applications whose containers predate
+  those labels (``--redeploy-rootless``) so the migration can publish a route;
 * optionally previews with ``--dry-run``;
 * re-deploys each signed release and polls the operation;
 * verifies the new deployment is running and its containers live in the cell.
@@ -78,11 +82,13 @@ class CommandOutput:
 class AppPlan:
     app_id: str
     name: str
-    domain: str | None
     operation_id: str | None
     deployment_id: str | None
     container_ids: tuple[str, ...]
     already_rootless: bool
+    # ``None`` means "not inspected" (no cell socket or no containers); only an
+    # explicit ``False`` forces a relabel redeploy when requested.
+    managed_labels: bool | None = None
     reason: str = ""
 
 
@@ -113,6 +119,7 @@ class AppsMigrator:
         app_ids: tuple[str, ...] = (),
         timeout: int = 1800,
         verify_cell: bool = True,
+        redeploy_rootless: bool = False,
         runner: Any = run_docker,
     ) -> None:
         self.client = client
@@ -122,6 +129,7 @@ class AppsMigrator:
         self.app_ids = app_ids
         self.timeout = timeout
         self.verify_cell = verify_cell
+        self.redeploy_rootless = redeploy_rootless
         self.runner = runner
         self.socket = cell_socket(data_root, tenant)
 
@@ -159,14 +167,19 @@ class AppsMigrator:
             reason = reason or "already rootless"
         elif not operation:
             reason = "no signed release on the active deployment; harden it first"
+        managed_labels = (
+            self._managed_labels(list(container_ids))
+            if already and container_ids
+            else None
+        )
         return AppPlan(
             app_id=app_id,
             name=str(application.get("name") or app_id),
-            domain=application.get("domain"),
             operation_id=str(operation) if operation else None,
             deployment_id=str(deployment) if deployment else None,
             container_ids=container_ids,
             already_rootless=already,
+            managed_labels=managed_labels,
             reason=reason,
         )
 
@@ -190,6 +203,41 @@ class AppsMigrator:
             if inspected.returncode != 0:
                 return False, f"container {container_id[:12]} is not in the cell"
         return True, "containers already run in the cell"
+
+    def _managed_labels(self, container_ids: list[str]) -> bool | None:
+        """Whether every container proves ingress ownership (A.SPEC 0114).
+
+        Docker labels are immutable after creation: a container deployed before
+        the labels existed must be recreated by a signed deploy.
+        """
+        if not self.socket.is_socket() or not container_ids:
+            return None
+        for container_id in container_ids:
+            inspected = self.runner(
+                [
+                    "docker",
+                    "-H",
+                    f"unix://{self.socket}",
+                    "inspect",
+                    "-f",
+                    "{{json .Config.Labels}}",
+                    container_id,
+                ]
+            )
+            if inspected.returncode != 0:
+                return None
+            try:
+                labels = json.loads(inspected.stdout or "{}")
+            except ValueError:
+                return None
+            if not isinstance(labels, dict):
+                return None
+            if (
+                labels.get("spanel.managed") != "true"
+                or not labels.get("spanel.tenant")
+            ):
+                return False
+        return True
 
     def plans(self) -> list[AppPlan]:
         listed = self.client.request("GET", "/applications")
@@ -219,7 +267,12 @@ class AppsMigrator:
     def migrate(self, plans: list[AppPlan]) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
         for plan in plans:
-            if plan.already_rootless:
+            relabel = (
+                plan.already_rootless
+                and self.redeploy_rootless
+                and plan.managed_labels is False
+            )
+            if plan.already_rootless and not relabel:
                 results.append(
                     {
                         "ok": True,
@@ -247,9 +300,13 @@ class AppsMigrator:
                         "ok": True,
                         "app_id": plan.app_id,
                         "name": plan.name,
-                        "state": "planned",
+                        "state": "relabel_planned" if relabel else "planned",
                         "hardened_operation_id": plan.operation_id,
-                        "reason": plan.reason,
+                        "reason": (
+                            "containers predate spanel.managed/spanel.tenant"
+                            if relabel
+                            else plan.reason
+                        ),
                     }
                 )
                 continue
@@ -426,6 +483,14 @@ def _parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Do not require the containers to appear in the cell socket.",
     )
+    parser.add_argument(
+        "--redeploy-rootless",
+        action="store_true",
+        help=(
+            "Recreate already rootless containers that predate the "
+            "spanel.managed/spanel.tenant labels required by the cell ingress."
+        ),
+    )
     return parser
 
 
@@ -445,6 +510,7 @@ def main(argv: list[str] | None = None) -> int:
             app_ids=tuple(args.app),
             timeout=args.timeout,
             verify_cell=not args.no_cell_verify,
+            redeploy_rootless=args.redeploy_rootless,
         )
         plans = migrator.plans()
         results = migrator.migrate(plans)
@@ -457,8 +523,8 @@ def main(argv: list[str] | None = None) -> int:
                 {
                     "app_id": plan.app_id,
                     "name": plan.name,
-                    "domain": plan.domain,
                     "already_rootless": plan.already_rootless,
+                    "managed_labels": plan.managed_labels,
                     "signed_release": plan.operation_id,
                     "reason": plan.reason,
                 }

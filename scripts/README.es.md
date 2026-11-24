@@ -60,6 +60,7 @@ python3 scripts/<script>.py --help
 | Migrar un tenant a rootless en una sola ejecución | [`spanel-migrator-to-rootless`](#spanel-migrator-to-rootless) |
 | Instalar/reparar el plan agent y el edge relay del host | [`install_tenant_agents.py`](#install_tenant_agentspy) |
 | Redesplegar Apps en la celda rootless | [`migrate_tenant_apps.py`](#migrate_tenant_appspy) |
+| Migrar un App existente al ingress de celda y al relay | [`migrate_apps_rootless.py`](#migrate_apps_rootlesspy) |
 | Migrar la pila legacy de milton (binds/BD compartida) | [`migrate_milton_legacy.py`](#migrate_milton_legacypy) |
 | Migrar certificados SNI legacy | [`migrate_legacy_sni.py`](#migrate_legacy_snip) |
 
@@ -344,6 +345,9 @@ docker compose exec app python3 /app/scripts/migrate_env.py \
 **Plan con `--dry-run`; escritura en modo normal.** Vuelve a renderizar las
 rutas de Domains para Apps sin usar la UI ni redesplegar. Debe ejecutarse
 **dentro del contenedor `app`**. `--restart-proxy` además reinicia Traefik.
+Para un App rootless con hosts en Dominios ya no re-renderiza el target del
+contenedor: delega en `AppsIngress.reconcile` y republica el documento del
+relay (A.SPEC 0114).
 
 ```bash
 docker compose exec app python3 /app/scripts/refresh_routes.py --dry-run
@@ -805,13 +809,49 @@ ejecute en la celda rootless del tenant. Omite las Apps cuyos contenedores ya
 están en la celda. Las Apps sin release firmada se reportan como
 `requires_hardening` y no se modifican.
 
+Los contenedores creados antes de A.SPEC 0114 no tienen las labels
+`spanel.managed` / `spanel.tenant` que exige el ingress de la celda, y Docker
+no permite añadirlas después. `--redeploy-rootless` los recrea desde la misma
+release firmada; el plan muestra `managed_labels: false` para saber qué Apps lo
+necesitan.
+
 ```bash
 export SPANEL_APPS_TOKEN=...        # o --token-file
 python3 scripts/migrate_tenant_apps.py --tenant demo --dry-run
 python3 scripts/migrate_tenant_apps.py --tenant demo --apply
+# solo para contenedores anteriores a A.SPEC 0114:
+python3 scripts/migrate_tenant_apps.py --tenant demo --redeploy-rootless --apply
 ```
 
 El origen del panel sale de `SPANEL_DOMAIN` en `.env.docker` (o `--api-url`).
+
+### `migrate_apps_rootless.py`
+
+**Operación de escritura** (cutover del ingress de Apps, A.SPEC 0114). Se
+ejecuta **dentro del contenedor `app`**: registra cada Host de Dominios del App
+en `tenant_ingress_routes` (`owner_kind='apps'`), renderiza `apps-routes.conf`,
+ejecuta `nginx -t`, elimina el documento legacy de Dominios y publica el
+documento de Traefik contra el relay de la celda. Por defecto solo inspecciona
+(`--dry-run`); `--apply` hace el cutover y `--stop-rootful` retiene y para la
+pila rootful antigua.
+
+Requisitos: los contenedores rootless del App deben tener las labels
+`spanel.*` (ver `migrate_tenant_apps.py --redeploy-rootless`) y Dominios debe
+ser dueño del Host con ruta `/`.
+
+```bash
+export SPANEL_DOMAIN=spanel.systutor.com
+python3 /app/scripts/migrate_apps_rootless.py --tenant milton --dry-run
+python3 /app/scripts/migrate_apps_rootless.py --tenant milton --apply
+# tras verificar el 200 externo:
+python3 /app/scripts/migrate_apps_rootless.py --tenant milton --apply --stop-rootful
+# deshacer una operación registrada en el ledger:
+python3 /app/scripts/migrate_apps_rootless.py --tenant milton \
+  --rollback apps-rootless:<application_id>
+```
+
+Su contrapartida blackbox es `e2e_0114_apps_rootless_ingress.py`; necesita un
+host de laboratorio con la celda rootless, el relay y Traefik.
 
 ### `migrate_milton_legacy.py`
 

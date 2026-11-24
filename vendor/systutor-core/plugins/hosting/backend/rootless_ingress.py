@@ -1,4 +1,9 @@
-"""Declarative Host-multiplexing ingress inside one tenant cell."""
+"""Declarative Host-multiplexing ingress inside one tenant cell.
+
+The nginx render and the bounded cell operations live in the kernel
+(``systutor.kernel.cell_ingress``); Hosting only contributes its site ownership
+check and the legacy-compatible ``RouteSpec`` shape.
+"""
 
 from __future__ import annotations
 
@@ -11,15 +16,21 @@ import urllib.request
 from dataclasses import dataclass
 
 from fastapi import FastAPI
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from systutor.contracts.container_runtime import (
     ContainerRuntimeError,
     ContainerRuntimeHandle,
 )
+from systutor.kernel.cell_ingress import (
+    CellIngress,
+    render_routes,
+)
+from systutor.kernel.cell_ingress import (
+    RouteSpec as KernelRouteSpec,
+)
 
-from .models import HostingSite, RootlessHostingRoute
+from .models import HostingSite
 
 INGRESS = "spanel-cell-ingress"
 NETWORK = "spanel-hosting"
@@ -112,12 +123,25 @@ def _server_names(domain: str) -> str:
     return " ".join(names)
 
 
+def _kernel_route(route: RouteSpec) -> KernelRouteSpec:
+    return KernelRouteSpec(
+        route_id=f"hosting:{route.site_id}",
+        tenant_id=route.tenant_id,
+        owner_kind="hosting",
+        owner_id=route.site_id,
+        domain=route.domain,
+        target=route.target,
+        port=route.port,
+    )
+
+
 class RootlessIngress:
     def __init__(self, db: Session, runtime: ContainerRuntimeHandle) -> None:
         if runtime.runtime != "rootless":
             raise ValueError("cell ingress requires a rootless runtime")
         self.db = db
         self.runtime = runtime
+        self.cell = CellIngress(db, runtime)
 
     def _validate(self, route: RouteSpec) -> None:
         if not DOMAIN_RE.fullmatch(route.domain) or not 1 <= route.port <= 65535:
@@ -125,140 +149,40 @@ class RootlessIngress:
         site = self.db.get(HostingSite, route.site_id)
         if site is not None and site.tenant_id != route.tenant_id:
             raise ValueError("route tenant does not own site")
-        info = self.runtime.inspect("container", route.target)
-        labels = ((info or {}).get("Config") or {}).get("Labels") or {}
-        if labels.get("spanel.tenant") != route.tenant_id or labels.get("spanel.managed") != "true":
-            raise ValueError("route target is not owned by tenant")
 
     def routes(self, tenant_id: str) -> list[RouteSpec]:
-        rows = self.db.scalars(
-            select(RootlessHostingRoute)
-            .where(RootlessHostingRoute.tenant_id == tenant_id)
-            .order_by(RootlessHostingRoute.domain)
-        )
-        return [RouteSpec(r.site_id, r.tenant_id, r.domain, r.target, r.port) for r in rows]
+        return [
+            RouteSpec(
+                row.owner_id, row.tenant_id, row.domain, row.target, row.port
+            )
+            for row in self.cell.routes(tenant_id, "hosting")
+        ]
 
     @staticmethod
     def render(routes: list[RouteSpec]) -> bytes:
-        blocks = ["server { listen 80 default_server; server_name _; return 404; }"]
-        for route in sorted(routes, key=lambda item: item.domain):
-            blocks.append(
-                "server { listen 80; "
-                f"server_name {_server_names(route.domain)}; "
-                "location / { "
-                f"proxy_pass http://{route.target}:{route.port}; "
-                "proxy_set_header Host $host; "
-                # Traefik terminates TLS and already sends the real scheme.
-                # Do not overwrite it with $scheme (the relay hop is HTTP):
-                # WordPress would see HTTP and redirect to HTTPS every time.
-                "proxy_set_header X-Forwarded-Proto $http_x_forwarded_proto; "
-                "proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for; } }"
-            )
-        return ("\n".join(blocks) + "\n").encode()
+        return render_routes(
+            [_kernel_route(route) for route in routes], default_server=True
+        )
 
     def _network(self) -> None:
-        if self.runtime.inspect("network", NETWORK) is None:
-            self.runtime.command(
-                ("network", "create", "--label", "spanel.role=cell-infra", NETWORK)
-            )
+        self.cell.ensure_network()
 
-    def reconcile(self, tenant_id: str, extra: RouteSpec | None = None) -> None:
-        routes = [
-            route
-            for route in self.routes(tenant_id)
-            if extra is None or route.site_id != extra.site_id
-        ]
+    def reconcile(
+        self, tenant_id: str, extra: RouteSpec | None = None
+    ) -> None:
         if extra is not None:
             self._validate(extra)
-            routes.append(extra)
-        # Un contenedor detenido no resuelve en el DNS embebido de la red;
-        # nginx -t fallaría y dejaría el ingress sin recargar durante un
-        # lifecycle de otro sitio del mismo tenant.
-        active_routes = []
-        for route in routes:
-            info = self.runtime.inspect("container", route.target)
-            if not isinstance(info, dict) or not (info.get("State") or {}).get(
-                "Running"
-            ):
-                continue
-            networks = (info.get("NetworkSettings") or {}).get("Networks") or {}
-            if NETWORK not in networks:
-                self.runtime.command(("network", "connect", NETWORK, route.target))
-            active_routes.append(route)
-        routes = active_routes
-        content = self.render(routes)
-        self._network()
-        candidate = self.runtime.write_private("ingress/routes.candidate.conf", content)
-        try:
-            self.runtime.command(
-                (
-                    "run",
-                    "--rm",
-                    "--network",
-                    NETWORK,
-                    "-v",
-                    f"{candidate}:/etc/nginx/conf.d/default.conf:ro",
-                    "nginx:alpine",
-                    "nginx",
-                    "-t",
-                )
-            )
-        except Exception:
-            self.runtime.remove_private("ingress/routes.candidate.conf")
-            raise
-        final = self.runtime.write_private("ingress/routes.conf", content)
-        self.runtime.remove_private("ingress/routes.candidate.conf")
-        config_directory = final.rsplit("/", 1)[0]
-        info = self.runtime.inspect("container", INGRESS)
-        if info is None:
-            port = self.runtime.health().publish_port
-            if port is None:
-                raise ContainerRuntimeError("cell publish port unavailable")
-            self.runtime.command(
-                (
-                    "run",
-                    "-d",
-                    "--name",
-                    INGRESS,
-                    "--restart",
-                    "unless-stopped",
-                    "--network",
-                    NETWORK,
-                    "--label",
-                    "spanel.role=cell-infra",
-                    "--label",
-                    "spanel.managed=true",
-                    "-p",
-                    f"{port}:80",
-                    "-v",
-                    f"{config_directory}:/etc/nginx/conf.d:ro",
-                    "nginx:alpine",
-                )
-            )
-        else:
-            labels = (info.get("Config") or {}).get("Labels") or {}
-            if labels.get("spanel.role") != "cell-infra":
-                raise ContainerRuntimeError("foreign cell ingress container")
-            self.runtime.command(("exec", INGRESS, "nginx", "-s", "reload"))
+            self.cell.upsert(_kernel_route(extra))
+        self.cell.reconcile(tenant_id, "hosting")
 
     def upsert(self, route: RouteSpec) -> None:
-        self.reconcile(route.tenant_id, route)
-        row = self.db.get(RootlessHostingRoute, route.site_id)
-        if row is None:
-            row = RootlessHostingRoute(site_id=route.site_id)
-        row.tenant_id = route.tenant_id
-        row.domain = route.domain
-        row.target = route.target
-        row.port = route.port
-        self.db.add(row)
-        self.db.flush()
+        self._validate(route)
+        self.cell.upsert(_kernel_route(route))
+        self.cell.reconcile(route.tenant_id, "hosting")
 
     def remove(self, site_id: str, tenant_id: str) -> None:
-        row = self.db.get(RootlessHostingRoute, site_id)
-        if row is not None:
-            self.db.delete(row)
-            self.db.flush()
-        self.reconcile(tenant_id)
+        self.cell.remove(f"hosting:{site_id}")
+        self.cell.reconcile(tenant_id, "hosting")
 
 
 class RootlessRoutePublisher:

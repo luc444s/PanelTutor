@@ -63,6 +63,7 @@ cipher = TokenCipher.from_text(
 route_cleanup = None
 route_refresh = None
 rootless_routes = None
+app = None
 try:
     from app.main import app
 
@@ -83,7 +84,7 @@ if settings.tenants_rootless:
 worker = AppsWorker(
     session_factory, cipher, publisher=publisher, github=UrllibGithubClient(),
     route_cleanup=route_cleanup, route_refresh=route_refresh,
-    rootless_routes=rootless_routes, **runtime_options,
+    rootless_routes=rootless_routes, app=app, **runtime_options,
 )
 
 

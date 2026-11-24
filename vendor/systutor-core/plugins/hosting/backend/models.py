@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
+from sqlalchemy import DateTime, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from systutor.core.database import Base
@@ -92,22 +92,6 @@ class RootlessMigrationOperation(Base):
     backup_path: Mapped[str | None] = mapped_column(Text, nullable=True)
     backup_sha256: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=utc_now, onupdate=utc_now
-    )
-
-
-class RootlessHostingRoute(Base):
-    __tablename__ = "hosting_rootless_routes"
-    __table_args__ = (
-        UniqueConstraint("tenant_id", "domain", name="uq_hosting_rootless_route_domain"),
-    )
-
-    site_id: Mapped[str] = mapped_column(ForeignKey("hosting_sites.id"), primary_key=True)
-    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), nullable=False, index=True)
-    domain: Mapped[str] = mapped_column(String(255), nullable=False)
-    target: Mapped[str] = mapped_column(String(255), nullable=False)
-    port: Mapped[int] = mapped_column(Integer, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )

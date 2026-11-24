@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "vendor/systutor-core"))
+sys.path.insert(0, str(ROOT / "vendor/systutor-core/src"))
 SPEC = importlib.util.spec_from_file_location(
     "refresh_routes", ROOT / "scripts/refresh_routes.py"
 )

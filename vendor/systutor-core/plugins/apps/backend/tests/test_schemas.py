@@ -13,8 +13,10 @@ def test_public_application_input_cannot_choose_runtime_identifiers() -> None:
     )
     assert not hasattr(value, "runtime_project")
     assert not hasattr(value, "repository")
+    assert not hasattr(value, "domain")
+    assert not hasattr(value, "ingress_service")
     with pytest.raises(ValidationError):
-        ApplicationCreate(name="Demo", installation_id="i1", repository_id="r1", ingress_port=65536)
+        ApplicationCreate(name="Demo", installation_id="i1", repository_id="r1", branch="-x")
     with pytest.raises(ValidationError):
         ApplicationCreate(name="Demo", repository_id="r1")
     with pytest.raises(ValidationError):
@@ -26,8 +28,8 @@ def test_application_source_requires_internal_ids_not_a_git_url() -> None:
         ApplicationCreate(name="Demo", repository="https://github.com/owner/repo")
     with pytest.raises(ValidationError):
         ApplicationCreate(
-            name="Demo", installation_id="i1", repository_id="r1",
-            domain="demo.example", ingress_service="web", ingress_port=65536,
+            name="Demo", repository_id="r1",
+            compose_file="../outside.yaml",
         )
 
 

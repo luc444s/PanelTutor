@@ -51,16 +51,6 @@ def pending_env_path(operation_id: str) -> Path:
     return release_store_root(os.environ) / "pending" / f"{operation_id}.env"
 
 
-def _probe_target(service: object, port: object) -> tuple[str, int] | None:
-    """Derive the default probe target from the app ingress."""
-    if (
-        isinstance(service, str) and service
-        and isinstance(port, int) and 1 <= port <= 65535
-    ):
-        return service, port
-    return None
-
-
 def _declared_services(
     release: TrustedRelease,
     manifest: dict[str, Any] | None = None,
@@ -172,8 +162,6 @@ class ReleaseExecution:
                 commit=previous.commit,
                 tree_hash=previous.tree_hash,
                 compose_file=previous.compose_file,
-                ingress_service=previous.ingress_service,
-                ingress_port=previous.ingress_port,
                 status=status,
                 release=previous.release,
                 manifest=merged,
@@ -214,7 +202,6 @@ class ReleaseExecution:
                 raise RuntimeError("Application not found")
             source = (
                 app.repository, app.branch, app.compose_file, app.runtime_project,
-                app.ingress_service, app.ingress_port, app.domain,
             )
             tenant_id = app.tenant_id
             tenant_names = tuple(sorted({
@@ -279,8 +266,9 @@ class ReleaseExecution:
                     tenant_environment_names=tenant_names,
                     publish_state=True,
                     require_expiry=True,
-                    probe_target=_probe_target(source[4], source[5]),
+                    probe_target=None,
                     ingress_publish=ingress_publish,
+                    tenant_id=tenant_id,
                 )
             except ScopedDeployFailed as exc:
                 self._publish_restored_state(
@@ -319,8 +307,6 @@ class ReleaseExecution:
                     commit=manifest.get("commit"),
                     tree_hash=manifest.get("tree_hash"),
                     compose_file=manifest.get("compose"),
-                    ingress_service=source[4],
-                    ingress_port=source[5],
                     status="running",
                     release=manifest.get("release"),
                     manifest=manifest,
@@ -380,7 +366,6 @@ class ReleaseExecution:
             target_release_path = Path(target.release) if target.release else None
             target_manifest = dict(target.manifest or {})
             release = TrustedRelease.from_dict(target.manifest["hardened_release"])
-            ingress_service, ingress_port = app.ingress_service, app.ingress_port
         verify_release(
             release_store_root(os.environ), release, environ=os.environ,
             require_expiry=False,
@@ -419,8 +404,9 @@ class ReleaseExecution:
                     publish_state=True,
                     require_expiry=False,
                     staging_release=staging_release,
-                    probe_target=_probe_target(ingress_service, ingress_port),
+                    probe_target=None,
                     ingress_publish=ingress_publish,
+                    tenant_id=tenant_id,
                 )
             except ScopedDeployFailed as exc:
                 self._publish_restored_state(
@@ -457,8 +443,6 @@ class ReleaseExecution:
                     commit=manifest.get("commit"),
                     tree_hash=manifest.get("tree_hash"),
                     compose_file=manifest.get("compose"),
-                    ingress_service=ingress_service,
-                    ingress_port=ingress_port,
                     status="running",
                     release=manifest.get("release"),
                     manifest=manifest,

@@ -73,6 +73,8 @@ class AppsWorker:
         runtime_recorder: Callable[[Session, str, list[str], str], dict[str, str]]
         | None = None,
         rootless_routes: Any | None = None,
+        apps_ingress: Callable[[Session, str, str], list[str]] | None = None,
+        app: Any | None = None,
     ) -> None:
         self.session_factory = session_factory
         self.cipher = cipher
@@ -81,6 +83,8 @@ class AppsWorker:
         self.runtime_recorder = runtime_recorder
         self.publisher = publisher
         self.rootless_routes = rootless_routes
+        self.apps_ingress = apps_ingress
+        self.app = app
         if self.rootless_routes is None:
             from .rootless_routes import build_rootless_routes
 
@@ -263,12 +267,19 @@ class AppsWorker:
             raise AppDeployError("Rootless deployment cutover failed") from exc
         return result
 
+    def _hosts_ref(self) -> Any:
+        return getattr(self.rootless_routes, "app", None) or self.app
+
     def _publish_and_verify_rootless_route(
         self, tenant_id: str, application_id: str, result: dict
     ) -> list[str]:
         deployment_id = result.get("deployment_id")
         if result.get("status") != "running" or not isinstance(deployment_id, str):
             raise AppDeployError("Rootless deployment was not verified")
+        from systutor.contracts.app_hosts import list_app_hosts
+
+        from .cell_ingress import AppsIngress
+
         with self.session_factory() as db:
             app = db.get(Application, application_id)
             deployment = db.get(Deployment, deployment_id)
@@ -278,13 +289,26 @@ class AppsWorker:
             containers = manifest.get("containers")
             if not isinstance(containers, dict) or not containers:
                 raise AppDeployError("Rootless deployment has no verified containers")
-            if app.domain:
-                if self.rootless_routes is None:
-                    raise AppDeployError("Rootless route publisher is unavailable")
-                published = self.rootless_routes.refresh(db, tenant_id, application_id)
-                domains = published.get("published", []) if isinstance(published, dict) else []
-                if app.domain not in domains:
-                    raise AppDeployError("Rootless route publication failed")
+            app_ref = self._hosts_ref()
+            hosts = list_app_hosts(app_ref, db, tenant_id, application_id)
+            if not hosts:
+                return [
+                    f"{application_id}:{service}" for service in sorted(containers)
+                ]
+            if self.rootless_routes is None:
+                raise AppDeployError("Rootless route publisher is unavailable")
+            if self.apps_ingress is not None:
+                self.apps_ingress(db, tenant_id, application_id)
+            else:
+                AppsIngress(app_ref, db).reconcile(tenant_id, application_id)
+            published = self.rootless_routes.refresh(db, tenant_id, application_id)
+            domains = (
+                published.get("published", [])
+                if isinstance(published, dict) else []
+            )
+            expected = [host.domain for host in hosts]
+            if published.get("complete") is False or sorted(domains) != sorted(expected):
+                raise AppDeployError("Rootless route publication failed")
             return [f"{application_id}:{service}" for service in sorted(containers)]
 
     def _restore_deploy_cutover(
@@ -375,7 +399,6 @@ class AppsWorker:
             )
             source = (
                 repository.full_name, app.branch, app.compose_file, app.runtime_project,
-                app.ingress_service, app.ingress_port, app.domain,
             )
         with tempfile.TemporaryDirectory(prefix="spanel-app-worker-") as temporary:
             checkout = Path(temporary) / "checkout"
@@ -388,7 +411,6 @@ class AppsWorker:
             effective_compose = adaptation.compose_file or source[2]
             source = (
                 source[0], source[1], effective_compose, source[3],
-                source[4], source[5], source[6],
             )
             # The checkout is audited exactly as cloned.  No normalizer runs
             # here: container names, binds, ports and users are validated, not
@@ -515,6 +537,11 @@ class AppsWorker:
                     if self.route_refresh is not None:
                         self.route_refresh(db, tenant_id, application_id)
                     if self.rootless_routes is not None:
+                        from .cell_ingress import AppsIngress
+
+                        AppsIngress(
+                            self._hosts_ref(), db
+                        ).reconcile(tenant_id, application_id)
                         self.rootless_routes.refresh(db, tenant_id, application_id)
                 except Exception:  # noqa: BLE001 - una app no bloquea al resto
                     logger.warning(
@@ -524,6 +551,20 @@ class AppsWorker:
                 else:
                     refreshed += 1
         return refreshed
+
+    def _unpublish_legacy_documents(
+        self, tenant_id: str, application_id: str
+    ) -> None:
+        """Remove the rootful document Domains no longer owns for this App."""
+        if self.publisher is None:
+            return
+        from systutor.contracts.app_hosts import list_app_hosts
+
+        app_ref = self._hosts_ref()
+        with self.session_factory() as db:
+            hosts = list_app_hosts(app_ref, db, tenant_id, application_id)
+        for host in hosts:
+            self.publisher.unpublish(host.domain)
 
     def _mark_reconnect(self, application_id: str) -> None:
         with self.session_factory() as db:
@@ -650,7 +691,7 @@ class AppsWorker:
             app = db.get(Application, application_id)
             if app is None:
                 raise RuntimeError("Application not found")
-            project, domain = app.runtime_project, app.domain
+            project = app.runtime_project
             tenant_id = app.tenant_id
             operation = db.get(Operation, operation_id)
             purge_data = bool((operation.report or {}).get("purge_data")) if operation else False
@@ -687,8 +728,7 @@ class AppsWorker:
                         self.route_cleanup(db, tenant_id, application_id)
                     if self.rootless_routes is not None:
                         self.rootless_routes.cleanup(db, tenant_id, application_id)
-            if domain and self.publisher is not None:
-                self.publisher.unpublish(domain)
+            self._unpublish_legacy_documents(tenant_id, application_id)
             with self.session_factory() as db:
                 current = db.get(Application, application_id)
                 if current is not None:
@@ -735,8 +775,8 @@ class AppsWorker:
                     self.route_cleanup(db, tenant_id, application_id)
                 if self.rootless_routes is not None:
                     self.rootless_routes.cleanup(db, tenant_id, application_id)
-        if domain and self.publisher is not None and kind == "delete":
-            self.publisher.unpublish(domain)
+        if kind == "delete":
+            self._unpublish_legacy_documents(tenant_id, application_id)
         if kind == "delete":
             release = Path(str(deployment.manifest.get("release", "")))
             project_root = (
@@ -794,10 +834,12 @@ class AppsWorker:
             operation.status = "failed"
             operation.phase = "failed"
             operation.error_code = (
-                getattr(exc, "code", "apps_operation_failed")
-                if isinstance(exc, ReleaseRejected)
-                else "apps_operation_failed"
-            )
+                getattr(exc, "code", None)
+                if isinstance(
+                    exc, (AppDeployError, HardeningRejected, ReleaseRejected)
+                )
+                else None
+            ) or "apps_operation_failed"
             operation.public_error = (
                 str(exc)
                 if isinstance(exc, (AppDeployError, HardeningRejected, ReleaseRejected))

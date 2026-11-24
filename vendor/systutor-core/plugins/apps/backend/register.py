@@ -103,16 +103,30 @@ def resolve_apps_sites(
                     f"{app.id}:{service}",
                     app.tenant_id,
                     container,
-                    app_hosts.get((app.tenant_id, app.id, service))
-                    or (app.domain if service == app.ingress_service else None),
+                    app_hosts.get((app.tenant_id, app.id, service)),
                 )
             )
     return result
 
 
 def resolve_apps_resources(
-    db: Session, tenant_id: str | None
+    db: Session, tenant_id: str | None, router_app: object | None = None
 ) -> list[ManagedResource]:
+    stmt = select(Application).where(Application.deleted_at.is_(None))
+    if tenant_id is not None:
+        stmt = stmt.where(Application.tenant_id == tenant_id)
+    tenant_ids = (
+        [tenant_id]
+        if tenant_id is not None
+        else sorted({application.tenant_id for application in db.scalars(stmt)})
+    )
+    hosts: dict[tuple[str, str, str], str] = {}
+    if tenant_ids:
+        for current_tenant_id in tenant_ids:
+            for host in list_app_hosts(router_app, db, current_tenant_id):
+                hosts[(current_tenant_id, host.application_id, host.service)] = (
+                    host.domain
+                )
     stmt = select(Application).where(Application.deleted_at.is_(None))
     if tenant_id is not None:
         stmt = stmt.where(Application.tenant_id == tenant_id)
@@ -135,7 +149,9 @@ def resolve_apps_resources(
                 continue
             state = str(application.status or "unknown").strip() or "unknown"
             image = str(images.get(service) or "unknown").strip() or "unknown"
-            domain = application.domain if service == application.ingress_service else None
+            domain = hosts.get(
+                (application.tenant_id, application.id, service)
+            )
             resources.append(
                 ManagedResource(
                     kind="app",
@@ -218,8 +234,13 @@ def register(context: PluginContext) -> None:
         def resolve_sites(db: Session, tenant_id: str | None) -> list[OwnedSite]:
             return resolve_apps_sites(db, tenant_id, app)
 
+        def resolve_resources(
+            db: Session, tenant_id: str | None
+        ) -> list[ManagedResource]:
+            return resolve_apps_resources(db, tenant_id, app)
+
         register_site_provider(app, "apps", resolve_sites)
-        register_resource_provider(app, "apps", resolve_apps_resources)
+        register_resource_provider(app, "apps", resolve_resources)
         if rootless is not None and context.db_session_provider is not None:
             def refresh_domain_route(event) -> None:
                 site_id = str(event.payload.get("site_id") or "")

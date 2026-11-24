@@ -75,16 +75,31 @@ def provide_app_hosts(
     if application_id is not None:
         stmt = stmt.where(DomainAppHost.application_id == application_id)
     rows = db.scalars(stmt.order_by(DomainAppHost.application_id, DomainAppHost.service))
-    return [
-        AppHost(
-            site_id=f"{row.application_id}:{row.service}",
-            application_id=row.application_id,
-            service=row.service,
-            domain=row.domain,
-            https=row.https,
+    # Only the root path is supported by the cell ingress.  The port comes from
+    # the Domains route itself so Apps never needs to read Domains tables.
+    route_stmt = select(DomainRoute).where(DomainRoute.tenant_id == tenant_id)
+    routes_by_site: dict[str, list[DomainRoute]] = {}
+    for route in db.scalars(route_stmt):
+        routes_by_site.setdefault(route.site_id, []).append(route)
+    hosts: list[AppHost] = []
+    for row in rows:
+        site_id = f"{row.application_id}:{row.service}"
+        site_routes = routes_by_site.get(site_id, [])
+        root = next((route for route in site_routes if route.path == "/"), None)
+        hosts.append(
+            AppHost(
+                site_id=site_id,
+                application_id=row.application_id,
+                service=row.service,
+                domain=row.domain,
+                https=row.https,
+                port=root.port if root is not None else None,
+                unsupported_paths=any(
+                    route.path != "/" for route in site_routes
+                ),
+            )
         )
-        for row in rows
-    ]
+    return hosts
 
 
 def published_domain_usage(db: Session, domain: str) -> DomainUsage | None:

@@ -34,9 +34,6 @@ class ApplicationCreate(BaseModel):
     repository_id: str = Field(min_length=1, max_length=36)
     branch: str | None = Field(default=None, min_length=1, max_length=255)
     compose_file: str | None = Field(default=None, max_length=510)
-    domain: str | None = Field(default=None, max_length=255)
-    ingress_service: str | None = Field(default=None, max_length=255)
-    ingress_port: int | None = Field(default=None, ge=1, le=65535)
 
     @field_validator("compose_file")
     @classmethod
@@ -51,15 +48,6 @@ class ApplicationCreate(BaseModel):
         if value and (value.startswith("-") or any(ch in value for ch in "\x00\r\n")):
             raise ValueError("branch is invalid")
         return value
-
-    @model_validator(mode="after")
-    def complete_ingress(self):
-        values = (self.domain, self.ingress_service, self.ingress_port)
-        if any(value is not None for value in values) and not all(
-            value is not None for value in values
-        ):
-            raise ValueError("domain, ingress_service and ingress_port must be provided together")
-        return self
 
 
 class SourceUpdate(BaseModel):
@@ -256,9 +244,6 @@ class ApplicationView(BaseModel):
     repository: str
     branch: str
     compose_file: str | None
-    domain: str | None
-    ingress_service: str | None
-    ingress_port: int | None
     status: str
     source_connection_user_id: str
     source_installation_id: str | None

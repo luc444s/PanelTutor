@@ -116,6 +116,65 @@ def test_plan_skips_containers_already_in_cell(tmp_path) -> None:
     assert plans[0].already_rootless is True
 
 
+def test_plan_reports_missing_ingress_labels(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "is_socket", lambda self: True)
+    migrator, _client, _runner = make_migrator(tmp_path, [detail()], known={"c1"})
+    plans = migrator.plans()
+    assert plans[0].managed_labels is False
+
+
+def test_redeploy_rootless_plans_a_relabel_in_dry_run(tmp_path) -> None:
+    migrator, _client, _runner = make_migrator(
+        tmp_path, [detail()], known={"c1"}, dry_run=True
+    )
+    migrator.redeploy_rootless = True
+    migrator._managed_labels = lambda ids: False  # type: ignore[method-assign]
+    results = migrator.migrate(migrator.plans())
+    assert results[0]["state"] == "relabel_planned"
+    assert results[0]["ok"] is True
+
+
+def test_without_redeploy_rootless_an_unlabeled_app_is_skipped(tmp_path) -> None:
+    migrator, _client, _runner = make_migrator(
+        tmp_path, [detail()], known={"c1"}, dry_run=False
+    )
+    migrator._managed_labels = lambda ids: False  # type: ignore[method-assign]
+    results = migrator.migrate(migrator.plans())
+    assert results[0]["state"] == "skipped"
+
+
+def test_labeled_rootless_app_is_not_redeployed(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "is_socket", lambda self: True)
+
+    class LabeledRunner(FakeRunner):
+        def __call__(self, argv, timeout=60):
+            self.calls.append(argv)
+            if "inspect" in argv and "-f" in argv:
+                return mod.CommandOutput(
+                    0,
+                    '{"spanel.managed": "true", "spanel.tenant": "tenant-1"}',
+                    "",
+                )
+            container = argv[-1]
+            return mod.CommandOutput(0 if container in self.known else 1, "", "")
+
+    runner = LabeledRunner({"c1"})
+    client = FakeClient([detail()])
+    make_socket(tmp_path)
+    migrator = mod.AppsMigrator(
+        client,
+        tenant="demo",
+        data_root=str(tmp_path),
+        dry_run=True,
+        redeploy_rootless=True,
+        runner=runner,
+    )
+    migrator._containers_in_cell = lambda ids: _cell_check(runner, ids)  # type: ignore[method-assign]
+    plans = migrator.plans()
+    assert plans[0].managed_labels is True
+    assert migrator.migrate(plans)[0]["state"] == "skipped"
+
+
 def test_app_without_signed_release_requires_hardening(tmp_path) -> None:
     migrator, _client, _runner = make_migrator(
         tmp_path, [detail(operation=None)], known=set()

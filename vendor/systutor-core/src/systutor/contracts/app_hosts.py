@@ -1,9 +1,8 @@
 """Public app-host registry owned by the Domains plugin.
 
-Apps consumes this contract without importing Domains persistence. While the
-legacy ``apps_applications.domain`` column exists, consumers may use it only as
-a fallback when no provider row exists. Removing that fallback requires an
-explicit future decision; it has no date-based expiry.
+Apps consumes this contract without importing Domains persistence.  Domains is
+the single source of truth for an App Host; Apps no longer reads the removed
+``apps_applications.domain`` column or any ``ingress_*`` field.
 """
 
 from __future__ import annotations
@@ -22,6 +21,12 @@ class AppHost:
     service: str
     domain: str
     https: bool
+    # Port of the Domains route whose path is ``/``.  Apps only supports that
+    # path for a cell ingress; ``None`` means Domains has no root route yet.
+    port: int | None = None
+    # True when the site also has routes with another path.  Publishing only
+    # ``/`` would answer 404 to those routes, so the preflight must fail.
+    unsupported_paths: bool = False
 
 
 AppHostProvider = Callable[[Session, str, str | None], Sequence[AppHost]]

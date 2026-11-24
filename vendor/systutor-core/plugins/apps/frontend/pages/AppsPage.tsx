@@ -127,11 +127,11 @@ export default function AppsPage() {
               const appRoutes = routes.filter((route) =>
                 route.site_id.startsWith(`${application.id}:`));
               const domainLabel = !canReadDomains
-                ? application.domain ?? t("No domain")
+                ? t("No domain")
                 : routesQuery.isLoading
                   ? t("Loading domains...")
                   : appRoutes.length === 0
-                    ? application.domain ?? t("No domains")
+                    ? t("No domains")
                     : appRoutes.length === 1
                       ? `${appRoutes[0].domain}${appRoutes[0].path === "/" ? "" : appRoutes[0].path}`
                       : t("{count} domains", { count: appRoutes.length });

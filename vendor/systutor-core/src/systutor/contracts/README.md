@@ -40,11 +40,20 @@ modelos desde Apps:
 - `list_app_hosts(app, db, tenant_id, application_id=None)` lista Hosts con
   scope de tenant.
 - `resolve_app_host(app, db, tenant_id, application_id, service)` resuelve un
-  `AppHost(site_id, application_id, service, domain, https)`.
+  `AppHost(site_id, application_id, service, domain, https, port,
+  unsupported_paths)`.
 
-Apps consulta este contrato primero. Mientras exista el campo histórico
-`apps_applications.domain`, puede usarlo como fallback cuando no haya fila; su
-retirada solo ocurrirá por una decisión explícita futura, nunca por fecha.
+`port` sale de la ruta `/` de Dominios y `unsupported_paths` marca un sitio con
+rutas adicionales: el ingress de la celda solo publica `/`. Dominios es la única
+fuente del Host; no existe fallback a `apps_applications.domain`.
+
+## `cell_ingress`
+
+- `register_cell_ingress_provider(app, name, provider)` registra el handle
+  rootless que el kernel usa para escribir y recargar el ingress.
+- `resolve_cell_ingress(app, db, tenant_id)` devuelve un `CellIngress` ligado a
+  ese handle. Hosting y Apps publican sus rutas en `tenant_ingress_routes`
+  (`owner_kind`); solo Hosting declara el `default_server`.
 
 ## `container_runtime` y `resource_runtime`
 

@@ -62,9 +62,6 @@ export type Application = {
   repository: string;
   branch: string;
   compose_file: string | null;
-  domain: string | null;
-  ingress_service: string | null;
-  ingress_port: number | null;
   status: string;
   source_installation_id: string | null;
   source_repository_id: string | null;
@@ -80,9 +77,6 @@ export type ApplicationCreate = {
   repository_id: string;
   branch?: string | null;
   compose_file: string | null;
-  domain: string | null;
-  ingress_service: string | null;
-  ingress_port: number | null;
 };
 
 export type ApplicationDetail = Application & {
@@ -181,8 +175,6 @@ export type Deployment = {
 
 export type DeploymentDetail = Deployment & {
   compose_file: string | null;
-  ingress_service: string | null;
-  ingress_port: number | null;
   release: string | null;
   release_id: string | null;
   release_summary: ReleaseSummary | null;

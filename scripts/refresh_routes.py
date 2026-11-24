@@ -17,14 +17,21 @@ import sys
 from collections.abc import Sequence
 
 from fastapi import FastAPI
+from plugins.apps.backend.cell_ingress import AppsIngress
 from plugins.apps.backend.models import Application
 from plugins.apps.backend.register import resolve_apps_sites
-from plugins.domains.backend.service import refresh_application_routes
+from plugins.apps.backend.rootless_routes import build_rootless_routes
+from plugins.domains.backend.service import (
+    provide_app_hosts,
+    refresh_application_routes,
+)
 from plugins.domains.backend.settings import register_domains_settings
 from sqlalchemy import select
+from systutor.contracts.app_hosts import list_app_hosts, register_app_host_provider
 from systutor.contracts.domain_ownership import register_site_provider
 from systutor.core.config import get_settings
 from systutor.core.database import build_session_factory
+from systutor.kernel.cell_ingress import TenantIngressRoute
 
 
 def select_applications(db, application_id: str | None, slug: str | None) -> list[Application]:
@@ -50,6 +57,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         register_domains_settings()
         fastapi_app = FastAPI()
         register_site_provider(fastapi_app, "apps", resolve_apps_sites)
+        register_app_host_provider(fastapi_app, "domains", provide_app_hosts)
+        rootless = build_rootless_routes(fastapi_app)
         settings = get_settings()
         factory = build_session_factory(settings)
         with factory() as db:
@@ -58,8 +67,38 @@ def main(argv: Sequence[str] | None = None) -> int:
                 print("No applications match")
                 return 2
             for application in applications:
+                hosts = list_app_hosts(
+                    fastapi_app, db, application.tenant_id, application.id
+                )
+                cut_over = db.scalar(
+                    select(TenantIngressRoute.route_id).where(
+                        TenantIngressRoute.tenant_id == application.tenant_id,
+                        TenantIngressRoute.owner_kind == "apps",
+                        TenantIngressRoute.owner_id == application.id,
+                    )
+                ) is not None
+                rootless_app = bool(hosts) and (rootless is not None or cut_over)
                 if args.dry_run:
-                    print(f"{application.slug}: its routes would be refreshed")
+                    mode = "rootless ingress + relay" if rootless_app else "routes"
+                    print(f"{application.slug}: its {mode} would be refreshed")
+                    continue
+                if rootless_app:
+                    if rootless is None:
+                        print(
+                            f"{application.slug}: rootless relay is not configured; "
+                            "refusing to overwrite the relay document",
+                            file=sys.stderr,
+                        )
+                        continue
+                    # A rootless App's document points at the relay; rendering
+                    # it again with the container target would overwrite it.
+                    AppsIngress(fastapi_app, db).reconcile(
+                        application.tenant_id, application.id
+                    )
+                    rootless.refresh(
+                        db, application.tenant_id, application.id
+                    )
+                    print(f"{application.slug}: rootless ingress and relay refreshed")
                     continue
                 refresh_application_routes(
                     db, fastapi_app, application.tenant_id, application.id

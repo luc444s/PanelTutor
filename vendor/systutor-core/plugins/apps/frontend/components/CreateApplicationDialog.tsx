@@ -82,9 +82,6 @@ export function CreateApplicationDialog({ open, onClose, onAccepted }: Props) {
         repository_id: repositoryId,
         branch: branch.trim() || null,
         compose_file: composeFile || null,
-        domain: null,
-        ingress_service: null,
-        ingress_port: null,
       });
       const operation = await inspectApplication(application.id, newIdempotencyKey());
       setName("");
