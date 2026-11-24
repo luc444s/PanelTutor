@@ -70,7 +70,7 @@ def test_dry_run_does_not_write(installer) -> None:
 
 
 def test_install_creates_token_and_renders_units(installer) -> None:
-    inst, fake = installer
+    inst, _fake = installer
     payload = inst.install(start=False)
     assert payload["ok"] is True
     assert payload["token"] == "created"
@@ -80,6 +80,8 @@ def test_install_creates_token_and_renders_units(installer) -> None:
     assert "ExecStart=/usr/bin/python3" in plan
     assert "spanel_tenant.py plan-agent --data-root /var/lib/spanel" in plan
     assert "Environment=SPANEL_PLAN_AGENT_ALLOWED_UIDS=0" in plan
+    assert "CapabilityBoundingSet=CAP_SETUID CAP_SETGID" in plan
+    assert "AmbientCapabilities=CAP_SETUID CAP_SETGID" in plan
     assert "User=1000" in relay
     # /run/spanel is managed by the tmpfiles.d entry owned by root:traefik-gid.
     # None of the units may declare RuntimeDirectory (systemd would chown it).
