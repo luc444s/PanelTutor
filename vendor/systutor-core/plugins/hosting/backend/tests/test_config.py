@@ -117,6 +117,22 @@ def test_editable_y_secretos_salen_del_inspect() -> None:
     assert secret_names(env) == ("MYSQL_PWD", "WORDPRESS_DB_PASSWORD")
 
 
+def test_env_of_descarta_entradas_que_docker_env_file_no_acepta() -> None:
+    info = {
+        "Config": {
+            "Env": [
+                "VALID=value",
+                "define('WP_HOME', 'https://example.com');",
+                "$_SERVER['HTTPS'] = 'on';",
+                "MULTILINE=first\nsecond",
+                "9INVALID=value",
+            ]
+        }
+    }
+
+    assert env_of(info) == {"VALID": "value"}
+
+
 # --- stable path -----------------------------------------------------------
 
 

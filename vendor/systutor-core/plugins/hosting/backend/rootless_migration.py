@@ -19,7 +19,7 @@ from systutor.contracts.resource_runtime import write_resource_runtime
 from systutor.contracts.site_domain_publisher import get_site_domain_publisher
 from systutor.core.errors import AppError
 
-from .config import env_of
+from .config import env_of, render_env
 from .database import resolver_alias_de_contenedor
 from .database_binding import resolve_database_binding
 from .models import HostingSite, RootlessMigrationOperation, StaticProfile
@@ -426,7 +426,7 @@ class RootlessMigrationService:
             raise RuntimeError("WordPress source has no /var/www/html volume or bind mount")
         wp_file = target.write_private(
             f"{site.container_name}/wp.env",
-            ("\n".join((wp.get("Config") or {}).get("Env") or []) + "\n").encode(),
+            render_env(env_of(wp)).encode(),
         )
         # The first copy is live; the second runs after the source is stopped so
         # the candidate sees a stable tree. The returned name is the cell volume
@@ -519,7 +519,7 @@ class RootlessMigrationService:
             )
         db_file = target.write_private(
             f"{site.container_name}/db.env",
-            ("\n".join((database.get("Config") or {}).get("Env") or []) + "\n").encode(),
+            render_env(env_of(database)).encode(),
         )
         target.command(
             (
@@ -681,7 +681,7 @@ class RootlessMigrationService:
             target.import_volume(db_volume, chunks)
         db_file = target.write_private(
             f"{shared_db}/db.env",
-            ("\n".join((database.get("Config") or {}).get("Env") or []) + "\n").encode(),
+            render_env(env_of(database)).encode(),
         )
         target.command(
             (

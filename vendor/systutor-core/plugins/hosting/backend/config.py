@@ -50,6 +50,7 @@ ENV_WHITELIST: dict[str, re.Pattern[str]] = {
 # The names of the secrets this plugin knows about. Values are never returned
 # by a route; only the names are, so the UI can say what exists.
 SECRET_KEYS: tuple[str, ...] = ("WORDPRESS_DB_PASSWORD", "MYSQL_PWD")
+ENV_KEY = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
 
 def parse_env(text: str) -> dict[str, str]:
@@ -124,9 +125,10 @@ def env_of(info: dict) -> dict[str, str]:
     for pair in pairs:
         if not isinstance(pair, str):
             continue
-        key, _, value = pair.partition("=")
-        if key:
-            env[key.strip()] = value.strip()
+        key, separator, value = pair.partition("=")
+        key = key.strip()
+        if separator and ENV_KEY.fullmatch(key) and "\n" not in value and "\r" not in value:
+            env[key] = value.strip()
     return env
 
 
