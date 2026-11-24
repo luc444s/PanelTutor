@@ -1,9 +1,10 @@
 """Move Hosting ingress routes to the kernel cell-ingress table (A.SPEC 0114).
 
-The kernel revision ``20261123_0012`` already created
-``tenant_ingress_routes`` and copied every ``hosting_rootless_routes`` row with
-``owner_kind='hosting'``.  This plugin migration only drops the now-unused
-private table; it never writes ingress route state itself.
+Kernel revision ``20261123_0012`` creates ``tenant_ingress_routes`` and copies
+every ``hosting_rootless_routes`` row with ``owner_kind='hosting'``.  The panel
+image does not ship the Alembic directory, so this plugin migration repeats the
+copy idempotently before dropping the private table; otherwise an existing
+deployment would lose every published Hosting route.
 
 Executed by ``upgrade_plugin_migrations`` at boot, never by the Alembic CLI.
 """
@@ -13,6 +14,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import sqlalchemy as sa
+from sqlalchemy import Engine
 
 revision = "006_use_kernel_cell_ingress"
 
@@ -45,17 +47,67 @@ kernel_routes = sa.Table(
 
 
 def _bind(db):
-    return db.get_bind() if hasattr(db, "get_bind") else db
+    """Prefer the engine so DDL commits before the next migration step."""
+    if isinstance(db, Engine):
+        return db
+    if hasattr(db, "get_bind"):
+        return db.get_bind()
+    return db
 
 
-def upgrade(db) -> None:
+def _run(db, operation) -> None:
     bind = _bind(db)
-    if routes.name in set(sa.inspect(bind).get_table_names()):
+    if isinstance(bind, Engine):
+        with bind.begin() as connection:
+            operation(connection)
+    else:
+        operation(bind)
+
+
+def _upgrade(connection) -> None:
+    bind = connection
+    names = set(sa.inspect(bind).get_table_names())
+    if kernel_routes.name not in names:
+        # ``Base.metadata.create_all`` normally creates the kernel table at
+        # boot; create it here as a safety net for hosts that only run plugin
+        # migrations.
+        from systutor.kernel.cell_ingress import TenantIngressRoute
+
+        TenantIngressRoute.__table__.create(bind)
+        names.add(kernel_routes.name)
+    if routes.name in names:
+        # Copy before dropping: the panel image does not ship the Alembic
+        # directory, so kernel revision 0012 may never run on an existing
+        # deployment. Without this copy Hosting would lose every published
+        # route when the private table disappears.
+        existing = {
+            row[0]
+            for row in bind.execute(
+                sa.select(kernel_routes.c.route_id)
+            ).all()
+        }
+        for row in bind.execute(sa.select(routes)).mappings().all():
+            route_id = f"hosting:{row['site_id']}"
+            if route_id in existing:
+                continue
+            bind.execute(
+                kernel_routes.insert().values(
+                    route_id=route_id,
+                    tenant_id=row["tenant_id"],
+                    owner_kind="hosting",
+                    owner_id=row["site_id"],
+                    service=None,
+                    domain=row["domain"],
+                    target=row["target"],
+                    port=row["port"],
+                    updated_at=row["updated_at"] or datetime.now(UTC),
+                )
+            )
         routes.drop(bind)
 
 
-def downgrade(db) -> None:
-    bind = _bind(db)
+def _downgrade(connection) -> None:
+    bind = connection
     names = set(sa.inspect(bind).get_table_names())
     if routes.name not in names:
         routes.create(bind)
@@ -75,3 +127,11 @@ def downgrade(db) -> None:
                 updated_at=row["updated_at"] or datetime.now(UTC),
             )
         )
+
+
+def upgrade(db) -> None:
+    _run(db, _upgrade)
+
+
+def downgrade(db) -> None:
+    _run(db, _downgrade)

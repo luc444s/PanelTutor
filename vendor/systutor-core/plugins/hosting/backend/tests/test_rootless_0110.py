@@ -7,7 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from fastapi import FastAPI
-from sqlalchemy import create_engine, inspect
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.orm import Session
 
 from plugins.hosting.backend.provisioner import Provisioner, SiteNames
@@ -113,6 +113,40 @@ def test_rootless_migration_schema_is_runtime_reversible(tmp_path) -> None:
         assert "hosting_rootless_routes" in inspect(engine).get_table_names()
         module.downgrade(db)
         assert "hosting_rootless_migrations" not in inspect(engine).get_table_names()
+
+
+def test_migration_006_copies_routes_before_dropping_private_table(tmp_path) -> None:
+    from systutor.kernel.cell_ingress import TenantIngressRoute
+
+    engine = create_engine(f"sqlite:///{tmp_path / 'hosting-006.sqlite'}")
+    with engine.begin() as connection:
+        TenantIngressRoute.__table__.create(connection)
+        connection.exec_driver_sql(
+            "CREATE TABLE hosting_rootless_routes ("
+            "site_id VARCHAR(36) PRIMARY KEY, tenant_id VARCHAR(36) NOT NULL, "
+            "domain VARCHAR(255) NOT NULL, target VARCHAR(255) NOT NULL, "
+            "port INTEGER NOT NULL, updated_at DATETIME NOT NULL)"
+        )
+        connection.exec_driver_sql(
+            "INSERT INTO hosting_rootless_routes VALUES "
+            "('s1', 't1', 'one.example.test', 'wordpress-1', 80, CURRENT_TIMESTAMP)"
+        )
+    path = Path(__file__).parents[2] / "migrations/006_use_kernel_cell_ingress.py"
+    spec = importlib.util.spec_from_file_location("hosting_migration_006", path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    with Session(engine) as db:
+        module.upgrade(db)
+    with engine.connect() as connection:
+        assert "hosting_rootless_routes" not in inspect(engine).get_table_names()
+        rows = connection.execute(
+            text(
+                "SELECT route_id, owner_kind, owner_id, domain, target, port "
+                "FROM tenant_ingress_routes"
+            )
+        ).all()
+    assert rows == [("hosting:s1", "hosting", "s1", "one.example.test", "wordpress-1", 80)]
 
 
 def test_cell_inspect_treats_not_found_as_absent(monkeypatch) -> None:
