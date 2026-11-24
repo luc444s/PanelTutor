@@ -26,6 +26,7 @@ from scripts.migrate_apps_rootless import (
     AppsRootlessMigrator,
     OperationLedger,
     build_parser,
+    resolve_tenant_id,
 )
 
 
@@ -106,3 +107,20 @@ def test_dry_run_inventories_hosts_and_containers(tmp_path: Path) -> None:
     assert result.containers == ["web-1"]
     assert [step.phase for step in result.steps] == ["inventory", "inventory", "preflight"]
     assert result.steps[-1].status == "pending"
+
+
+def test_tenant_accepts_slug_or_id(tmp_path: Path) -> None:
+    from sqlalchemy import create_engine
+    from sqlalchemy.orm import Session
+    from systutor.kernel.tenants.models import Tenant
+
+    engine = create_engine(f"sqlite+pysqlite:///{tmp_path / 'tenants.db'}")
+    try:
+        Tenant.__table__.create(engine)
+        with Session(engine) as db:
+            db.add(Tenant(id="tenant-uuid", name="Milton", slug="milton"))
+            db.commit()
+            assert resolve_tenant_id(db, "milton") == "tenant-uuid"
+            assert resolve_tenant_id(db, "tenant-uuid") == "tenant-uuid"
+    finally:
+        engine.dispose()

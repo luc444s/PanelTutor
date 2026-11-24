@@ -366,6 +366,22 @@ def _select_app(db: Any, tenant_id: str, app_id: str) -> Any:
     return db.get(Application, app_id)
 
 
+def resolve_tenant_id(db: Any, identifier: str) -> str:
+    """Accept either the tenant UUID or its slug (both are operator input)."""
+    from sqlalchemy import select
+    from systutor.kernel.tenants.models import Tenant
+
+    value = str(identifier or "").strip()
+    if not value:
+        raise MigrationError("tenant is required")
+    row = db.get(Tenant, value)
+    if row is None:
+        row = db.scalar(select(Tenant).where(Tenant.slug == value))
+    if row is None:
+        raise MigrationError(f"tenant not found: {value}")
+    return str(row.id)
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
@@ -379,7 +395,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             migrator = AppsRootlessMigrator(
                 db,
                 app,
-                tenant_id=args.tenant,
+                tenant_id=resolve_tenant_id(db, args.tenant),
                 dry_run=args.dry_run,
                 stop_rootful_enabled=args.stop_rootful,
                 timeout=args.timeout,
