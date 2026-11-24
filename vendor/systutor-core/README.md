@@ -42,6 +42,10 @@ The kernel provides:
   `nginx -t` before reloading the cell ingress.
   `systutor.contracts.app_hosts` is the read-only App Host view owned by the
   domains plugin (domain, root-route port and unsupported paths).
+  `systutor.contracts.tenant_slugs` derives the canonical cell slug from a
+  free-form kernel tenant slug (`Legalattorney.pe` -> `legalattorney-pe`); the
+  tenant and apps plugins share it so the DB slug and the cell slug are never
+  confused.
 
 The kernel deliberately contains no business domain logic. Business
 modules are external plugins that declare identity, version, permissions,

@@ -16,6 +16,7 @@ from systutor.contracts.container_runtime import (
     ContainerRuntimeError,
     RuntimeHealth,
 )
+from systutor.contracts.tenant_slugs import InvalidCellSlug, cell_slug_for
 from systutor.kernel.tenants.models import Tenant
 
 
@@ -175,14 +176,18 @@ class RootlessCellProvider:
         if tenant is None:
             raise ContainerRuntimeError("tenant not found")
         try:
+            cell_slug = cell_slug_for(tenant.slug)
+        except InvalidCellSlug as exc:
+            raise ContainerRuntimeError("tenant has no valid cell slug") from exc
+        try:
             registry = json.loads((self.data_root / "registry.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
             raise ContainerRuntimeError("tenant cell registry unavailable") from exc
-        cell = (registry.get("allocations") or {}).get(tenant.slug)
+        cell = (registry.get("allocations") or {}).get(cell_slug)
         if (
             not isinstance(cell, dict)
             or not isinstance(cell.get("uid"), int)
             or not isinstance(cell.get("index"), int)
         ):
             raise ContainerRuntimeError("tenant cell is not registered")
-        return RootlessCellHandle(tenant.slug, int(cell["uid"]), int(cell["index"]), self.data_root)
+        return RootlessCellHandle(cell_slug, int(cell["uid"]), int(cell["index"]), self.data_root)
