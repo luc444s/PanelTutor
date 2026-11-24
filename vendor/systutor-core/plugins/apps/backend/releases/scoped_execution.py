@@ -974,7 +974,8 @@ def deploy_scoped(
             failed = list(restoration.get("failed") or [])
             if any(service in modified for service in failed):
                 raise ScopedRestoreError(
-                    "restoration failed; the application is degraded",
+                    "restoration failed; the application is degraded: "
+                    f"{str(exc)[:300]}",
                     manifest,
                 ) from exc
             raise ScopedDeployFailed(
