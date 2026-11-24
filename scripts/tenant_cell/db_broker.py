@@ -157,7 +157,10 @@ class CellConnector:
         data_root: str | Path,
         *,
         image: str | None = None,
-        runner: Callable[[list[str], dict[str, str]], subprocess.CompletedProcess] | None = None,
+        runner: Callable[
+            [list[str], dict[str, str], int, int], subprocess.CompletedProcess
+        ]
+        | None = None,
         read_only: bool | None = None,
         network: str | None = None,
     ) -> None:
@@ -170,10 +173,15 @@ class CellConnector:
         allocation = alloc.load_registry(self.data_root)["allocations"].get(slug)
         if allocation is None:
             raise BrokerError(f"tenant {slug} has no cell allocation")
+        cell_root = self.data_root / "cells" / slug
+        uid = int(allocation["uid"])
+        gid = int(allocation.get("gid", uid))
         env = os.environ.copy()
-        env["DOCKER_HOST"] = f"unix://{self.data_root}/cells/{slug}/docker.sock"
-        env["XDG_RUNTIME_DIR"] = f"/run/user/{allocation['uid']}"
-        return self.runner(["docker", *args], env)
+        env["DOCKER_HOST"] = f"unix://{cell_root / 'docker.sock'}"
+        env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+        env["HOME"] = str(cell_root)
+        env["DOCKER_CONFIG"] = str(cell_root / ".docker")
+        return self.runner(["docker", *args], env, uid, gid)
     def _argv(
         self, entry: RelayEntry, db_container: str, name: str, private_network: str
     ) -> list[str]:
@@ -214,7 +222,11 @@ class CellConnector:
         if self._docker(entry.slug, ["image", "inspect", self.image]).returncode:
             pulled = self._docker(entry.slug, ["pull", self.image])
             if pulled.returncode:
-                raise BrokerError("could not pull the pinned connector image")
+                detail = (pulled.stderr or pulled.stdout or "").strip()[:300]
+                raise BrokerError(
+                    "could not pull the pinned connector image"
+                    + (f": {detail}" if detail else "")
+                )
         created = self._docker(entry.slug, args)
         if created.returncode:
             detail = (created.stderr or created.stdout or "").strip()[:300]
@@ -270,8 +282,19 @@ class CellConnector:
         return names
 
 
-def _run(argv: list[str], env: dict[str, str]) -> subprocess.CompletedProcess:
-    return subprocess.run(argv, capture_output=True, text=True, check=False, env=env, timeout=120)
+def _run(
+    argv: list[str], env: dict[str, str], uid: int, gid: int
+) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        argv,
+        capture_output=True,
+        text=True,
+        check=False,
+        env=env,
+        timeout=120,
+        user=uid,
+        group=gid,
+    )
 
 
 # --- broker -----------------------------------------------------------------

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import socket
+import subprocess
 import threading
 import time
 
@@ -186,6 +187,32 @@ def test_connector_argv_is_hardened_and_read_only_by_default(tmp_path) -> None:
     )
     assert "--read-only" not in lax._argv(
         entry, "spanel-demo-db", "spanel-pma-pma-1", "spanel-demo-private"
+    )
+
+
+def test_connector_docker_runs_as_the_cell_owner(tmp_path) -> None:
+    from scripts.tenant_cell import alloc
+
+    alloc.allocate(str(tmp_path), "demo")
+    allocation = alloc.load_registry(tmp_path)["allocations"]["demo"]
+    captured = {}
+
+    def runner(argv, env, uid, gid):
+        captured.update(argv=argv, env=env, uid=uid, gid=gid)
+        return subprocess.CompletedProcess(argv, 0, "[]\n", "")
+
+    connector = db_broker.CellConnector(
+        tmp_path,
+        image="alpine/socat@sha256:" + "a" * 64,
+        runner=runner,
+    )
+
+    assert connector._docker("demo", ["image", "inspect", connector.image]).returncode == 0
+    assert captured["uid"] == allocation["uid"]
+    assert captured["gid"] == allocation["gid"]
+    assert captured["env"]["HOME"] == str(tmp_path / "cells" / "demo")
+    assert captured["env"]["DOCKER_CONFIG"] == str(
+        tmp_path / "cells" / "demo" / ".docker"
     )
 
 
