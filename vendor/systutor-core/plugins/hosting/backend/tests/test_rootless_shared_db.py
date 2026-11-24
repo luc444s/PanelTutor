@@ -30,6 +30,44 @@ def test_migrate_accepts_an_explicit_shared_database() -> None:
     assert signature.parameters["shared_db"].default is None
 
 
+def test_database_name_uses_the_shared_alias_resolver(monkeypatch) -> None:
+    """WORDPRESS_DB_HOST=db is a network alias, not a container name."""
+    service = object.__new__(RootlessMigrationService)
+    site = SimpleNamespace(kind="wordpress", container_name="legalattorney-clean")
+    info = {"Config": {"Env": ["WORDPRESS_DB_HOST=db:3306"]}}
+
+    class Source:
+        def inspect(self, kind, name):
+            return info if name == site.container_name else None
+
+        def command(self, args, *, input=None):
+            return b""
+
+    seen: dict[str, object] = {}
+
+    def fake_resolve(env, container_name, payload, *, inspector, resolve_alias, **kwargs):
+        seen["runtime"] = env.get("_SPANEL_RUNTIME_HANDLE")
+        seen["payload"] = payload
+        assert container_name == site.container_name
+        assert inspector("db") is None
+        return ("db:3306", "legalattorney-clean-db", "wp_clean", "user", "pw")
+
+    monkeypatch.setattr(
+        "plugins.hosting.backend.rootless_migration.resolve_database_binding",
+        fake_resolve,
+    )
+
+    assert service._database_name(site, Source()) == "legalattorney-clean-db"
+    assert seen["runtime"] is not None
+    assert seen["payload"] == info
+
+
+def test_database_name_is_none_for_non_wordpress() -> None:
+    service = object.__new__(RootlessMigrationService)
+    site = SimpleNamespace(kind="static", container_name="legalattorney-static")
+    assert service._database_name(site, object()) is None
+
+
 class FakeTarget:
     def __init__(self) -> None:
         self.commands: list[tuple] = []

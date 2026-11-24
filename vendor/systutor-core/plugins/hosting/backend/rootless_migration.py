@@ -20,6 +20,8 @@ from systutor.contracts.site_domain_publisher import get_site_domain_publisher
 from systutor.core.errors import AppError
 
 from .config import env_of
+from .database import resolver_alias_de_contenedor
+from .database_binding import resolve_database_binding
 from .models import HostingSite, RootlessMigrationOperation, StaticProfile
 from .provisioner import Provisioner, SiteNames
 from .rootless_ingress import (
@@ -191,10 +193,30 @@ class RootlessMigrationService:
 
     @staticmethod
     def _database_name(site: HostingSite, source) -> str | None:
+        """Resolve the real DB container, not the network alias (A.SPEC 0034).
+
+        WordPress commonly declares ``WORDPRESS_DB_HOST=db``: a compose service
+        alias, not a container name. Stopping/starting ``db`` fails with "No
+        such container" and leaves the source WordPress stopped with no working
+        rollback. The shared binding resolver maps the alias through the site's
+        own networks to the container the panel can actually inspect.
+        """
         if site.kind != "wordpress":
             return None
         info = source.inspect("container", site.container_name) or {}
-        return env_of(info).get("WORDPRESS_DB_HOST", "").split(":", 1)[0] or None
+        raw = env_of(info).get("WORDPRESS_DB_HOST", "").split(":", 1)[0] or None
+        env = {"_SPANEL_RUNTIME_HANDLE": source}
+        try:
+            _raw_host, host, *_ = resolve_database_binding(
+                env,
+                site.container_name,
+                info,
+                inspector=lambda name: source.inspect("container", name),
+                resolve_alias=resolver_alias_de_contenedor,
+            )
+        except AppError:
+            return raw
+        return host or raw
 
     def _stop_source(self, site: HostingSite, source) -> None:
         source.command(("stop", site.container_name))
@@ -320,8 +342,7 @@ class RootlessMigrationService:
         wp = source.inspect("container", site.container_name)
         if wp is None:
             raise RuntimeError("source WordPress container missing")
-        wp_env = env_of(wp)
-        db_name = wp_env.get("WORDPRESS_DB_HOST", "").split(":", 1)[0]
+        db_name = self._database_name(site, source) or ""
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]+", db_name):
             raise RuntimeError("external or ambiguous WordPress database")
         database = source.inspect("container", db_name)
@@ -510,9 +531,8 @@ class RootlessMigrationService:
             )
         ).all()
         for row in rows:
-            info = source.inspect("container", row.container_name)
-            host = env_of(info or {}).get("WORDPRESS_DB_HOST", "").split(":", 1)[0]
-            if host == shared_db:
+            db_name = self._database_name(row, source)
+            if db_name == shared_db:
                 try:
                     source.command(("stop", row.container_name))
                 except Exception:  # noqa: BLE001 - a missing site must not abort the copy
