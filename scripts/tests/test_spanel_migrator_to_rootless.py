@@ -147,6 +147,9 @@ class FakeOperator:
     def start_service(self, unit):
         self.calls.append(("start_service", unit))
 
+    def restart_service(self, unit):
+        self.calls.append(("restart_service", unit))
+
     def socket_exists(self, path):
         return True
 
@@ -216,10 +219,11 @@ def test_happy_path_orders_phases_and_finalizes(tmp_path) -> None:
     payload = migrator.run()
     assert payload["ok"] is True
     actions = [call[0] for call in ops.calls]
-    assert actions[:6] == [
+    assert actions[:7] == [
         "tenant",
         "install_agents",
         "provision",
+        "restart_service",
         "plan_apply",
         "plan_verify",
         "hosting_sites",
@@ -291,6 +295,14 @@ def test_site_plan_skips_already_rootless(tmp_path) -> None:
     sites = migrator.plan_sites()
     assert sites == []
     assert ops.site_plans[0]["site_id"] in {row["site_id"] for row in migrator.skipped}
+
+
+def test_provision_reloads_edge_relay_after_registry_change(tmp_path) -> None:
+    migrator, ops, _console, _journal = make_migrator(tmp_path)
+
+    migrator.provision()
+
+    assert ("restart_service", "spanel-edge-relay.service") in ops.calls
 
 
 def test_migration_failure_stops_and_keeps_previous_sites(tmp_path) -> None:

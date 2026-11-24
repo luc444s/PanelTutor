@@ -449,6 +449,12 @@ class Operator:
             detail = (output.stderr or output.stdout).strip()[-400:]
             raise PreflightError(f"cannot start {unit}: {detail}")
 
+    def restart_service(self, unit: str) -> None:
+        output = self._run(["systemctl", "restart", unit], timeout=90)
+        if output.returncode != 0:
+            detail = (output.stderr or output.stdout).strip()[-400:]
+            raise PreflightError(f"cannot restart {unit}: {detail}")
+
     def capacity(self) -> dict[str, Any]:
         memory = 0
         meminfo = Path("/proc/meminfo")
@@ -953,6 +959,18 @@ class Migrator:
             "provision", "provision", ok=state != "degraded", detail=result
         )
         self.console.ok(f"cell state: {state}")
+        if (
+            not self.plan.dry_run
+            and not self.plan.skip_sites
+            and not self.plan.skip_service_check
+        ):
+            # The relay snapshots registry.json when it starts. Provisioning a
+            # new cell while the unit is already active otherwise leaves its
+            # 40000+index listener absent until the next reboot or restart.
+            self.ops.restart_service("spanel-edge-relay.service")
+            if not self._wait_active("spanel-edge-relay.service"):
+                raise PreflightError("spanel-edge-relay.service did not restart")
+            self.console.ok("spanel-edge-relay.service reloaded cell endpoints")
         return result
 
     def apply_plan(self) -> dict[str, Any] | None:
