@@ -28,7 +28,6 @@ import {
   setTenantPlan,
   tenantKeys,
   tenantMetricsStreamUrl,
-  verifyTenantPlan,
   type TenantPlan,
   type TenantResponse,
 } from "../api";
@@ -414,15 +413,6 @@ export function TenantResourcePlanPanel({ tenant }: { tenant: TenantResponse }) 
     onError: (error: Error) => setFormError(error.message),
   });
 
-  const verifyMutation = useMutation({
-    mutationFn: () => verifyTenantPlan(tenantId),
-    onSuccess: async () => {
-      await refresh();
-      toast.success(t("Plan verified"));
-    },
-    onError: (error: Error) => setFormError(error.message),
-  });
-
   const removeMutation = useMutation({
     mutationFn: () => deleteTenantPlan(tenantId),
     onSuccess: async () => {
@@ -435,7 +425,7 @@ export function TenantResourcePlanPanel({ tenant }: { tenant: TenantResponse }) 
 
   const capacity = capacityQuery.data;
   const plan = planQuery.data;
-  const busy = saveMutation.isPending || verifyMutation.isPending || removeMutation.isPending;
+  const busy = saveMutation.isPending || removeMutation.isPending;
   const capacityReady = capacityQuery.isSuccess;
 
   if (planQuery.isLoading || capacityQuery.isLoading) {
@@ -610,15 +600,6 @@ export function TenantResourcePlanPanel({ tenant }: { tenant: TenantResponse }) 
             {t("Delete plan")}
           </Button>
           <div className="flex gap-2">
-            <Button
-              type="button"
-              size="sm"
-              variant="secondary"
-              disabled={busy || !plan}
-              onClick={() => verifyMutation.mutate()}
-            >
-              {t("Verify")}
-            </Button>
             <Button
               type="button"
               size="sm"
