@@ -7,6 +7,7 @@ fields and handler dispatch.
 
 from __future__ import annotations
 
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -121,6 +122,27 @@ def test_legacy_private_layout_resolves_the_site_database(
     assert result is not None
     assert result["db_container"] == "legalattorney-clean-db"
     assert result["private_network"] == "spanel-legalattorney-clean-private"
+
+
+def test_cell_docker_query_runs_as_the_cell_owner(monkeypatch, tmp_path: Path) -> None:
+    _cell(tmp_path, "demo")
+    allocation = alloc.load_registry(tmp_path)["allocations"]["demo"]
+    captured: dict[str, Any] = {}
+
+    def fake_run(argv, **kwargs):
+        captured["argv"] = argv
+        captured.update(kwargs)
+        return subprocess.CompletedProcess(argv, 0, "[]\n", "")
+
+    monkeypatch.setattr(host_agent.subprocess, "run", fake_run)
+
+    assert host_agent._cell_docker_json(tmp_path, "demo", "ps", "-a") == []
+    assert captured["user"] == allocation["uid"]
+    assert captured["group"] == allocation["gid"]
+    assert captured["env"]["HOME"] == str(tmp_path / "cells" / "demo")
+    assert captured["env"]["DOCKER_CONFIG"] == str(
+        tmp_path / "cells" / "demo" / ".docker"
+    )
 
 
 def _request(op: str, *, tenant: str = "demo", slug: str = "demo", **extra: Any):

@@ -442,9 +442,14 @@ def _cell_docker_text(data_root: str | Path, slug: str, *args: str) -> str:
     allocation = alloc.load_registry(data_root)["allocations"].get(slug)
     if allocation is None:
         raise ValueError(f"tenant {slug} has no cell allocation")
+    cell_root = Path(data_root) / "cells" / slug
+    uid = int(allocation["uid"])
+    gid = int(allocation.get("gid", uid))
     env = os.environ.copy()
-    env["DOCKER_HOST"] = f"unix://{Path(data_root) / 'cells' / slug / 'docker.sock'}"
-    env["XDG_RUNTIME_DIR"] = f"/run/user/{int(allocation['uid'])}"
+    env["DOCKER_HOST"] = f"unix://{cell_root / 'docker.sock'}"
+    env["XDG_RUNTIME_DIR"] = f"/run/user/{uid}"
+    env["HOME"] = str(cell_root)
+    env["DOCKER_CONFIG"] = str(cell_root / ".docker")
     completed = subprocess.run(
         ["docker", *args],
         capture_output=True,
@@ -452,6 +457,8 @@ def _cell_docker_text(data_root: str | Path, slug: str, *args: str) -> str:
         check=False,
         env=env,
         timeout=30,
+        user=uid,
+        group=gid,
     )
     if completed.returncode != 0:
         detail = (completed.stderr or completed.stdout).strip()[:200]
