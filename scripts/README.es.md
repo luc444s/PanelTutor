@@ -524,9 +524,12 @@ python3 scripts/configure_phpmyadmin_rootless.py
 ```
 
 El plan-agent recibe `SYSTUTOR_DATABASE_URL`, `SPANEL_DB_BROKER_BIND`,
-`SPANEL_DB_BROKER_SOURCES`, `SPANEL_PMA_CONNECTOR_IMAGE` y
-`SPANEL_PMA_CONNECTOR_READ_ONLY=false` mediante
-`/etc/spanel/plan-agent.env` (modo `0600`).
+`SPANEL_DB_BROKER_SOURCES`, `SPANEL_PMA_CONNECTOR_IMAGE`,
+`SPANEL_PMA_CONNECTOR_READ_ONLY=false` y
+`SPANEL_TENANT_CELL_NET=slirp4netns` mediante
+`/etc/spanel/plan-agent.env` (modo `0600`). Este último fija el driver de red
+de las celdas: `slirp4netns` es la política del host y `gvisor-tap-vsock` queda
+solo como legado, nunca para celdas nuevas.
 
 ## Certificados de correo y tareas programadas
 

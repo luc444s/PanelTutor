@@ -9,8 +9,9 @@ The broker needs four facts that depend on this host:
 * the pinned connector image and the UFW rule for the relay ports.
 
 This script discovers those facts, writes a root-only EnvironmentFile for the
-plan-agent, updates the app's ``SPANEL_PHPMYADMIN_SOURCE_IP`` and restarts only
-what changed. Re-run it after recreating phpMyAdmin or Postgres.
+plan-agent (pinning the cell network driver to slirp4netns per host policy),
+updates the app's ``SPANEL_PHPMYADMIN_SOURCE_IP`` and restarts only what changed.
+Re-run it after recreating phpMyAdmin or Postgres.
 
 Usage (as root, from the repository):
 
@@ -254,6 +255,8 @@ def render_plan_env(ctx: Context) -> str:
         f"SPANEL_DB_BROKER_SOURCES={ctx.pma_ip}\n"
         f"SPANEL_PMA_CONNECTOR_IMAGE={CONNECTOR_IMAGE}\n"
         "SPANEL_PMA_CONNECTOR_READ_ONLY=false\n"
+        # Host policy: every cell must use slirp4netns, never gvisor-tap-vsock.
+        "SPANEL_TENANT_CELL_NET=slirp4netns\n"
     )
 
 

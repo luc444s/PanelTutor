@@ -526,8 +526,8 @@ def test_systemd_unit_uses_rootlesskit_netns_and_no_host_iptables() -> None:
     assert "AppArmorProfile=spanel-cell-acme" in unit
     assert "DOCKERD_ROOTLESS_ROOTLESSKIT_SLIRP4NETNS_SANDBOX=false" in unit
     assert "DOCKERD_ROOTLESS_ROOTLESSKIT_DISABLE_HOST_LOOPBACK=true" in unit
-    assert "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_NET=gvisor-tap-vsock" in unit
-    assert "Environment=SPANEL_TENANT_CELL_DNS=10.0.2.1" in unit
+    assert "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_NET=slirp4netns" in unit
+    assert "Environment=SPANEL_TENANT_CELL_DNS=10.0.2.3" in unit
     assert "--dns ${SPANEL_TENANT_CELL_DNS}" in unit
     assert "--config-file=/var/lib/spanel/cells/acme/daemon.json" in unit
     assert "ExecStartPost=" not in unit
@@ -554,17 +554,19 @@ def test_cell_dns_is_configurable_and_rejects_host_loopback(monkeypatch) -> None
 def test_cell_dns_follows_the_rootlesskit_network_driver(monkeypatch) -> None:
     monkeypatch.delenv("SPANEL_TENANT_CELL_DNS", raising=False)
 
-    assert network.cell_network_driver() == "gvisor-tap-vsock"
-    assert network.cell_dns_resolver() == "10.0.2.1"
-    unit = systemd_unit("acme", 60000, "/some/path", "systemd")
-    assert "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_NET=gvisor-tap-vsock" in unit
-    assert "Environment=SPANEL_TENANT_CELL_DNS=10.0.2.1" in unit
-
-    monkeypatch.setenv("SPANEL_TENANT_CELL_NET", "slirp4netns")
+    assert network.cell_network_driver() == "slirp4netns"
     assert network.cell_dns_resolver() == "10.0.2.3"
     unit = systemd_unit("acme", 60000, "/some/path", "systemd")
     assert "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_NET=slirp4netns" in unit
     assert "Environment=SPANEL_TENANT_CELL_DNS=10.0.2.3" in unit
+
+    # Legacy override remains available only for already-provisioned gvisor
+    # cells; new cells must stay on the slirp4netns default.
+    monkeypatch.setenv("SPANEL_TENANT_CELL_NET", "gvisor-tap-vsock")
+    assert network.cell_dns_resolver() == "10.0.2.1"
+    unit = systemd_unit("acme", 60000, "/some/path", "systemd")
+    assert "Environment=DOCKERD_ROOTLESS_ROOTLESSKIT_NET=gvisor-tap-vsock" in unit
+    assert "Environment=SPANEL_TENANT_CELL_DNS=10.0.2.1" in unit
 
     monkeypatch.setenv("SPANEL_TENANT_CELL_NET", "pasta")
     with pytest.raises(ValueError, match="SPANEL_TENANT_CELL_NET"):

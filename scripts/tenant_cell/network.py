@@ -18,13 +18,16 @@ _TRAEFIK_UID_ENV = "SPANEL_TRAEFIK_UID"
 _DEFAULT_TRAEFIK_UID = 1000  # host uid of the single central Traefik service
 _CELL_DNS_ENV = "SPANEL_TENANT_CELL_DNS"
 _CELL_NET_ENV = "SPANEL_TENANT_CELL_NET"
-_DEFAULT_CELL_NET = "gvisor-tap-vsock"
+# Host policy: slirp4netns is the only driver allowed for newly created cells.
+# The gvisor entry stays for backwards compatibility with already-provisioned
+# cells only; no new cell may select it.
+_DEFAULT_CELL_NET = "slirp4netns"
 # Each rootlesskit network driver has its own gateway/DNS. Passing slirp's
 # 10.0.2.3 to a gvisor-tap-vsock cell leaves every container without DNS
-# (`EAI_AGAIN`), which broke apt/npm inside the cell.
+# (`EAI_AGAIN`), which broke apt/npm inside the cell. The default follows slirp.
 _CELL_NET_DNS = {
-    "gvisor-tap-vsock": "10.0.2.1",
     "slirp4netns": "10.0.2.3",
+    "gvisor-tap-vsock": "10.0.2.1",
 }
 # A.SPEC 0109-R3: the default bridge of each rootless cell.  The NAT rule that
 # gives containers egress lives *inside* the cell netns; --iptables=false on the
@@ -52,7 +55,11 @@ def traefik_uid() -> int:
 
 
 def cell_network_driver() -> str:
-    """RootlessKit network driver used by every cell (env-overridable)."""
+    """RootlessKit network driver used by each cell.
+
+    Defaults to slirp4netns per host policy; the env override exists only to
+    keep legacy gvisor-tap-vsock cells reachable, never for new provisioning.
+    """
     raw = os.environ.get(_CELL_NET_ENV, _DEFAULT_CELL_NET).strip().lower()
     if raw not in _CELL_NET_DNS:
         allowed = ", ".join(sorted(_CELL_NET_DNS))
@@ -64,8 +71,8 @@ def cell_dns_resolver() -> str:
     """Validated resolver for the configured rootlesskit network driver.
 
     ``SPANEL_TENANT_CELL_DNS`` always wins. Otherwise the default follows the
-    driver: gvisor-tap-vsock serves DNS on its gateway 10.0.2.1, while
-    slirp4netns serves it on 10.0.2.3.
+    driver: slirp4netns serves DNS on 10.0.2.3 (the host default), while
+    gvisor-tap-vsock serves it on its gateway 10.0.2.1 (legacy cells only).
     """
     default = _CELL_NET_DNS[cell_network_driver()]
     raw = os.environ.get(_CELL_DNS_ENV, default).strip()

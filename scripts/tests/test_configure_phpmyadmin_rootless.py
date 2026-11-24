@@ -98,5 +98,6 @@ def test_render_plan_env_contains_discovered_values() -> None:
     text = mod.render_plan_env(ctx)
     assert "SPANEL_DB_BROKER_BIND=172.18.0.1" in text
     assert "SPANEL_DB_BROKER_SOURCES=172.18.0.17" in text
+    assert "SPANEL_TENANT_CELL_NET=slirp4netns" in text
     assert "SYSTUTOR_DATABASE_URL=postgresql+psycopg://u:p@172.27.0.2:5432/db" in text
     assert mod.CONNECTOR_IMAGE in text
