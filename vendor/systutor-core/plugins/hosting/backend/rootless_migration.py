@@ -159,22 +159,27 @@ class RootlessMigrationService:
         self.db.add(row)
         self.db.flush()
 
-    def _backup_stream(self, site: HostingSite, source, volumes: list[str]) -> tuple[str, str]:
+    def _backup_stream(
+        self, site: HostingSite, source, volumes: list[tuple[str, str]]
+    ) -> tuple[str, str]:
         directory = self.state_root / site.id
         directory.mkdir(parents=True, exist_ok=True, mode=0o700)
         path = directory / f"{int(time.time())}.zip"
         manifest: dict[str, Any] = {"site_id": site.id, "kind": site.kind, "volumes": {}}
         temporary: list[Path] = []
         try:
-            for index, volume in enumerate(volumes):
+            for index, (kind, value) in enumerate(volumes):
                 tar_path = directory / f".{path.stem}-{index}.tar"
                 temporary.append(tar_path)
                 digest = hashlib.sha256()
+                chunks = (
+                    source.export_volume(value) if kind == "volume" else source.export_path(value)
+                )
                 with tar_path.open("xb") as output:
-                    for chunk in source.export_volume(volume):
+                    for chunk in chunks:
                         output.write(chunk)
                         digest.update(chunk)
-                manifest["volumes"][volume] = {
+                manifest["volumes"][f"{kind}:{value}"] = {
                     "entry": f"volumes/{index}.tar",
                     "sha256": digest.hexdigest(),
                 }
@@ -272,10 +277,40 @@ class RootlessMigrationService:
             )
         )
 
-    def _copy_volume(self, source, target, name: str, site: HostingSite) -> None:
-        if target.inspect("volume", name) is None:
-            self._create_volume(target, name, site)
-        target.import_volume(name, source.export_volume(name))
+    @staticmethod
+    def _mount(info: dict, destination: str) -> tuple[str, str] | None:
+        """The source mount backing ``destination``: (kind, name-or-path)."""
+        for mount in info.get("Mounts") or []:
+            if not isinstance(mount, dict) or mount.get("Destination") != destination:
+                continue
+            if mount.get("Type") == "volume" and mount.get("Name"):
+                return ("volume", str(mount["Name"]))
+            if mount.get("Type") == "bind" and mount.get("Source"):
+                return ("bind", str(mount["Source"]))
+        return None
+
+    @staticmethod
+    def _target_volume(site: HostingSite, suffix: str) -> str:
+        slug = site.container_name.removeprefix("spanel-").removesuffix("-wp")
+        return f"spanel-{slug}-{suffix}"
+
+    def _copy_volume(
+        self, source, target, mount: tuple[str, str], site: HostingSite, *, suffix: str
+    ) -> str:
+        """Copy a source volume *or* bind path into a cell-owned volume.
+
+        Returns the target volume name, which the candidate container must
+        mount instead of the source name/path.
+        """
+        kind, value = mount
+        target_name = value if kind == "volume" else self._target_volume(site, suffix)
+        if target.inspect("volume", target_name) is None:
+            self._create_volume(target, target_name, site)
+        chunks = (
+            source.export_volume(value) if kind == "volume" else source.export_path(value)
+        )
+        target.import_volume(target_name, chunks)
+        return target_name
 
     def _wait_container(self, target, name: str) -> None:
         deadline = time.monotonic() + self.settings.install_timeout
@@ -303,10 +338,12 @@ class RootlessMigrationService:
                 "plugins.hosting.backend.profiles", fromlist=["spec_from_row"]
             ).spec_from_row(profile),
         )
-        volume = self._volume(info, names.web_root)
-        self._copy_volume(source, target, volume, site)
+        mount = self._mount(info, names.web_root)
+        if mount is None:
+            raise RuntimeError(f"static source has no {names.web_root} volume or bind mount")
+        volume = self._copy_volume(source, target, mount, site, suffix="web")
         source.command(("stop", site.container_name))
-        self._copy_volume(source, target, volume, site)
+        self._copy_volume(source, target, mount, site, suffix="web")
         args = (
             "run",
             "-d",
@@ -362,14 +399,17 @@ class RootlessMigrationService:
         database = source.inspect("container", db_name)
         if database is None:
             raise RuntimeError("managed WordPress database missing")
-        wp_volume = self._volume(wp, "/var/www/html")
+        wp_mount = self._mount(wp, "/var/www/html")
+        if wp_mount is None:
+            raise RuntimeError("WordPress source has no /var/www/html volume or bind mount")
         wp_file = target.write_private(
             f"{site.container_name}/wp.env",
             ("\n".join((wp.get("Config") or {}).get("Env") or []) + "\n").encode(),
         )
         # The first copy is live; the second runs after the source is stopped so
-        # the candidate sees a stable tree.
-        self._copy_volume(source, target, wp_volume, site)
+        # the candidate sees a stable tree. The returned name is the cell volume
+        # the candidate must mount (bind paths cannot be mounted by the cell).
+        wp_volume = self._copy_volume(source, target, wp_mount, site, suffix="html")
 
         if shared_db is not None:
             if db_name != shared_db:
@@ -384,7 +424,7 @@ class RootlessMigrationService:
                 shared_db, source, target, site, database, shared_network
             )
             source.command(("stop", site.container_name))
-            self._copy_volume(source, target, wp_volume, site)
+            self._copy_volume(source, target, wp_mount, site, suffix="html")
             target.command(
                 (
                     "run",
@@ -433,10 +473,12 @@ class RootlessMigrationService:
         labels = (database.get("Config") or {}).get("Labels") or {}
         if labels.get("spanel.tenant") != site.tenant_id:
             raise RuntimeError("WordPress database ownership mismatch")
-        db_volume = self._volume(database, "/var/lib/mysql")
+        db_mount = self._mount(database, "/var/lib/mysql")
+        if db_mount is None:
+            raise RuntimeError("WordPress database has no /var/lib/mysql volume or bind mount")
         source.command(("stop", site.container_name))
-        self._copy_volume(source, target, wp_volume, site)
-        self._copy_volume(source, target, db_volume, site)
+        db_volume = self._copy_volume(source, target, db_mount, site, suffix="db")
+        self._copy_volume(source, target, wp_mount, site, suffix="html")
         slug = site.container_name.removeprefix("spanel-").removesuffix("-wp")
         private = SiteNames(slug).private_network
         if target.inspect("network", private) is None:
@@ -590,7 +632,12 @@ class RootlessMigrationService:
                     network,
                 )
             )
-        db_volume = self._volume(database, "/var/lib/mysql")
+        db_mount = self._mount(database, "/var/lib/mysql")
+        if db_mount is None:
+            raise RuntimeError("shared database has no /var/lib/mysql volume or bind mount")
+        db_volume = (
+            db_mount[1] if db_mount[0] == "volume" else self._target_volume(site, "shared-db")
+        )
         if target.inspect("volume", db_volume) is None:
             target.command(
                 (
@@ -605,7 +652,12 @@ class RootlessMigrationService:
                     db_volume,
                 )
             )
-            target.import_volume(db_volume, source.export_volume(db_volume))
+            chunks = (
+                source.export_volume(db_mount[1])
+                if db_mount[0] == "volume"
+                else source.export_path(db_mount[1])
+            )
+            target.import_volume(db_volume, chunks)
         db_file = target.write_private(
             f"{shared_db}/db.env",
             ("\n".join((database.get("Config") or {}).get("Env") or []) + "\n").encode(),
@@ -671,18 +723,19 @@ class RootlessMigrationService:
             cutover = False
             try:
                 info = source.inspect("container", site.container_name) or {}
-                volumes = [
-                    str(m["Name"])
-                    for m in info.get("Mounts", [])
-                    if m.get("Type") == "volume" and m.get("Name")
-                ]
+                volumes: list[tuple[str, str]] = []
+                for entry in info.get("Mounts") or []:
+                    if not isinstance(entry, dict):
+                        continue
+                    if entry.get("Type") == "volume" and entry.get("Name"):
+                        volumes.append(("volume", str(entry["Name"])))
+                    elif entry.get("Type") == "bind" and entry.get("Source"):
+                        volumes.append(("bind", str(entry["Source"])))
                 if shared_db is not None and site.kind == "wordpress":
                     shared_info = source.inspect("container", shared_db)
                     if shared_info is not None:
-                        shared_volume = self._volume(
-                            shared_info, "/var/lib/mysql"
-                        )
-                        if shared_volume not in volumes:
+                        shared_volume = self._mount(shared_info, "/var/lib/mysql")
+                        if shared_volume is not None and shared_volume not in volumes:
                             volumes.append(shared_volume)
                 self._step(row, "copying", "inventory")
                 self._stop_source(site, source)

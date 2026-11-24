@@ -62,9 +62,16 @@ class RootfulDockerHandle:
         return rows[0] if isinstance(rows, list) and rows else None
 
     def export_volume(self, name: str) -> Iterator[bytes]:
+        return self._export_mount(f"{name}:/data:ro")
+
+    def export_path(self, path: str) -> Iterator[bytes]:
+        """Stream a host bind-mount path through the rootful daemon."""
+        return self._export_mount(f"{path}:/data:ro")
+
+    def _export_mount(self, mount: str) -> Iterator[bytes]:
         command = (
             "docker run --rm -v "
-            + shlex.quote(f"{name}:/data:ro")
+            + shlex.quote(mount)
             + " busybox:1.36 tar -C /data -cf - ."
         )
         child_env = dict(os.environ)

@@ -97,6 +97,46 @@ def test_database_name_is_none_for_non_wordpress() -> None:
     assert service._database_name(site, object()) is None
 
 
+def test_mount_detects_binds_and_named_volumes() -> None:
+    info = {
+        "Mounts": [
+            {"Type": "bind", "Source": "/opt/stacks/wp/html", "Destination": "/var/www/html"},
+            {"Type": "volume", "Name": "wp_db", "Destination": "/var/lib/mysql"},
+        ]
+    }
+    assert RootlessMigrationService._mount(info, "/var/www/html") == (
+        "bind",
+        "/opt/stacks/wp/html",
+    )
+    assert RootlessMigrationService._mount(info, "/var/lib/mysql") == ("volume", "wp_db")
+    assert RootlessMigrationService._mount(info, "/missing") is None
+
+
+def test_bind_mount_is_copied_into_a_cell_volume() -> None:
+    service = object.__new__(RootlessMigrationService)
+    site = SimpleNamespace(container_name="legalattorney-clean", tenant_id="t1")
+    target = FakeTarget()
+    calls: list[tuple] = []
+
+    class Source:
+        def export_path(self, path):
+            calls.append(("bind", path))
+            return iter([b"data"])
+
+        def export_volume(self, name):
+            calls.append(("volume", name))
+            return iter([b"data"])
+
+    name = service._copy_volume(
+        Source(), target, ("bind", "/opt/stacks/legalattorney-clean/html"), site,
+        suffix="html",
+    )
+
+    assert name == "spanel-legalattorney-clean-html"
+    assert calls == [("bind", "/opt/stacks/legalattorney-clean/html")]
+    assert name in target.volumes
+
+
 class FakeTarget:
     def __init__(self) -> None:
         self.commands: list[tuple] = []
