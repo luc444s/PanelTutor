@@ -303,7 +303,6 @@ def test_isolation_no_longer_requires_injected_security_profiles() -> None:
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
-        ("Runtime", "runsc", "runc"),
         ("PidsLimit", 0, "PID"),
         ("PidsLimit", 257, "PID"),
         ("Memory", 0, "memory"),
@@ -312,10 +311,53 @@ def test_isolation_no_longer_requires_injected_security_profiles() -> None:
         ("NanoCpus", 1_000_000_001, "CPU"),
     ],
 )
-def test_isolation_rejects_invalid_runtime_or_limits(field, value, message) -> None:
+def test_isolation_rejects_limits_outside_the_tenant_plan(
+    field, value, message
+) -> None:
+    from plugins.apps.backend.runtime.tenant_plan import TenantPlan, bind_tenant_plan
+
+    plan = TenantPlan(
+        memory_bytes=512 * 1024 * 1024, cpus=1.0, pids=256, tenant_slug="acme"
+    )
     runner = FakeRunner(container(HostConfig={field: value}))
-    with pytest.raises(ProbeFailed, match=message):
+    with bind_tenant_plan(plan), pytest.raises(ProbeFailed, match=message):
         check_isolation(runner, {"web": "cid1"})
+
+
+def test_isolation_rejects_a_non_runc_runtime() -> None:
+    runner = FakeRunner(container(HostConfig={"Runtime": "runsc"}))
+    with pytest.raises(ProbeFailed, match="runc"):
+        check_isolation(runner, {"web": "cid1"})
+
+
+def test_isolation_does_not_require_limits_without_a_plan() -> None:
+    """No plan means no injected limits; the probe must not invent a failure."""
+    runner = FakeRunner(
+        container(HostConfig={"PidsLimit": 0, "Memory": 0, "NanoCpus": 0})
+    )
+    evidence = check_isolation(runner, {"web": "cid1"})
+    assert evidence["web"]["limits"] == {"pids": 0, "memory": 0, "nano_cpus": 0}
+
+
+def test_isolation_accepts_plan_split_limits_inside_the_aggregate() -> None:
+    from plugins.apps.backend.runtime.tenant_plan import TenantPlan, bind_tenant_plan
+
+    plan = TenantPlan(
+        memory_bytes=2 * 1024**3, cpus=3.0, pids=1024, tenant_slug="acme"
+    )
+    runner = FakeRunner(
+        container(
+            HostConfig={
+                "PidsLimit": 341,
+                "Memory": (2 * 1024**3) // 3,
+                "NanoCpus": 1_333_333_333,
+            }
+        )
+    )
+    with bind_tenant_plan(plan):
+        evidence = check_isolation(runner, {"web": "cid1"})
+    assert evidence["web"]["limits"]["pids"] == 341
+    assert evidence["web"]["memory_budget_bytes"] == 2 * 1024**3
 
 
 def test_functional_probe_is_bounded_and_never_returns_output() -> None:

@@ -11,7 +11,6 @@ from plugins.apps.backend.rootless_routes import RootlessRoutes
 from plugins.apps.backend.runtime import AppDeployError
 from plugins.apps.backend.runtime.probes import (
     MAX_APP_MEMORY,
-    ProbeFailed,
     check_isolation,
 )
 from plugins.apps.backend.runtime.tenant_plan import (
@@ -285,9 +284,9 @@ def test_aggregate_2gb_plan_allows_a_three_service_deploy_from_the_start() -> No
     assert derived["backend"] == derived["database"] == derived["frontend"]
 
     runner = _IsolationRunner(per_service)
-    # Without a plan the historical per-service cap still applies.
-    with pytest.raises(ProbeFailed, match="memory"):
-        check_isolation(runner, {"backend": "cid"})
+    # Without a plan the platform injects no limits, so the probe does not
+    # require them (A.SPEC 0109-R removed the fixed defaults).
+    assert check_isolation(runner, {"backend": "cid"})
     # With the tenant plan bound for the deploy, the 2 GiB aggregate is the
     # ceiling, so the very first deploy is accepted (no lab re-deploy at 1.4 GB).
     with bind_tenant_plan(plan):

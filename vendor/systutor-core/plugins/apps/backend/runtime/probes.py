@@ -29,9 +29,7 @@ from .types import AppDeployError
 
 PROBE_USER = "65534:65534"
 MAX_OUTPUT_BYTES = 64 * 1024
-MAX_APP_PIDS = 256
 MAX_APP_MEMORY = 512 * 1024 * 1024
-MAX_APP_NANO_CPUS = 1_000_000_000
 _SERVICE_NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]{0,127}\Z")
 _DIGEST_IMAGE = re.compile(r".+@sha256:[0-9a-f]{64}\Z")
 
@@ -275,13 +273,14 @@ def _rootless_userns(runner: Runner) -> bool:
 
 
 def memory_budget_bytes() -> int:
-    """Per-service memory ceiling accepted by the isolation probe.
+    """Per-service memory ceiling reported as probe evidence.
 
-    Without a tenant plan the historical 512 MiB cap still applies.  With a
-    plan bound for the deploy, the tenant *aggregate* is the ceiling: the
-    policy in ``tenant_plan.service_limits`` splits that aggregate across the
-    services, so a 2 GiB / 3-service plan must be deployable from the first
-    attempt instead of being rejected as a 715 MiB "per-service" limit.
+    With a plan bound for the deploy, the tenant *aggregate* is the ceiling:
+    the policy in ``tenant_plan.service_limits`` splits that aggregate across
+    the services, so a 2 GiB / 3-service plan must be deployable from the
+    first attempt instead of being rejected as a 715 MiB "per-service" limit.
+    Without a plan the historical 512 MiB value is only informational; the
+    probe does not require limits the platform never injected.
     """
     plan = current_tenant_plan()
     if plan is None or plan.memory_bytes <= MAX_APP_MEMORY:
@@ -352,6 +351,23 @@ def _assert_prohibited(
         raise ProbeFailed(f"service {service} uses the host network")
 
 
+def plan_limit_budget() -> tuple[int, int, int] | None:
+    """Per-service ceilings derived from the tenant plan bound for the deploy.
+
+    ``None`` means the tenant has no plan.  In that case the platform injects
+    no limits (A.SPEC 0109-R), so the probe cannot require them; limits are
+    only verified when a plan is the source of the values.
+    """
+    plan = current_tenant_plan()
+    if plan is None:
+        return None
+    return (
+        int(plan.pids),
+        int(plan.memory_bytes),
+        int(round(float(plan.cpus) * 1_000_000_000)),
+    )
+
+
 def _assert_mandatory(
     service: str, values: Mapping[str, Any]
 ) -> tuple[set[str], dict[str, Any]]:
@@ -368,23 +384,29 @@ def _assert_mandatory(
     if host.get("Runtime") != "runc":
         raise ProbeFailed(f"service {service} does not use runc")
     pids = host.get("PidsLimit")
-    if isinstance(pids, bool) or not isinstance(pids, int) or not 0 < pids <= MAX_APP_PIDS:
-        raise ProbeFailed(f"service {service} PID limit is invalid")
     memory = host.get("Memory")
-    budget = memory_budget_bytes()
-    if (
-        isinstance(memory, bool)
-        or not isinstance(memory, int)
-        or not 0 < memory <= budget
-    ):
-        raise ProbeFailed(f"service {service} memory limit is invalid")
     nano_cpus = host.get("NanoCpus")
-    if (
-        isinstance(nano_cpus, bool)
-        or not isinstance(nano_cpus, int)
-        or not 0 < nano_cpus <= MAX_APP_NANO_CPUS
-    ):
-        raise ProbeFailed(f"service {service} CPU limit is invalid")
+    budget = plan_limit_budget()
+    if budget is not None:
+        # A plan is the source of the limits, so every service must prove it
+        # carries a positive value inside the tenant aggregate.  The aggregate
+        # is the ceiling: ``service_limits`` already splits it, and a service
+        # can never legitimately exceed it.
+        pids_budget, memory_budget, cpu_budget = budget
+        if not isinstance(pids, int) or isinstance(pids, bool) or not 0 < pids <= pids_budget:
+            raise ProbeFailed(f"service {service} PID limit is invalid")
+        if (
+            not isinstance(memory, int)
+            or isinstance(memory, bool)
+            or not 0 < memory <= memory_budget
+        ):
+            raise ProbeFailed(f"service {service} memory limit is invalid")
+        if (
+            not isinstance(nano_cpus, int)
+            or isinstance(nano_cpus, bool)
+            or not 0 < nano_cpus <= cpu_budget
+        ):
+            raise ProbeFailed(f"service {service} CPU limit is invalid")
     if str(state.get("Status", "")) != "running":
         raise ProbeFailed(f"service {service} is not running")
     return options, {"pids": pids, "memory": memory, "nano_cpus": nano_cpus}
