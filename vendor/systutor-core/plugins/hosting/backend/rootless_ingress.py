@@ -72,7 +72,12 @@ def verify_external_route(
     """
     scheme = "https" if https else "http"
     request = urllib.request.Request(
-        f"{scheme}://{domain}/", headers={"Host": domain}
+        f"{scheme}://{domain}/",
+        headers={
+            "Host": domain,
+            "User-Agent": "SPanel-Route-Check/1.0",
+            "Cache-Control": "no-cache",
+        },
     )
     context = _tls_context() if https else None
     deadline = time.monotonic() + max(0.0, deadline_seconds)

@@ -207,7 +207,13 @@ def test_external_verification_uses_the_published_scheme(monkeypatch) -> None:
             return None
 
     def urlopen(request, **_kwargs):
-        seen.append(request.full_url)
+        seen.append(
+            (
+                request.full_url,
+                request.get_header("User-agent"),
+                request.get_header("Cache-control"),
+            )
+        )
         return Response()
 
     monkeypatch.setattr(
@@ -215,7 +221,10 @@ def test_external_verification_uses_the_published_scheme(monkeypatch) -> None:
     )
     HostingService._verify_external("site.test", https=True)
     HostingService._verify_external("site.test", https=False)
-    assert seen == ["https://site.test/", "http://site.test/"]
+    assert seen == [
+        ("https://site.test/", "SPanel-Route-Check/1.0", "no-cache"),
+        ("http://site.test/", "SPanel-Route-Check/1.0", "no-cache"),
+    ]
 
 
 def test_external_verification_retries_until_route_is_ready(monkeypatch) -> None:
