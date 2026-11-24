@@ -130,6 +130,14 @@ def _metrics_app(fake: FakeMetricsClient, context: TenantContext | None = None):
     with factory() as session:
         session.add(Tenant(id="t1", name="Demo", slug="demo", domain="demo.com"))
         session.add(Tenant(id="t2", name="Other", slug="other", domain="other.com"))
+        session.add(
+            Tenant(
+                id="t3",
+                name="Legal Attorney",
+                slug="Legalattorney.pe",
+                domain="legalattorney.pe",
+            )
+        )
         session.commit()
 
     app = FastAPI()
@@ -191,6 +199,18 @@ def test_stream_uses_the_slug_of_the_requested_tenant() -> None:
 
     assert response.status_code == 200
     assert fake.subscribed == ("other", 1000)
+
+
+def test_stream_uses_the_canonical_cell_slug() -> None:
+    fake = FakeMetricsClient([SAMPLE])
+
+    with _metrics_app(fake) as client:
+        response = client.get(
+            "/api/v1/plugins/tenant/tenants/t3/metrics/stream?interval_ms=1000"
+        )
+
+    assert response.status_code == 200
+    assert fake.subscribed == ("legalattorney-pe", 1000)
 
 
 def test_stream_emits_an_error_event_and_closes_on_daemon_failure() -> None:

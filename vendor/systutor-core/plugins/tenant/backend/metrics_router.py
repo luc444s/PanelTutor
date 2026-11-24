@@ -26,6 +26,7 @@ from plugins.tenant.backend.metrics_client import (
 )
 from plugins.tenant.backend.service import get_tenant_by_id
 from systutor.api.deps import get_db_session
+from systutor.contracts.tenant_slugs import cell_slug_for
 from systutor.core.errors import AppError
 from systutor.kernel.auth.dependencies import get_current_tenant_context
 from systutor.kernel.tenants.context import TenantContext
@@ -93,7 +94,7 @@ def stream_tenant_metrics(
     tenant = get_tenant_by_id(db, tenant_id)
     if tenant is None:
         raise HTTPException(status_code=404, detail="Tenant not found")
-    slug = tenant.slug
+    slug = cell_slug_for(tenant.slug)
 
     # Preflight: si el daemon no responde antes de abrir el stream, es un 503
     # claro en vez de un 200 que se corta a los pocos milisegundos.
