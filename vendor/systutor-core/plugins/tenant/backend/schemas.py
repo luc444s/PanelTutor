@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
+
+from plugins.apps.backend.schemas import TenantPlanRequest
+
+
+class CreateTenantResourcePlan(TenantPlanRequest):
+    """A new tenant cannot use the legacy unbounded-storage plan shape."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    storage_bytes: int = Field(gt=0, le=2**63 - 1, strict=True)
 
 
 class CreateTenantRequest(BaseModel):
@@ -12,6 +22,7 @@ class CreateTenantRequest(BaseModel):
     user_email: str
     user_password: str
     user_full_name: str = ""
+    resource_plan: CreateTenantResourcePlan
 
 
 class UpdateTenantDomainRequest(BaseModel):

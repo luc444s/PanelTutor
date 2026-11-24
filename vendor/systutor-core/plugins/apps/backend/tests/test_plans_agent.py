@@ -192,6 +192,7 @@ def test_agent_rejects_generic_exec_and_arbitrary_paths(tmp_path: Path) -> None:
     _cell(tmp_path)
     agent, executor = _agent(tmp_path)
     assert host_agent.ALLOWED_OPS == (
+        "provision",
         "apply",
         "apply_in_place",
         "remove",

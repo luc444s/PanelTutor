@@ -128,6 +128,12 @@ export type CreateTenantPayload = {
   user_email: string;
   user_password: string;
   user_full_name?: string;
+  resource_plan: {
+    memory_bytes: number;
+    cpus: number;
+    pids: number;
+    storage_bytes: number;
+  };
 };
 
 export type UpdateTenantPayload = {

@@ -145,6 +145,7 @@ def _mark_failed(
     actor: str,
     action: str,
     exc: Exception,
+    commit: bool = True,
 ) -> None:
     """Keep a recoverable failed row; never leave an orphan or ambiguous state."""
     if row is not None:
@@ -156,7 +157,10 @@ def _mark_failed(
         result="failure", details={"error": str(exc)[:500]},
     )
     _complete(operation, ok=False, error=str(exc))
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
 
 
 def set_plan(
@@ -167,6 +171,8 @@ def set_plan(
     body: TenantPlanRequest,
     materializer: PlanMaterializer | None,
     correlation_id: str | None = None,
+    commit: bool = True,
+    commit_failure: bool = True,
 ) -> dict[str, Any]:
     """Persist a pending plan, materialize it, then mark it applied/failed."""
     adapter = _materializer(materializer)
@@ -197,7 +203,7 @@ def set_plan(
     except Exception as exc:  # noqa: BLE001 - host failure must not raise a 500
         _mark_failed(
             db, operation, row, tenant_id=tenant_id, actor=actor,
-            action="apps.plan.set", exc=exc,
+            action="apps.plan.set", exc=exc, commit=commit_failure,
         )
         raise _host_failure("materialization", exc) from exc
     row.status = "applied"
@@ -211,7 +217,10 @@ def set_plan(
         },
     )
     _complete(operation, ok=True)
-    db.commit()
+    if commit:
+        db.commit()
+    else:
+        db.flush()
     view = plan_view(db, tenant_id)
     assert view is not None
     return view

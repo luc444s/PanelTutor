@@ -22,6 +22,8 @@ import { Input, newCredentialProps, noAutofillProps } from "@systutor/shell/ui/i
 import { Pagination } from "@systutor/shell/ui/pagination";
 import { useT } from "@/i18n/use-i18n";
 
+const GIB = 1024 ** 3;
+
 export default function TenantsPage() {
   const t = useT();
   const queryClient = useQueryClient();
@@ -33,6 +35,10 @@ export default function TenantsPage() {
   const [createUserEmail, setCreateUserEmail] = useState("");
   const [createUserPassword, setCreateUserPassword] = useState("");
   const [createUserFullName, setCreateUserFullName] = useState("");
+  const [createRamGiB, setCreateRamGiB] = useState("2");
+  const [createCpus, setCreateCpus] = useState("1");
+  const [createStorageGiB, setCreateStorageGiB] = useState("20");
+  const [createPids, setCreatePids] = useState("256");
   const [createError, setCreateError] = useState<string | null>(null);
 
   const [selectedTenant, setSelectedTenant] = useState<TenantResponse | null>(null);
@@ -63,19 +69,29 @@ export default function TenantsPage() {
 
   const createMutation = useMutation({
     mutationFn: createTenant,
-    onSuccess: async () => {
+    onMutate: () => toast.loading(t("Creating tenant...")),
+    onSuccess: async (_, __, loadingToast) => {
       await queryClient.invalidateQueries({ queryKey: tenantKeys.tenants });
-      setShowCreate(false);
       setCreateName("");
       setCreateSlug("");
       setCreateDomain("");
       setCreateUserEmail("");
       setCreateUserPassword("");
       setCreateUserFullName("");
+      setCreateRamGiB("2");
+      setCreateCpus("1");
+      setCreateStorageGiB("20");
+      setCreatePids("256");
       setCreateError(null);
+      toast.dismiss(loadingToast);
       toast.success(t("Tenant created"));
     },
-    onError: (e: Error) => setCreateError(e.message),
+    onError: (e: Error, _, loadingToast) => {
+      toast.dismiss(loadingToast);
+      toast.error(t("Could not create tenant"));
+      setCreateError(e.message);
+      setShowCreate(true);
+    },
   });
 
   const updatePrimaryMutation = useMutation({
@@ -123,6 +139,14 @@ export default function TenantsPage() {
     if (!createUserEmail.trim()) { setCreateError(t("User email required")); return; }
     if (!createUserPassword.trim()) { setCreateError(t("User password required")); return; }
     if (createUserPassword.length < 8) { setCreateError(t("Password must be at least 8 characters")); return; }
+    const ram = Number(createRamGiB.replace(",", "."));
+    const cpus = Number(createCpus.replace(",", "."));
+    const storage = Number(createStorageGiB.replace(",", "."));
+    const pids = Number(createPids);
+    if (!Number.isFinite(ram) || ram <= 0) { setCreateError(t("RAM must be greater than zero")); return; }
+    if (!Number.isFinite(cpus) || cpus <= 0) { setCreateError(t("CPU must be greater than zero")); return; }
+    if (!Number.isFinite(storage) || storage <= 0) { setCreateError(t("Storage must be greater than zero")); return; }
+    if (!Number.isInteger(pids) || pids <= 0) { setCreateError(t("PIDs must be greater than zero")); return; }
     createMutation.mutate({
       name: createName,
       slug: createSlug,
@@ -130,7 +154,14 @@ export default function TenantsPage() {
       user_email: createUserEmail,
       user_password: createUserPassword,
       user_full_name: createUserFullName || undefined,
+      resource_plan: {
+        memory_bytes: Math.round(ram * GIB),
+        cpus,
+        pids,
+        storage_bytes: Math.round(storage * GIB),
+      },
     });
+    setShowCreate(false);
   }
 
   function handleUpdatePrimary(e: FormEvent<HTMLFormElement>) {
@@ -211,6 +242,27 @@ export default function TenantsPage() {
             <span>{t("Full name (optional)")}</span>
             <Input type="text" value={createUserFullName} onChange={(e) => setCreateUserFullName(e.target.value)} placeholder={t("John Doe")} />
           </label>
+          <div className="border-t border-border pt-3 mt-1">
+            <p className="text-xs font-semibold uppercase text-muted-foreground mb-2">{t("Tenant plan")}</p>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2">
+            <label className="block space-y-1 text-sm text-foreground">
+              <span>{t("Memory RAM (GiB)")}</span>
+              <Input inputMode="decimal" required value={createRamGiB} onChange={(e) => setCreateRamGiB(e.target.value)} />
+            </label>
+            <label className="block space-y-1 text-sm text-foreground">
+              <span>{t("CPU cores")}</span>
+              <Input inputMode="decimal" required value={createCpus} onChange={(e) => setCreateCpus(e.target.value)} />
+            </label>
+            <label className="block space-y-1 text-sm text-foreground">
+              <span>{t("Storage (GiB)")}</span>
+              <Input inputMode="decimal" required value={createStorageGiB} onChange={(e) => setCreateStorageGiB(e.target.value)} />
+            </label>
+            <label className="block space-y-1 text-sm text-foreground">
+              <span>{t("Processes (PIDs)")}</span>
+              <Input inputMode="numeric" required value={createPids} onChange={(e) => setCreatePids(e.target.value)} />
+            </label>
+          </div>
           {createError && <Alert title={t("Error")}>{createError}</Alert>}
           <div className="flex justify-end gap-2">
             <Button type="button" variant="secondary" size="sm" onClick={() => setShowCreate(false)}>{t("Cancel")}</Button>

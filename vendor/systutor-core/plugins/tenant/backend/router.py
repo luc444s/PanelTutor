@@ -5,6 +5,8 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from plugins.apps.backend import plans_service
+from plugins.apps.backend.plans_client import PlanAgentError
 from plugins.tenant.backend.schemas import (
     AddTenantDomainRequest,
     AssignUserRequest,
@@ -297,8 +299,9 @@ def list_all_tenants(
 @router.post("", response_model=TenantResponse, status_code=201)
 def create_new_tenant(
     body: CreateTenantRequest,
+    request: Request,
     db: Session = Depends(get_db_session),
-    _current_user: User = Depends(require_permission("tenant.tenants.manage", platform_only=True)),
+    current_user: User = Depends(require_permission("tenant.tenants.manage", platform_only=True)),
 ) -> TenantResponse:
     try:
         tenant = create_tenant(db, name=body.name, slug=body.slug, domain=body.domain)
@@ -309,6 +312,35 @@ def create_new_tenant(
             password=body.user_password,
             full_name=body.user_full_name,
         )
+        resources = getattr(request.app.state, "apps_resources", None)
+        materializer = getattr(resources, "plan_materializer", None)
+        if materializer is None:
+            raise AppError(
+                "Tenant cell provisioning is unavailable",
+                status_code=503,
+                code="tenant.provisioning_unavailable",
+            )
+        from systutor.contracts.tenant_slugs import cell_slug_for
+
+        cell_slug = cell_slug_for(tenant.slug)
+        try:
+            materializer.provision(cell_slug)
+        except PlanAgentError as exc:
+            raise AppError(
+                "Tenant cell provisioning failed",
+                status_code=502,
+                code="tenant.cell_provision_failed",
+            ) from exc
+        plans_service.set_plan(
+            db,
+            tenant_id=tenant.id,
+            actor=current_user.id,
+            body=body.resource_plan,
+            materializer=materializer,
+            correlation_id=request.headers.get("X-Request-ID"),
+            commit=False,
+            commit_failure=False,
+        )
         db.commit()
     except IntegrityError as exc:
         db.rollback()
@@ -317,6 +349,9 @@ def create_new_tenant(
             status_code=409,
             code="tenant_conflict",
         ) from exc
+    except Exception:
+        db.rollback()
+        raise
     return _tenant_response(db, tenant)
 
 

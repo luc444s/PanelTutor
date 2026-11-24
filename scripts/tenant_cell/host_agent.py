@@ -35,7 +35,7 @@ from typing import Any
 from . import alloc, materializer, network, plans, relay
 
 ALLOWED_OPS = (
-    "apply", "apply_in_place", "remove", "verify", "probe", "reconcile",
+    "provision", "apply", "apply_in_place", "remove", "verify", "probe", "reconcile",
     "migrate_all", "nat_apply", "nat_remove",
     "db_relay_open", "db_relay_close", "db_relay_reconcile",
 )
@@ -230,6 +230,7 @@ class PlanAgent:
         migration_handler: Callable[..., dict[str, Any]] | None = None,
         nat_handler: Callable[[str, str], dict[str, Any]] | None = None,
         db_relay_handler: Callable[[str, dict[str, Any]], dict[str, Any]] | None = None,
+        provision_handler: Callable[[str], dict[str, Any]] | None = None,
     ) -> None:
         if not secret:
             raise ValueError("the host agent requires a shared secret")
@@ -247,6 +248,7 @@ class PlanAgent:
         self.migration_handler = migration_handler
         self.nat_handler = nat_handler
         self.db_relay_handler = db_relay_handler
+        self.provision_handler = provision_handler
 
     def authorize_peer(self, peer: Peer) -> None:
         if peer.uid not in self.allowed_uids:
@@ -299,6 +301,8 @@ class PlanAgent:
         checked = plans.validate_slug(str(slug))
         if tenant != checked:
             raise AuthorizationError(ERR_FORBIDDEN, "tenant and slug do not match")
+        if op == "provision":
+            return op
         self._authorize_tenant(checked)
         if op in ("apply", "apply_in_place", "verify", "probe"):
             self._validate_plan(request.get("plan"))
@@ -347,6 +351,14 @@ class PlanAgent:
                 result = self.endpoint_resolver(slug, self.data_root)
             elif op == "capacity":
                 result = self.capacity_reader(self.data_root)
+            elif op == "provision":
+                if self.provision_handler is None:
+                    raise RuntimeError("cell provision handler is not configured")
+                if not plans.mutation_allowed():
+                    raise plans.MutationDisabled("local mutations are disabled")
+                result = self.provision_handler(
+                    plans.validate_slug(str(request["slug"]))
+                )
             elif op in ("nat_status", "nat_apply", "nat_remove"):
                 if self.nat_handler is None:
                     raise RuntimeError("cell NAT handler is not configured")
@@ -425,6 +437,13 @@ def build_agent_from_env(data_root: str | Path) -> PlanAgent:
     )
     secret = read_secret(secret_file)
     executor = _local_executor()
+
+    def provision_cell(slug: str) -> dict[str, Any]:
+        from .cells import CellService
+        from .doctor import HostProbe
+
+        return CellService(HostProbe(), executor, data_root).provision(slug)
+
     return PlanAgent(
         materializer.PlanMaterializer(executor, data_root),
         secret=secret,
@@ -434,6 +453,7 @@ def build_agent_from_env(data_root: str | Path) -> PlanAgent:
         data_root=data_root,
         nat_handler=lambda op, slug: _cell_nat(executor, data_root, op, slug),
         db_relay_handler=_db_relay_handler(data_root),
+        provision_handler=provision_cell,
     )
 
 

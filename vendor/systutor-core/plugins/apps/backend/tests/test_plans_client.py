@@ -135,6 +135,21 @@ def test_apply_sends_a_bounded_request_and_reads_the_result(tmp_path: Path) -> N
     assert sock.closed is True
 
 
+def test_provision_sends_only_the_canonical_tenant_subject(tmp_path: Path) -> None:
+    client, sock = _with_client(
+        tmp_path, {"ok": True, "result": {"slug": "acme", "state": "ready"}}
+    )
+
+    assert client.provision("acme")["state"] == "ready"
+    request = _request(sock)
+    assert set(request) == {"op", "tenant", "slug", "token"}
+    assert request["op"] == "provision"
+    assert request["tenant"] == request["slug"] == "acme"
+    host_agent.verify_capability(
+        SECRET, request["token"], op="provision", tenant="acme", slug="acme"
+    )
+
+
 def test_connect_sets_the_configured_timeout_and_socket_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

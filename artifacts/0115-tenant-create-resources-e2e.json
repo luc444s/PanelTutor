@@ -1,0 +1,77 @@
+{
+  "checks": {
+    "cell_slug_matches": true,
+    "kernel_verify_ok": true,
+    "plan_applied": true,
+    "plan_still_applied": true,
+    "plan_tenant_matches": true,
+    "storage_matches": true,
+    "tenant_listed": true
+  },
+  "observed_at": "2026-11-24T20:17:08.126840+00:00",
+  "plan": {
+    "applied_at": "2026-11-24T20:16:55.522316Z",
+    "cgroup_path": "/tenant.slice/tenant-e2e0115-1795551410.slice",
+    "cpus": 1.0,
+    "cpuset": null,
+    "last_error": null,
+    "memory_bytes": 1073741824,
+    "pids": 256,
+    "slice": "tenant-e2e0115-1795551410.slice",
+    "status": "applied",
+    "storage_bytes": 10737418240,
+    "tenant_id": "3251b671-25a3-4c62-b5be-ae46714a2db4",
+    "tenant_slug": "e2e0115-1795551410",
+    "updated_at": "2026-11-24T20:16:55.545547Z"
+  },
+  "result": "PASS",
+  "spec": "0115",
+  "target": "http://127.0.0.1:3015",
+  "tenant": {
+    "domain": null,
+    "id": "3251b671-25a3-4c62-b5be-ae46714a2db4",
+    "is_active": true,
+    "name": "E2E 0115 1795551410",
+    "site_suffix": null,
+    "slug": "e2e0115-1795551410"
+  },
+  "verification": {
+    "cgroup_path": "/user.slice/user-60074.slice/user@60074.service",
+    "evidence": {
+      "cgroup_path": "/user.slice/user-60074.slice/user@60074.service",
+      "cpu_delta_usec": 2909633,
+      "cpu_max": "100000 100000",
+      "eperm": false,
+      "expected": {
+        "cpu_max": "100000 100000",
+        "memory_max": "1073741824",
+        "pids_max": "256"
+      },
+      "memory_events": "low 0\nhigh 0\nmax 0\noom 0\noom_kill 0\noom_group_kill 0\nsock_throttled 0",
+      "memory_max": "1073741824",
+      "memory_throttled": false,
+      "ok": true,
+      "owner_uid": "60074",
+      "pids_max": "256",
+      "rootless": {
+        "container_cgroup": "/user.slice/user-60074.slice/user@60074.service/user.slice/docker-be425a1ded86ffd510e67ecdf0f27939cf1eb68a5f2251d5b7f517341921e3b9.scope",
+        "container_pid": 3494200,
+        "user_manager_cgroup": "/user.slice/user-60074.slice/user@60074.service/init.scope"
+      },
+      "slice": "user-60074.slice",
+      "slug": "e2e0115-1795551410"
+    },
+    "ok": true,
+    "owner_uid": "60074",
+    "plan": {
+      "cpus": 1.0,
+      "memory": 1073741824,
+      "pids": 256
+    },
+    "properties": {},
+    "slice": "user-60074.slice",
+    "slug": "e2e0115-1795551410",
+    "tenant_id": "3251b671-25a3-4c62-b5be-ae46714a2db4",
+    "tenant_slug": "e2e0115-1795551410"
+  }
+}

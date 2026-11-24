@@ -32,7 +32,9 @@ DEFAULT_TIMEOUT = 5.0
 TOKEN_TTL_SECONDS = 60
 MAX_FRAME = 1 << 20  # plans are small; the protocol never carries files.
 
-OPS = ("apply", "remove", "verify", "reconcile", "endpoint", "capacity")
+OPS = (
+    "provision", "apply", "remove", "verify", "reconcile", "endpoint", "capacity",
+)
 RECONCILE_SUBJECT = "*"
 
 
@@ -283,6 +285,10 @@ class HostPlanMaterializerClient:
 
     def apply(self, tenant_slug: str, plan: dict[str, Any]) -> dict[str, Any]:
         return self._call("apply", tenant=tenant_slug, slug=tenant_slug, plan=plan)
+
+    def provision(self, tenant_slug: str) -> dict[str, Any]:
+        """Provision one canonical tenant cell through the privileged agent."""
+        return self._call("provision", tenant=tenant_slug, slug=tenant_slug)
 
     def remove(self, tenant_slug: str) -> dict[str, Any]:
         return self._call("remove", tenant=tenant_slug, slug=tenant_slug)

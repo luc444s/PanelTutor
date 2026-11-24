@@ -13,6 +13,7 @@ from typing import Any
 
 import pytest
 
+from plugins.apps.backend.plans_client import issue_capability as issue_plan_capability
 from scripts.tenant_cell import alloc, db_broker, host_agent, materializer
 from scripts.tenant_cell.host_agent import Peer, PlanAgent
 
@@ -146,11 +147,16 @@ def test_cell_docker_query_runs_as_the_cell_owner(monkeypatch, tmp_path: Path) -
 
 
 def _request(op: str, *, tenant: str = "demo", slug: str = "demo", **extra: Any):
+    issue = (
+        db_broker.issue_capability
+        if op.startswith("db_relay_")
+        else issue_plan_capability
+    )
     request: dict[str, Any] = {
         "op": op,
         "tenant": tenant,
         "slug": slug,
-        "token": db_broker.issue_capability(SECRET, op=op, tenant=tenant, slug=slug),
+        "token": issue(SECRET, op=op, tenant=tenant, slug=slug),
     }
     request.update(extra)
     return request
@@ -168,6 +174,50 @@ def _open_fields() -> dict[str, Any]:
 
 def _error(response: dict[str, Any]) -> str:
     return response["error"]["code"]
+
+
+def test_provision_is_the_only_tenant_op_allowed_before_allocation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS", "1")
+    seen: list[str] = []
+    agent = PlanAgent(
+        materializer.PlanMaterializer(FakeExecutor(), tmp_path),
+        secret=SECRET,
+        allowed_uids={UID},
+        data_root=tmp_path,
+        provision_handler=lambda slug: seen.append(slug) or {
+            "slug": slug,
+            "state": "ready",
+        },
+    )
+
+    response = agent.dispatch(_request("provision"), Peer(UID, 100))
+
+    assert response == {
+        "ok": True,
+        "result": {"slug": "demo", "state": "ready"},
+    }
+    assert seen == ["demo"]
+    assert _error(agent.dispatch(_request("apply", plan={}), Peer(UID, 100))) == (
+        host_agent.ERR_TENANT
+    )
+
+
+def test_provision_rejects_a_mismatched_tenant_subject(tmp_path: Path) -> None:
+    agent = PlanAgent(
+        materializer.PlanMaterializer(FakeExecutor(), tmp_path),
+        secret=SECRET,
+        allowed_uids={UID},
+        data_root=tmp_path,
+        provision_handler=lambda slug: {"slug": slug},
+    )
+
+    response = agent.dispatch(
+        _request("provision", tenant="other", slug="demo"), Peer(UID, 100)
+    )
+
+    assert _error(response) == host_agent.ERR_FORBIDDEN
 
 
 def test_open_is_dispatched_only_after_authorization(tmp_path: Path) -> None:

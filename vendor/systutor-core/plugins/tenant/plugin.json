@@ -3,7 +3,7 @@
   "name": "Tenant Management",
   "version": "0.1.0",
   "api_version": "1",
-  "requires": [],
+  "requires": ["apps"],
   "backend_entrypoint": "backend.register:register",
   "frontend_entrypoint": "frontend/register.ts",
   "permissions": [
