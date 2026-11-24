@@ -79,7 +79,8 @@ def deploy_trusted(
     _ensure_owned(runner, project)
     compose_rel = release.compose_path
     override = _override(
-        result.data, project, True, _env_path(staged), release_id
+        result.data, project, True, _env_path(staged), release_id,
+        tenant_id=options.tenant_id,
     )
     _stage_release(runner, result.root, staged, compose_rel, override, env_file)
     services = sorted(result.data["services"])

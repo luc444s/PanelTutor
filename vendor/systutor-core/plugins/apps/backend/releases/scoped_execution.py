@@ -378,6 +378,44 @@ def _merged_paths(    previous: Mapping[str, Path | None],
     return dict(sorted(result.items()))
 
 
+def _ingress_labels_missing(
+    runner: Runner,
+    containers: Mapping[str, Any],
+    services: Sequence[str],
+    tenant_id: str,
+) -> list[str]:
+    """Containers deployed before A.SPEC 0114 have no tenancy labels.
+
+    Docker cannot add labels to a running container, so a "noop" redeploy would
+    leave the cell ingress unable to publish the App.  Return the services that
+    must be recreated from the signed release.
+    """
+    missing: list[str] = []
+    for service in services:
+        container = containers.get(service)
+        if not isinstance(container, str) or not container:
+            missing.append(service)
+            continue
+        inspected = runner.run(
+            [
+                "docker",
+                "inspect",
+                "-f",
+                '{{index .Config.Labels "spanel.managed"}}|'
+                '{{index .Config.Labels "spanel.tenant"}}',
+                container,
+            ],
+            check=False,
+        )
+        if inspected.returncode:
+            missing.append(service)
+            continue
+        managed, _, tenant = inspected.stdout.strip().partition("|")
+        if managed != "true" or tenant != tenant_id:
+            missing.append(service)
+    return missing
+
+
 def deploy_scoped(
     runner: Runner,
     release: TrustedRelease,
@@ -513,6 +551,21 @@ def deploy_scoped(
             fallback_reason="runtime_containers_missing",
         )
         effective = list(all_services)
+    if tenant_id and not initial:
+        missing = _ingress_labels_missing(
+            runner, previous_containers, all_services, tenant_id
+        )
+        if missing:
+            # A noop plan would keep unlabeled containers alive and the cell
+            # ingress could never publish them.  Recreate only what is missing.
+            forced = sorted(set(effective) | set(missing))
+            plan = DeployPlan(
+                requested_scope="global",
+                effective_services=tuple(forced),
+                strategy="fallback",
+                fallback_reason="ingress_labels_missing",
+            )
+            effective = forced
     state = active_state(previous, release, plan, all_services)
     options = DeployOptions(
         repo=release.repo,
@@ -524,6 +577,7 @@ def deploy_scoped(
         wait=wait,
         release_id=staging_id,
         publish_state=publish_state,
+        tenant_id=tenant_id,
         tenant_environment_names=tuple(tenant_environment_names),
     )
     images = dict(previous_images)
