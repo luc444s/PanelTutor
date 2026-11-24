@@ -54,6 +54,7 @@ COPY scripts/site_backup.py scripts/site_backup_link.py scripts/site_restore.py 
     scripts/migrate_env.py scripts/refresh_routes.py \
     scripts/migrate_apps_rootless.py scripts/e2e_0114_apps_rootless_ingress.py \
     scripts/migrate_tenant_apps.py scripts/spanel_apps.py \
+    scripts/create_apps_token.py \
     scripts/grant_tenant_permission.py /app/scripts/
 RUN chmod 755 /app/scripts/site_backup.py /app/scripts/site_backup_link.py \
     /app/scripts/site_restore.py /app/scripts/e2e_apps_software_editores.py \
@@ -61,6 +62,7 @@ RUN chmod 755 /app/scripts/site_backup.py /app/scripts/site_backup_link.py \
     /app/scripts/refresh_routes.py /app/scripts/migrate_apps_rootless.py \
     /app/scripts/e2e_0114_apps_rootless_ingress.py \
     /app/scripts/migrate_tenant_apps.py \
+    /app/scripts/create_apps_token.py \
     /app/scripts/grant_tenant_permission.py
 
 COPY --from=frontend-build /app/apps/web/dist/ ./static/
