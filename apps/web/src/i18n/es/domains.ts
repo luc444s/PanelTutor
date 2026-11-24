@@ -120,6 +120,11 @@ const messages: Record<string, string> = {
   "Delete DNS record?": "¿Eliminar el registro DNS?",
   "Name, content and a valid TTL are required.":
     "Se requieren nombre, contenido y un TTL válido.",
+  "e.g. {example}": "Ej: {example}",
+  "An A record requires an IPv4 address (e.g. 203.0.113.10).":
+    "Un registro A requiere una dirección IPv4 (ej. 203.0.113.10).",
+  "An AAAA record requires an IPv6 address (e.g. 2001:db8::1).":
+    "Un registro AAAA requiere una dirección IPv6 (ej. 2001:db8::1).",
   "Saving...": "Guardando...",
   "Save": "Guardar",
   "Refresh": "Actualizar",

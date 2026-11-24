@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   CLOUDFLARE_FLOW_MAX_MS,
+  CLOUDFLARE_UPSTREAM_VALIDATION,
   canManageCloudflareClient,
   canProvisionCloudflare,
   canRegisterClient,
@@ -14,6 +15,9 @@ import {
   needsClientRegistration,
   pollDecision,
   provisionStateMessage,
+  recordContentExample,
+  recordContentProblem,
+  safeUpstreamDetail,
   zoneCount,
 } from "../../../../vendor/systutor-core/plugins/domains/frontend/cloudflare/logic";
 
@@ -91,6 +95,50 @@ describe("Cloudflare panel policy", () => {
     expect(errorMessageFrom({ status: 403, code: "domains.dns.cloudflare.forbidden" }))
       .toMatch(/permission/);
     expect(errorMessageFrom(new Error("secret-canary"))).not.toMatch(/secret-canary/);
+  });
+
+  it("shows a sanitized upstream validation detail in the toast", () => {
+    expect(
+      cloudflareErrorMessage(
+        422,
+        CLOUDFLARE_UPSTREAM_VALIDATION,
+        "Invalid DNS record content",
+      ),
+    ).toBe("Invalid DNS record content");
+    expect(
+      errorMessageFrom({
+        status: 422,
+        code: CLOUDFLARE_UPSTREAM_VALIDATION,
+        message: "Bearer abc.def.ghi was rejected 8130fe55771d1075944573b85571bd7b",
+      }),
+    ).toBe("<redacted> was rejected <redacted>");
+  });
+
+  it("keeps the generic 422 message when there is no safe detail", () => {
+    expect(cloudflareErrorMessage(422)).toMatch(/configured/);
+    expect(
+      cloudflareErrorMessage(422, CLOUDFLARE_UPSTREAM_VALIDATION, "   "),
+    ).toMatch(/configured/);
+  });
+
+  it("offers a per-type example in the content placeholder", () => {
+    expect(recordContentExample("A")).toBe("203.0.113.10");
+    expect(recordContentExample("AAAA")).toBe("2001:db8::1");
+    expect(recordContentExample("cname")).toBe("test2.example.com");
+    expect(recordContentExample("TXT")).toMatch(/spf1/);
+  });
+
+  it("rejects hostnames in A records and IPv4 in AAAA records locally", () => {
+    expect(recordContentProblem("A", "test2.systutor.com")).toMatch(/IPv4/);
+    expect(recordContentProblem("A", "203.0.113.10")).toBeNull();
+    expect(recordContentProblem("AAAA", "203.0.113.10")).toMatch(/IPv6/);
+    expect(recordContentProblem("AAAA", "2001:db8::1")).toBeNull();
+    expect(recordContentProblem("CNAME", "test2.systutor.com")).toBeNull();
+  });
+
+  it("bounds and redacts credential-like upstream details", () => {
+    expect(safeUpstreamDetail("x".repeat(500))).toHaveLength(160);
+    expect(safeUpstreamDetail("Bearer abcdefghijklmnop bad")).toBe("<redacted> bad");
   });
 
   it("counts zones defensively", () => {

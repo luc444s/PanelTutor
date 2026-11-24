@@ -84,6 +84,12 @@ def _service(request: Request, db: Session) -> CloudflareService:
 
 
 def _translate(exc: CloudflareError) -> AppError:
+    if exc.detail and exc.status_code in {400, 422}:
+        return AppError(
+            exc.detail,
+            status_code=422,
+            code="domains.dns.cloudflare.upstream_validation",
+        )
     return AppError(str(exc), status_code=exc.status_code, code=exc.code)
 
 

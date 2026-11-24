@@ -16,7 +16,7 @@ import {
   listCloudflareRecords,
   updateCloudflareRecord,
 } from "./api";
-import { errorMessageFrom } from "./logic";
+import { errorMessageFrom, recordContentExample, recordContentProblem } from "./logic";
 import type { CloudflareRecord, CloudflareRecordWrite, CloudflareZone } from "./types";
 
 const RECORD_TYPES = ["A", "AAAA", "CNAME", "MX", "TXT", "CAA", "NS", "SRV"];
@@ -139,6 +139,11 @@ export function CloudflareDnsPanel({ zone }: { zone: CloudflareZone }) {
       toast.error(t("Name, content and a valid TTL are required."));
       return;
     }
+    const contentProblem = recordContentProblem(draft.type, draft.content);
+    if (contentProblem) {
+      toast.error(t(contentProblem));
+      return;
+    }
     saveMutation.mutate({
       name: absoluteName(draft.name),
       type: draft.type,
@@ -166,6 +171,7 @@ export function CloudflareDnsPanel({ zone }: { zone: CloudflareZone }) {
           onChange={(event) => setDraft({ ...draft, name: event.target.value })}
           {...noAutofillProps} /></label>
         <label className="text-sm sm:col-span-2">{t("Content")}<Input value={draft.content}
+          placeholder={t("e.g. {example}", { example: recordContentExample(draft.type) })}
           onChange={(event) => setDraft({ ...draft, content: event.target.value })}
           spellCheck={false} {...noAutofillProps} /></label>
         <label className="text-sm">TTL<Input type="number" min={1} value={draft.ttl}

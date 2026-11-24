@@ -18,6 +18,7 @@ from plugins.domains.backend.cloudflare.client import (
     CloudflareRateLimit,
     CloudflareRecord,
     CloudflareUnavailable,
+    CloudflareValidation,
     CloudflareZone,
     OAuthTokens,
 )
@@ -344,6 +345,35 @@ def test_zones_records_content_and_error_mapping(tmp_path: Path, monkeypatch) ->
             fake.zone_error = CloudflareUnavailable("down")
             unavailable = client.get("/api/v1/plugins/domains/dns/cloudflare/zones")
             assert unavailable.status_code == 503
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_record_validation_error_reaches_the_ui_with_a_safe_detail(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app, fake, db, holder, _cipher, engine = build_app(tmp_path, monkeypatch)
+    try:
+        with TestClient(app) as client:
+            holder["context"] = context("t1", "domains.dns.cloudflare")
+            fake.record_error = CloudflareValidation(
+                "Cloudflare rejected the request", detail="Invalid DNS record content"
+            )
+            response = client.post(
+                "/api/v1/plugins/domains/dns/cloudflare/zones/z1/records",
+                json={
+                    "name": "example.com",
+                    "type": "A",
+                    "content": "test2.example.com",
+                    "ttl": 300,
+                    "proxied": False,
+                },
+            )
+            assert response.status_code == 422
+            body = response.json()["error"]
+            assert body["code"] == "domains.dns.cloudflare.upstream_validation"
+            assert body["message"] == "Invalid DNS record content"
     finally:
         db.close()
         engine.dispose()

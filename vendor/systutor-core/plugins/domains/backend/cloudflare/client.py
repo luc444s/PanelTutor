@@ -3,13 +3,15 @@
 This is the only module allowed to talk to Cloudflare.  It performs OAuth
 client registration, the authorization-code exchange, refresh, best-effort
 revocation and read-only account/zone/DNS-record discovery.  Errors are
-normalized and never carry response bodies, tokens or credentials.
+normalized and never carry raw response bodies, tokens or credentials. A
+bounded, redacted validation detail from Cloudflare may be kept for the UI.
 """
 
 from __future__ import annotations
 
 import base64
 import json
+import re
 import socket
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -35,15 +37,26 @@ RefreshCallback = Callable[[], "CloudflareCredentials"]
 
 
 class CloudflareError(Exception):
-    """Base normalized error. The message never contains secrets or bodies."""
+    """Base normalized error. The message never contains secrets or bodies.
+
+    ``detail`` is an optional, already sanitized validation message from
+    Cloudflare; it is the only part of an upstream body allowed to reach the UI.
+    """
 
     status_code = 503
     code = "domains.dns.cloudflare.unavailable"
     exit_code = 5
 
-    def __init__(self, message: str, *, http_status: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        http_status: int | None = None,
+        detail: str | None = None,
+    ) -> None:
         super().__init__(message)
         self.http_status = http_status
+        self.detail = detail
 
 
 class CloudflareValidation(CloudflareError):
@@ -206,6 +219,43 @@ def _default_transport(
         raise CloudflareUnavailable("Cloudflare is not reachable") from exc
 
 
+_MAX_UPSTREAM_DETAIL = 160
+_UPSTREAM_SECRET_PATTERNS = (
+    re.compile(r"\bBearer\s+\S+", re.IGNORECASE),
+    re.compile(r"\b[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{20,}\.[A-Za-z0-9_-]{10,}\b"),
+    re.compile(r"\b[0-9a-fA-F]{32}\b"),
+)
+
+
+def _safe_upstream_detail(raw: bytes) -> str | None:
+    """Extract one bounded, redacted Cloudflare validation message.
+
+    The upstream body is never returned as-is: only the first string
+    ``errors[].message`` survives, with secrets and account identifiers
+    redacted. Anything unexpected yields ``None``.
+    """
+    try:
+        payload = json.loads(raw.decode("utf-8", "replace"))
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(payload, dict):
+        return None
+    errors = payload.get("errors")
+    if not isinstance(errors, list):
+        return None
+    for entry in errors:
+        if not isinstance(entry, dict):
+            continue
+        message = entry.get("message")
+        if not isinstance(message, str):
+            continue
+        cleaned = " ".join(message.split())
+        for pattern in _UPSTREAM_SECRET_PATTERNS:
+            cleaned = pattern.sub("<redacted>", cleaned)
+        return cleaned[:_MAX_UPSTREAM_DETAIL] or None
+    return None
+
+
 def _status_error(status: int) -> CloudflareError:
     if status in {401, 403}:
         return CloudflarePermission("Cloudflare rejected the authorization", http_status=status)
@@ -270,7 +320,9 @@ class CloudflareClient:
     ) -> tuple[Any, dict[str, Any]]:
         status, raw = self._http(method, url, headers, body)
         if not 200 <= status < 300:
-            raise _status_error(status)
+            error = _status_error(status)
+            error.detail = _safe_upstream_detail(raw)
+            raise error
         if not raw:
             return {}, {}
         try:
