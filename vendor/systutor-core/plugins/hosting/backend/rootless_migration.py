@@ -205,6 +205,8 @@ class RootlessMigrationService:
             return None
         info = source.inspect("container", site.container_name) or {}
         raw = env_of(info).get("WORDPRESS_DB_HOST", "").split(":", 1)[0] or None
+
+        candidates: list[str] = []
         env = {"_SPANEL_RUNTIME_HANDLE": source}
         try:
             _raw_host, host, *_ = resolve_database_binding(
@@ -214,9 +216,21 @@ class RootlessMigrationService:
                 inspector=lambda name: source.inspect("container", name),
                 resolve_alias=resolver_alias_de_contenedor,
             )
+            if host:
+                candidates.append(host)
         except AppError:
-            return raw
-        return host or raw
+            pass
+        # Legacy layout: the managed DB container is named after the site.
+        # The panel's alias scan can be ambiguous when several containers on
+        # the site's networks declare `db`; the naming convention is exact.
+        candidates.append(f"{site.container_name}-db")
+        if raw:
+            candidates.append(raw)
+
+        for candidate in dict.fromkeys(candidates):
+            if candidate and source.inspect("container", candidate) is not None:
+                return candidate
+        return raw
 
     def _stop_source(self, site: HostingSite, source) -> None:
         source.command(("stop", site.container_name))

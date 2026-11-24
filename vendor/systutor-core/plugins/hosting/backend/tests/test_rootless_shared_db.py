@@ -38,7 +38,11 @@ def test_database_name_uses_the_shared_alias_resolver(monkeypatch) -> None:
 
     class Source:
         def inspect(self, kind, name):
-            return info if name == site.container_name else None
+            if name == site.container_name:
+                return info
+            if name == "legalattorney-clean-db":
+                return {"State": {"Running": True}}
+            return None
 
         def command(self, args, *, input=None):
             return b""
@@ -60,6 +64,31 @@ def test_database_name_uses_the_shared_alias_resolver(monkeypatch) -> None:
     assert service._database_name(site, Source()) == "legalattorney-clean-db"
     assert seen["runtime"] is not None
     assert seen["payload"] == info
+
+
+def test_database_name_falls_back_when_the_alias_is_ambiguous(monkeypatch) -> None:
+    """Several containers may declare `db`; the site-named container wins."""
+    service = object.__new__(RootlessMigrationService)
+    site = SimpleNamespace(kind="wordpress", container_name="legalattorney-clean")
+    info = {"Config": {"Env": ["WORDPRESS_DB_HOST=db"]}}
+
+    class Source:
+        def inspect(self, kind, name):
+            if name == site.container_name:
+                return info
+            if name == "legalattorney-clean-db":
+                return {"State": {"Running": True}}
+            return None
+
+        def command(self, args, *, input=None):
+            return b""
+
+    monkeypatch.setattr(
+        "plugins.hosting.backend.rootless_migration.resolve_database_binding",
+        lambda *_a, **_k: ("db", "db", "wp_clean", "user", "pw"),
+    )
+
+    assert service._database_name(site, Source()) == "legalattorney-clean-db"
 
 
 def test_database_name_is_none_for_non_wordpress() -> None:
