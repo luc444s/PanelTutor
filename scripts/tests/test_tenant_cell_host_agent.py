@@ -80,6 +80,49 @@ def test_legacy_shared_layout_resolves_the_shared_database(
     assert result["target_host"].startswith("127.")
 
 
+def test_legacy_private_layout_resolves_the_site_database(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _cell(tmp_path, "legalattorney-pe")
+    labels = {
+        "spanel.tenant": "tenant-id",
+        "spanel.managed": "true",
+        "spanel.site": "legalattorney-clean",
+    }
+    site = {
+        "Name": "/legalattorney-clean",
+        "Config": {"Labels": labels},
+        "NetworkSettings": {
+            "Networks": {
+                "spanel-hosting": {},
+                "spanel-legalattorney-clean-private": {},
+            }
+        },
+    }
+    database = {
+        "Name": "/legalattorney-clean-db",
+        "Config": {"Labels": labels},
+        "NetworkSettings": {
+            "Networks": {"spanel-legalattorney-clean-private": {}}
+        },
+    }
+
+    monkeypatch.setattr(
+        host_agent,
+        "_cell_docker_json",
+        lambda *_args: [site, database],
+    )
+    monkeypatch.setattr(host_agent, "_cell_docker_text", lambda *_args: "wpid\ndbid\n")
+
+    result = host_agent._legacy_private_descriptor(
+        tmp_path, "legalattorney-pe", "legalattorney-clean", "tenant-id"
+    )
+
+    assert result is not None
+    assert result["db_container"] == "legalattorney-clean-db"
+    assert result["private_network"] == "spanel-legalattorney-clean-private"
+
+
 def _request(op: str, *, tenant: str = "demo", slug: str = "demo", **extra: Any):
     request: dict[str, Any] = {
         "op": op,

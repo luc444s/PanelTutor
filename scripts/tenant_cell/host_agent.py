@@ -461,10 +461,73 @@ def _cell_docker_text(data_root: str | Path, slug: str, *args: str) -> str:
 
 def _cell_docker_json(data_root: str | Path, slug: str, *args: str) -> Any:
     """Run a cell Docker query whose output is JSON."""
+    output = _cell_docker_text(data_root, slug, *args)
     try:
-        return json.loads(_cell_docker_text(data_root, slug, *args) or "[]")
-    except ValueError as exc:
+        return json.loads(output or "[]")
+    except json.JSONDecodeError as exc:
         raise ValueError("cell docker query returned invalid JSON") from exc
+
+
+def _legacy_private_descriptor(
+    data_root: str | Path,
+    slug: str,
+    container: str,
+    tenant_id: str,
+) -> dict[str, Any] | None:
+    """Resolve a migrated legacy site whose private DB keeps its old name."""
+    ids = _cell_docker_text(
+        data_root,
+        slug,
+        "ps",
+        "-aq",
+        "--filter",
+        f"label=spanel.tenant={tenant_id}",
+        "--filter",
+        f"label=spanel.site={container}",
+    ).split()
+    if not ids:
+        return None
+    rows = _cell_docker_json(data_root, slug, "inspect", *ids)
+    if not isinstance(rows, list):
+        return None
+    site = next(
+        (row for row in rows if str(row.get("Name") or "").lstrip("/") == container),
+        None,
+    )
+    database = next(
+        (
+            row
+            for row in rows
+            if str(row.get("Name") or "").lstrip("/") == f"{container}-db"
+        ),
+        None,
+    )
+    if site is None or database is None:
+        return None
+    expected = {
+        "spanel.managed": "true",
+        "spanel.tenant": tenant_id,
+        "spanel.site": container,
+    }
+    for row in (site, database):
+        labels = (row.get("Config") or {}).get("Labels") or {}
+        if any(labels.get(key) != value for key, value in expected.items()):
+            return None
+    site_networks = set((site.get("NetworkSettings") or {}).get("Networks") or {})
+    db_networks = set((database.get("NetworkSettings") or {}).get("Networks") or {})
+    shared = sorted(
+        (site_networks & db_networks) - {"bridge", "host", "none", "spanel-hosting"}
+    )
+    if not shared:
+        return None
+    allocation = alloc.load_registry(data_root)["allocations"].get(slug)
+    if allocation is None:
+        raise ValueError(f"tenant {slug} has no cell allocation")
+    return {
+        "db_container": f"{container}-db",
+        "private_network": shared[0],
+        "target_host": network.loopback_address(int(allocation["index"])),
+    }
 
 
 def _legacy_shared_descriptor(
@@ -554,6 +617,11 @@ def _site_descriptor(data_root: str | Path, slug: str, site_id: str) -> dict[str
     if kind != "wordpress" or runtime != "rootless":
         raise ValueError("site is not a rootless WordPress database")
     if not (container.startswith("spanel-") and container.endswith("-wp")):
+        private = _legacy_private_descriptor(
+            data_root, slug, str(container), str(tenant_id)
+        )
+        if private is not None:
+            return private
         return _legacy_shared_descriptor(
             data_root, slug, str(container), str(tenant_id)
         )
