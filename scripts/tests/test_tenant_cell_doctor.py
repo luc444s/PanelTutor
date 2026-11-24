@@ -161,6 +161,35 @@ def test_daemon_pid_walks_through_rootlesskit_helper(monkeypatch) -> None:
     assert doctor_mod.HostProbe().daemon_pid(100) == 300
 
 
+def test_daemon_pid_falls_back_to_cell_uid_when_tree_is_stale(monkeypatch) -> None:
+    """Rootlesskit can reparent dockerd off the /proc children walk."""
+    files = {
+        "/proc/100/task/100/children": "200",
+        "/proc/200/comm": "slirp4netns\n",
+    }
+    monkeypatch.setattr(
+        doctor_mod, "_path_text", lambda path: files.get(str(path), "")
+    )
+    observed = {}
+
+    def fake_run(argv, **kwargs):
+        observed["argv"] = argv
+        return SimpleNamespace(stdout="4242\n")
+
+    monkeypatch.setattr(doctor_mod.subprocess, "run", fake_run)
+    assert doctor_mod.HostProbe().daemon_pid(100, 60002) == 4242
+    assert observed["argv"] == ["pgrep", "-u", "60002", "-x", "dockerd"]
+
+
+def test_daemon_pid_without_uid_keeps_the_parent_fallback(monkeypatch) -> None:
+    """Legacy callers that cannot pass a uid keep the old behaviour."""
+    files = {"/proc/100/task/100/children": "200"}
+    monkeypatch.setattr(
+        doctor_mod, "_path_text", lambda path: files.get(str(path), "")
+    )
+    assert doctor_mod.HostProbe().daemon_pid(100) == 100
+
+
 def test_doctor_cli_json_honors_injected_probe(monkeypatch) -> None:
     """The CLI doctor command reports the probe result as JSON."""
     from typer.testing import CliRunner

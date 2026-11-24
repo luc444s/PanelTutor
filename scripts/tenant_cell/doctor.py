@@ -174,12 +174,18 @@ class HostProbe:
         except (KeyError, ValueError, OSError):
             return 0
 
-    def daemon_pid(self, main_pid: int) -> int:
+    def daemon_pid(self, main_pid: int, uid: int | None = None) -> int:
         """Resolve the dockerd descendant of rootlesskit's MainPID.
 
         systemd reports the rootlesskit parent, whose uid_map is the identity
         map. RootlessKit inserts another helper process before dockerd, so walk
         descendants and match the process name rather than its argument text.
+
+        The process tree is not stable: rootlesskit can reparent the helper so
+        dockerd is no longer reachable through ``/proc/.../children`` (observed
+        on a migrated cell). When the walk fails, fall back to the cell owner's
+        uid so status keeps reporting the real rootless uid_map instead of the
+        parent's identity map.
         """
         if main_pid <= 0:
             return 0
@@ -201,6 +207,18 @@ class HostProbe:
             queue.extend(
                 _path_text(Path(f"/proc/{pid}/task/{pid}/children")).split()
             )
+        if uid is not None:
+            try:
+                result = subprocess.run(
+                    ["pgrep", "-u", str(int(uid)), "-x", "dockerd"],
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+                for raw_pid in result.stdout.split():
+                    return int(raw_pid)
+            except (ValueError, OSError):
+                pass
         return main_pid
 
     def read_uid_map(self, pid: int) -> list[dict[str, int]]:

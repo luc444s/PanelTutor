@@ -106,7 +106,7 @@ class CellService:
         # Prefer the live systemd MainPID: a restarted daemon changes it, and
         # the stored value must not make effective-profile evidence go stale.
         main_pid = self._main_pid(slug, cell) or int(cell.get("daemon_pid", 0))
-        pid = self.probe.daemon_pid(main_pid)
+        pid = self.probe.daemon_pid(main_pid, int(cell["uid"]))
         return {
             "state": cell.get("state", "unknown"),
             "slug": slug,
@@ -218,7 +218,7 @@ class CellService:
             )
             applied["daemon"] = True
         main_pid = self._main_pid(slug, cell) or pid
-        live_pid = self.probe.daemon_pid(main_pid)
+        live_pid = self.probe.daemon_pid(main_pid, int(cell["uid"]))
         if live_pid <= 0:
             pid = 0
         elif not applied.get("egress"):
@@ -349,7 +349,7 @@ class CellService:
             network.build_network_spec(slug, cell, cell.get("network_mode", "skuid"))
         )
         main_pid = self._main_pid(slug, cell) or int(cell.get("daemon_pid", 0))
-        live_pid = self.probe.daemon_pid(main_pid)
+        live_pid = self.probe.daemon_pid(main_pid, int(cell["uid"]))
         if live_pid <= 0:
             raise RuntimeError("cannot repair cell egress NAT without a running daemon")
         self.executor.ensure_cell_egress(int(cell["uid"]), network.egress_subnet())
