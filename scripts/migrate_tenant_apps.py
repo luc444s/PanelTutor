@@ -201,7 +201,13 @@ class AppsMigrator:
                 ]
             )
             if inspected.returncode != 0:
-                return False, f"container {container_id[:12]} is not in the cell"
+                detail = " ".join(
+                    (inspected.stderr or inspected.stdout or "").split()
+                )[:200]
+                return False, (
+                    f"container {container_id[:12]} is not in the cell"
+                    + (f": {detail}" if detail else "")
+                )
         return True, "containers already run in the cell"
 
     def _managed_labels(self, container_ids: list[str]) -> bool | None:
@@ -336,6 +342,25 @@ class AppsMigrator:
                 "name": plan.name,
                 "state": "failed",
                 "error": str(exc)[:400],
+            }
+        # A failed deploy leaves ``active_deployment`` pointing at the previous
+        # (non-rootless) deployment, so checking it alone would blame the cell
+        # instead of reporting why the operation failed.  The operation is the
+        # only source of truth for this deploy attempt.
+        finished = finished if isinstance(finished, dict) else {}
+        operation_status = str(finished.get("status") or "")
+        if operation_status != "succeeded":
+            public_error = str(finished.get("public_error") or "").strip()
+            return {
+                "ok": False,
+                "app_id": plan.app_id,
+                "name": plan.name,
+                "state": "failed",
+                "error": (
+                    public_error
+                    or f"deploy operation finished as {operation_status or 'unknown'}"
+                )[:400],
+                "operation": finished,
             }
         detail = self._application_detail(plan.app_id)
         active = detail.get("active_deployment") or {}

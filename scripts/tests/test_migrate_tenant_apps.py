@@ -103,6 +103,28 @@ def _cell_check(runner, ids):
     return True, "already rootless"
 
 
+def test_cell_check_surfaces_docker_inspect_error(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(Path, "is_socket", lambda self: True)
+
+    class Denied:
+        def __call__(self, argv, timeout=60):
+            return mod.CommandOutput(1, "", "permission denied")
+
+    migrator = mod.AppsMigrator(
+        FakeClient([detail()]),
+        tenant="demo",
+        data_root=str(tmp_path),
+        dry_run=False,
+    )
+    make_socket(tmp_path)
+    migrator.runner = Denied()
+    ok, reason = migrator._containers_in_cell(["abcdef1234567890"])
+    assert ok is False
+    assert reason == (
+        "container abcdef123456 is not in the cell: permission denied"
+    )
+
+
 def test_plan_marks_app_with_signed_release(tmp_path) -> None:
     migrator, _client, _runner = make_migrator(tmp_path, [detail()], known=set())
     plans = migrator.plans()
@@ -213,6 +235,58 @@ def test_apply_redeploys_signed_release_and_verifies_cell(tmp_path) -> None:
     posts = [call for call in client.calls if call[0] == "POST"]
     assert posts[0][2]["hardened_operation_id"] == "op-signed"
     assert ("POLL", "op-new", None, None) in client.calls
+
+
+def test_failed_operation_reports_its_error_instead_of_the_cell(tmp_path) -> None:
+    class FailedDeploy(FakeClient):
+        def poll(self, operation_id, timeout=900):
+            return {
+                "status": "failed",
+                "phase": "failed",
+                "public_error": "restoration failed; the application is degraded",
+            }
+
+    first = detail(containers=("old",))
+    # The failed deploy keeps the previous deployment active, which still runs
+    # outside the cell.  The migrator must not blame the cell for that.
+    new = detail(containers=("old",))
+    client = FailedDeploy([first], new_details=new)
+    runner = FakeRunner(set())
+    migrator = mod.AppsMigrator(
+        client,
+        tenant="demo",
+        data_root=str(tmp_path),
+        dry_run=False,
+        runner=runner,
+    )
+    migrator._containers_in_cell = lambda ids: _cell_check(runner, ids)  # type: ignore[method-assign]
+    make_socket(tmp_path)
+    results = migrator.migrate(migrator.plans())
+    assert results[0]["ok"] is False
+    assert results[0]["state"] == "failed"
+    assert results[0]["error"] == (
+        "restoration failed; the application is degraded"
+    )
+    assert "not in the cell" not in results[0]["error"]
+    assert results[0]["operation"]["status"] == "failed"
+
+
+def test_failed_operation_without_error_reports_its_status(tmp_path) -> None:
+    class FailedDeploy(FakeClient):
+        def poll(self, operation_id, timeout=900):
+            return {"status": "failed"}
+
+    client = FailedDeploy([detail(containers=("old",))])
+    migrator = mod.AppsMigrator(
+        client,
+        tenant="demo",
+        data_root=str(tmp_path),
+        dry_run=False,
+        verify_cell=False,
+    )
+    results = migrator.migrate(migrator.plans())
+    assert results[0]["ok"] is False
+    assert results[0]["error"] == "deploy operation finished as failed"
 
 
 def test_failed_poll_is_reported(tmp_path) -> None:
