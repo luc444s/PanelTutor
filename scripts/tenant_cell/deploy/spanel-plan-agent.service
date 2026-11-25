@@ -11,17 +11,20 @@ User=root
 Group=root
 UMask=0077
 NoNewPrivileges=true
-# The broker executes read-only Docker queries as each cell's own UID/GID.
-# No DAC override or Docker-wide group access is granted.
-CapabilityBoundingSet=CAP_SETUID CAP_SETGID
-AmbientCapabilities=CAP_SETUID CAP_SETGID
+# A.SPEC 0118: `provision` creates users/groups (/etc), cell homes,
+# /run/user/<uid>, nftables skuid rules, AppArmor profiles and cgroups. The
+# old plan-only sandbox made `groupadd` fail with "cannot lock /etc/group"
+# (exit 10) and `nft` fail with exit 3 (AF_NETLINK blocked). Peer credentials,
+# the HMAC capability and the local mutation gate remain the authorization.
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_NET_ADMIN CAP_SYS_ADMIN CAP_MAC_ADMIN
+AmbientCapabilities=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_NET_ADMIN CAP_SYS_ADMIN CAP_MAC_ADMIN
 PrivateTmp=true
-ProtectHome=true
-ProtectSystem=strict
-ReadWritePaths=/var/lib/spanel /etc/systemd/system /run/systemd/system /sys/fs/cgroup /run/spanel
+ProtectHome=false
+ProtectSystem=off
 # AF_UNIX is the control socket; AF_INET/AF_INET6 are required by the
-# optional rootless phpMyAdmin broker, which queries Postgres over TCP.
-RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+# optional rootless phpMyAdmin broker, which queries Postgres over TCP;
+# AF_NETLINK is required by nft (NETLINK_NETFILTER) for per-cell skuid rules.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
 RestrictSUIDSGID=true
 # A.SPEC 0102: the local mutation gate exists ONLY in this host process.
 Environment=SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1

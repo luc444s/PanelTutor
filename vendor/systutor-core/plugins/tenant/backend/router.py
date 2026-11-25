@@ -326,8 +326,12 @@ def create_new_tenant(
         try:
             materializer.provision(cell_slug)
         except PlanAgentError as exc:
+            # The host agent already bounds its messages and never leaks a
+            # stack trace. Surface the typed code so an operator can diagnose
+            # a failed provision from the panel instead of a terminal probe.
+            reason = str(exc).strip()[:300] or "no detail from host agent"
             raise AppError(
-                "Tenant cell provisioning failed",
+                f"Tenant cell provisioning failed: {exc.code}: {reason}",
                 status_code=502,
                 code="tenant.cell_provision_failed",
             ) from exc

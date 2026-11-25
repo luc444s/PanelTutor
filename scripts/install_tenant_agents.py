@@ -6,11 +6,16 @@ The agents are reusable host infrastructure, not per-tenant state:
 * ``spanel-plan-agent.service`` materializes tenant plans and answers capacity
   queries over ``/run/spanel/plan-agent.sock``;
 * ``spanel-edge-relay.service`` carries Traefik traffic to the loopback port of
-  each rootless cell over ``/run/spanel/edge-relay.sock``.
+  each rootless cell over ``/run/spanel/edge-relay.sock``;
+* ``spanel-agents-reconcile.timer`` re-applies both units at boot and daily, so
+  a deploy or an operator edit cannot leave the privileged boundary stale.
 
 This installer is idempotent and never rotates an existing token. It renders
 the units from ``scripts/tenant_cell/deploy/`` with the real repository path,
-Python interpreter, data root, app-container UID and Traefik UID.
+Python interpreter, data root, app-container UID and Traefik UID. After a code
+update a single command restores the whole host boundary:
+
+    python3 scripts/install_tenant_agents.py --force
 
 Usage (as root, from the repository):
 
@@ -44,6 +49,10 @@ PLAN_UNIT = "spanel-plan-agent.service"
 RELAY_UNIT = "spanel-edge-relay.service"
 PLAN_TEMPLATE = TEMPLATES / PLAN_UNIT
 RELAY_TEMPLATE = TEMPLATES / RELAY_UNIT
+RECONCILE_UNIT = "spanel-agents-reconcile.service"
+RECONCILE_TIMER = "spanel-agents-reconcile.timer"
+RECONCILE_TEMPLATE = TEMPLATES / RECONCILE_UNIT
+RECONCILE_TIMER_TEMPLATE = TEMPLATES / RECONCILE_TIMER
 RUNTIME_TMPFILES = "spanel.conf"
 RUNTIME_TEMPLATE = TEMPLATES / "spanel-runtime.conf"
 DEFAULT_DATA_ROOT = "/var/lib/spanel"
@@ -157,8 +166,9 @@ DEFAULT_TRAEFIK_CONTAINER = "traefik"
 
 def detect_traefik_ip(container: str = DEFAULT_TRAEFIK_CONTAINER) -> str:
     """Read Traefik's address in the proxy network (installer runs as root)."""
-    fmt = '{{(index .NetworkSettings.Networks "%s").IPAddress}}' % (
-        DEFAULT_PROXY_NETWORK,
+    fmt = (
+        f'{{{{(index .NetworkSettings.Networks "{DEFAULT_PROXY_NETWORK}")'
+        ".IPAddress}}"
     )
     checked = run(["docker", "inspect", "-f", fmt, container])
     return checked.stdout.strip() if checked.returncode == 0 else ""
@@ -185,6 +195,16 @@ def render_unit(
             )
         lines.append(line)
     return "\n".join(lines).rstrip() + "\n"
+
+
+def render_reconcile_units(repo: Path, python: str) -> tuple[str, str]:
+    """Render the self-healing units that re-apply agent config on boot/daily."""
+    service = (
+        read_text(RECONCILE_TEMPLATE)
+        .replace("<python>", python)
+        .replace("<repo>", str(repo))
+    )
+    return service, read_text(RECONCILE_TIMER_TEMPLATE)
 
 
 def write_unit(path: Path, content: str, *, dry_run: bool, force: bool = False) -> str:
@@ -353,8 +373,14 @@ class Installer:
         runtime = runtime_template.replace(
             "<SPANEL_TRAEFIK_UID>", str(traefik_uid or DEFAULT_TRAEFIK_UID)
         )
+        reconcile, reconcile_timer = render_reconcile_units(self.repo, self.python)
         units = {}
-        for name, content in ((PLAN_UNIT, plan), (RELAY_UNIT, relay)):
+        for name, content in (
+            (PLAN_UNIT, plan),
+            (RELAY_UNIT, relay),
+            (RECONCILE_UNIT, reconcile),
+            (RECONCILE_TIMER, reconcile_timer),
+        ):
             path = self.unit_dir / name
             units[name] = {
                 "path": str(path),
@@ -458,7 +484,14 @@ class Installer:
             self.repo / "scripts" / "tenant_cell" / "deploy" / RELAY_UNIT
         )
         runtime_template = read_text(RUNTIME_TEMPLATE)
-        if not plan_template or not relay_template or not runtime_template:
+        reconcile, reconcile_timer = render_reconcile_units(self.repo, self.python)
+        if (
+            not plan_template
+            or not relay_template
+            or not runtime_template
+            or not reconcile
+            or not reconcile_timer
+        ):
             raise InstallError("agent unit templates are missing")
         plan = render_unit(
             plan_template,
@@ -493,7 +526,12 @@ class Installer:
             "python": self.python,
             "units": {},
         }
-        for name, content in ((PLAN_UNIT, plan), (RELAY_UNIT, relay)):
+        for name, content in (
+            (PLAN_UNIT, plan),
+            (RELAY_UNIT, relay),
+            (RECONCILE_UNIT, reconcile),
+            (RECONCILE_TIMER, reconcile_timer),
+        ):
             path = self.unit_dir / name
             if (
                 path.exists()
@@ -545,6 +583,23 @@ class Installer:
                         f"cannot {verb} {name}: "
                         + (started.stderr or started.stdout).strip()[:300]
                     )
+            enabled = run(["systemctl", "enable", RECONCILE_TIMER], timeout=90)
+            if enabled.returncode != 0:
+                raise InstallError(
+                    f"cannot enable {RECONCILE_TIMER}: "
+                    + (enabled.stderr or enabled.stdout).strip()[:300]
+                )
+            verb = (
+                "restart"
+                if results["units"].get(RECONCILE_TIMER) == "written"
+                else "start"
+            )
+            started = run(["systemctl", verb, RECONCILE_TIMER], timeout=90)
+            if started.returncode != 0:
+                raise InstallError(
+                    f"cannot {verb} {RECONCILE_TIMER}: "
+                    + (started.stderr or started.stdout).strip()[:300]
+                )
             if not wait_socket(self.agent_socket):
                 raise InstallError(
                     f"plan-agent socket did not appear: {self.agent_socket}"

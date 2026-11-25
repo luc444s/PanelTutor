@@ -57,7 +57,17 @@ def test_inspect_reports_missing_units_and_sockets(installer) -> None:
     assert payload["traefik_uid"] == 1000
     assert payload["token"]["exists"] is False
     assert payload["units"][mod.PLAN_UNIT]["installed"] is False
+    assert payload["units"][mod.RECONCILE_TIMER]["installed"] is False
     assert payload["sockets"]["plan_agent_exists"] is False
+
+
+def test_render_reconcile_units_uses_repo_and_python(installer) -> None:
+    _inst, _fake = installer
+    service, timer = mod.render_reconcile_units(mod.ROOT, "/opt/spanel/host-venv/bin/python")
+    assert "/opt/spanel/host-venv/bin/python" in service
+    assert str(mod.ROOT / "scripts" / "install_tenant_agents.py") in service
+    assert "<python>" not in service and "<repo>" not in service
+    assert "OnBootSec=2min" in timer
 
 
 def test_dry_run_does_not_write(installer) -> None:
@@ -80,15 +90,29 @@ def test_install_creates_token_and_renders_units(installer) -> None:
     assert "ExecStart=/usr/bin/python3" in plan
     assert "spanel_tenant.py plan-agent --data-root /var/lib/spanel" in plan
     assert "Environment=SPANEL_PLAN_AGENT_ALLOWED_UIDS=0" in plan
-    assert "CapabilityBoundingSet=CAP_SETUID CAP_SETGID" in plan
-    assert "AmbientCapabilities=CAP_SETUID CAP_SETGID" in plan
+    caps = (
+        "CAP_SETUID CAP_SETGID CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE "
+        "CAP_NET_ADMIN CAP_SYS_ADMIN CAP_MAC_ADMIN"
+    )
+    assert f"CapabilityBoundingSet={caps}" in plan
+    assert f"AmbientCapabilities={caps}" in plan
+    # A.SPEC 0118: provisioning needs AF_NETLINK (nft), /etc (groupadd) and
+    # home dirs (cell XDG_RUNTIME_DIR); the plan-only sandbox broke all three.
+    assert "RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK" in plan
+    assert "ProtectSystem=off" in plan
+    assert "ProtectHome=false" in plan
     assert "User=1000" in relay
     # /run/spanel is managed by the tmpfiles.d entry owned by root:traefik-gid.
     # None of the units may declare RuntimeDirectory (systemd would chown it).
     assert "RuntimeDirectory=" not in plan
     assert "RuntimeDirectory=" not in relay
     assert "Environment=SPANEL_EDGE_RELAY_SOURCES=172.18.0.4" in relay
-    assert "ReadWritePaths=" in plan and "/run/spanel" in plan
+    reconcile = (inst.unit_dir / mod.RECONCILE_UNIT).read_text()
+    timer = (inst.unit_dir / mod.RECONCILE_TIMER).read_text()
+    assert "install_tenant_agents.py --force --json" in reconcile
+    assert str(mod.ROOT) in reconcile
+    assert "Unit=spanel-agents-reconcile.service" in timer
+    assert "WantedBy=timers.target" in timer
     runtime = (inst.tmpfiles_path).read_text()
     assert "d /run/spanel 0770 root 1000 -" in runtime
     # The human renderer must accept both install and --check payloads.
@@ -100,6 +124,8 @@ def test_install_restarts_units_it_rewrote(installer) -> None:
     inst.install(start=True)
     assert ["systemctl", "restart", mod.PLAN_UNIT] in fake.calls
     assert ["systemctl", "restart", mod.RELAY_UNIT] in fake.calls
+    assert ["systemctl", "enable", mod.RECONCILE_TIMER] in fake.calls
+    assert ["systemctl", "restart", mod.RECONCILE_TIMER] in fake.calls
     assert any(call[:2] == ["systemctl", "daemon-reload"] for call in fake.calls)
 
 

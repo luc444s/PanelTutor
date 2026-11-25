@@ -1,0 +1,11 @@
+[Unit]
+Description=Daily reconcile of Spanel host agent units
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=1d
+AccuracySec=1min
+Unit=spanel-agents-reconcile.service
+
+[Install]
+WantedBy=timers.target
