@@ -31,7 +31,9 @@ class AppsSettings:
     # which keeps the plans API fail-closed (503) by default.
     plan_agent_socket: Path = Path("")
     plan_agent_token_file: Path = Path("/run/secrets/plan_agent_token")
-    plan_agent_timeout: float = 5.0
+    # A.SPEC 0118: `provision` is much slower than plan apply/verify (it creates
+    # users, cells, nftables rules, AppArmor profiles and waits for logind).
+    plan_agent_timeout: float = 60.0
     plan_agent_allowed_uids: str = ""
     # A.SPEC 0106: TLS for rootless-backed routes. True is the existing
     # behaviour (PathRoute default); false is an explicit opt-out that renders
@@ -58,7 +60,7 @@ class AppsSettings:
                     "SPANEL_PLAN_AGENT_TOKEN_FILE", "/run/secrets/plan_agent_token"
                 )
             ),
-            plan_agent_timeout=float(os.environ.get("SPANEL_PLAN_AGENT_TIMEOUT", "5.0")),
+            plan_agent_timeout=float(os.environ.get("SPANEL_PLAN_AGENT_TIMEOUT", "60.0")),
             plan_agent_allowed_uids=os.environ.get("SPANEL_PLAN_AGENT_ALLOWED_UIDS", ""),
             rootless_routes_https=_env_bool(
                 "SPANEL_ROOTLESS_ROUTES_HTTPS", default=True

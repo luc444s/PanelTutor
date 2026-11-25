@@ -33,6 +33,11 @@ diagnosticar exigía sondas manuales desde el contenedor app.
 4. `POST /plugins/tenant/tenants` responde 502
    `tenant.cell_provision_failed` con el `code` y mensaje acotado del agente,
    para que el fallo se diagnostique desde el panel.
+5. El timeout del cliente del agente es de 60 s por defecto (override con
+   `SPANEL_PLAN_AGENT_TIMEOUT`), porque `provision` tarda mucho más que
+   `apply`/`verify`: crea usuario/grupo, directorios, reglas nftables, perfil
+   AppArmor y espera a logind. Con 5 s el panel mostraba
+   `timeout: host agent timed out`.
 
 ## Criterios de aceptación
 

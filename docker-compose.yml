@@ -16,6 +16,8 @@ services:
       # identical to the values in the tenant settings and systemd units.
       SPANEL_PLAN_AGENT_SOCKET: /run/spanel/plan-agent.sock
       SPANEL_PLAN_AGENT_TOKEN_FILE: /run/secrets/plan_agent_token
+      # A.SPEC 0118: provisioning a cell is much slower than applying a plan.
+      SPANEL_PLAN_AGENT_TIMEOUT: ${SPANEL_PLAN_AGENT_TIMEOUT:-60}
       SPANEL_CELL_METRICS_SOCKET: /run/spanel/cell-metrics.sock
       SPANEL_CELL_METRICS_TOKEN_FILE: /run/secrets/cell_metrics_token
       # A.SPEC 0110: hosting resolves each site's registered runtime from the
