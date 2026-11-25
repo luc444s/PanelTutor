@@ -162,6 +162,9 @@ if [[ "${SPANEL_SKIP_HOST_AGENTS:-0}" != "1" ]]; then
       [[ -x "$HOST_AGENT_PY" ]] || HOST_AGENT_PY=python3
       "$HOST_AGENT_PY" "$ROOT/scripts/install_tenant_agents.py" --force || fail \
         "host agent reconciliation failed; deployment aborted"
+      echo "Reconciling cell artifacts"
+      "$HOST_AGENT_PY" "$ROOT/scripts/tenant_cell/reconcile_cells.py" || fail \
+        "cell reconciliation failed; deployment aborted"
     else
       echo "Skipping host agent reconciliation (not root)" >&2
     fi

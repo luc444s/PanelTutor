@@ -38,6 +38,11 @@ diagnosticar exigía sondas manuales desde el contenedor app.
    `apply`/`verify`: crea usuario/grupo, directorios, reglas nftables, perfil
    AppArmor y espera a logind. Con 5 s el panel mostraba
    `timeout: host agent timed out`.
+6. `scripts/deploy.sh` también ejecuta `tenant_cell/reconcile_cells.py`: copia el
+   perfil seccomp actualizado a cada celda y desactiva `aio` en el ingress
+   nginx (`worker_aio_requests 0`), evitando que `io_setup` (bloqueado por el
+   filtro fail-closed antiguo) mate los workers y haga fallar la verificación
+   externa del sitio con HTTP 500.
 
 ## Criterios de aceptación
 
