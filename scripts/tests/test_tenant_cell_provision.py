@@ -7,6 +7,7 @@ no profile loaded, no nft rule installed, no remote host contacted.
 from __future__ import annotations
 
 import json
+import stat
 import sys
 from pathlib import Path
 from typing import Any
@@ -1191,3 +1192,19 @@ def test_reconcile_reinstalls_nat_only_for_provisioned_cells(
         for name, kw in executor.calls
         if name == "ensure_cell_egress"
     ] == ["172.18.0.0/16"]
+
+
+def test_user_unit_stays_readable_for_the_cell_user_manager(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from scripts.tenant_cell import executor as exec_mod
+
+    local = exec_mod.LocalExecutor()
+    monkeypatch.setenv("SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS", "1")
+    monkeypatch.setattr(exec_mod, "_USER_SYSTEMD_DIR", tmp_path)
+    monkeypatch.setattr(local, "_run_user", lambda _uid, _argv, **_kwargs: None)
+
+    local.install_user_unit("acme", 60001, "/user.slice/user-60001.slice/cell")
+
+    unit = tmp_path / "spanel-cell-acme.service"
+    assert stat.S_IMODE(unit.stat().st_mode) == 0o644

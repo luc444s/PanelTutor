@@ -87,6 +87,9 @@ def save_registry(data_root: str | Path, registry: dict[str, Any]) -> None:
     tmp.write_text(
         json.dumps(registry, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
+    # The edge relay runs as the unprivileged Traefik uid and reads this file.
+    # A privileged caller with UMask=0077 would otherwise leave it root-only.
+    tmp.chmod(0o644)
     tmp.replace(path)
 
 

@@ -9,6 +9,7 @@ from __future__ import annotations
 import http.server
 import os
 import socket
+import stat
 import sys
 import threading
 import time
@@ -324,3 +325,13 @@ def test_relay_unit_runs_as_traefik_uid_without_docker_mounts() -> None:
     assert "docker.sock" not in unit
     assert "SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1" in unit
     assert plans.MUTATION_GATE in unit
+
+
+def test_registry_is_readable_even_written_with_a_private_umask(tmp_path) -> None:
+    old_umask = os.umask(0o077)
+    try:
+        alloc.save_registry(str(tmp_path), alloc.default_registry())
+    finally:
+        os.umask(old_umask)
+    mode = stat.S_IMODE((tmp_path / "registry.json").stat().st_mode)
+    assert mode == 0o644  # the edge relay runs as the unprivileged Traefik uid

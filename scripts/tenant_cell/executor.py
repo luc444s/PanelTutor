@@ -499,6 +499,10 @@ class LocalExecutor(PlanExecutorMixin, Executor):
         self._write_file_once(
             path, systemd_unit(slug, uid, cgroup_path, DEFAULT_CGROUP_DRIVER)
         )
+        # The cell's user manager must be able to read the unit. A privileged
+        # caller with UMask=0077 would leave it 0600 and systemd marks it
+        # "bad", so the rootless dockerd never starts and no socket appears.
+        path.chmod(0o644)
         self._run_user(uid, ["systemctl", "--user", "daemon-reload"])
         self._run_user(uid, ["systemctl", "--user", "enable", f"spanel-cell-{slug}"])
 
