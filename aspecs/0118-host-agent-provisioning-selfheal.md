@@ -24,8 +24,9 @@ diagnosticar exigía sondas manuales desde el contenedor app.
    (skuid), perfiles AppArmor, cgroups y el socket del daemon rootless. La
    autorización sigue siendo peer-cred + capability HMAC + gate local.
 2. `install_tenant_agents.py --force` reescribe las units desde
-   `scripts/tenant_cell/deploy/` y reinicia solo lo que cambió. Es el único
-   comando necesario tras un deploy.
+   `scripts/tenant_cell/deploy/` y reinicia solo lo que cambió. `scripts/deploy.sh`
+   lo ejecuta en cada deploy (con `SPANEL_SKIP_HOST_AGENTS=1` se puede omitir en
+   máquinas de desarrollo sin systemd/root).
 3. `spanel-agents-reconcile.{service,timer}` reaplica las units 2 minutos
    después del arranque y una vez al día. Los drop-ins (`*.service.d/`) son
    propiedad del operador y nunca se modifican.
@@ -36,8 +37,9 @@ diagnosticar exigía sondas manuales desde el contenedor app.
 ## Criterios de aceptación
 
 - `install_tenant_agents.py --check` reporta las cuatro units y el timer activo.
-- Tras `git pull`, un solo `install_tenant_agents.py --force` deja el host
-  listo para crear tenants sin `systemctl edit` ni sondas Python.
+- Tras `scripts/deploy.sh`, el host queda listo para crear tenants sin
+  `systemctl edit` ni sondas Python: el deploy ya reaplica las units y habilita
+  el timer.
 - Un fallo de provisión muestra en la UI el motivo real (p. ej.
   `agent_error: ...`), no solo el texto genérico.
 

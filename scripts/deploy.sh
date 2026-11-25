@@ -149,6 +149,25 @@ else
   echo "Probe image ready: $PROBE_IMAGE_VALUE"
 fi
 
+# A.SPEC 0118: keep the privileged host agent boundary in sync with this
+# checkout. The installer is idempotent: it only restarts units whose rendered
+# content changed and enables spanel-agents-reconcile.timer, so every deploy
+# leaves the host ready to provision tenants. Set SPANEL_SKIP_HOST_AGENTS=1 on
+# developer machines without systemd/root.
+if [[ "${SPANEL_SKIP_HOST_AGENTS:-0}" != "1" ]]; then
+  if [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
+    if [[ $(id -u) -eq 0 ]]; then
+      echo "Reconciling host agent units"
+      python3 "$ROOT/scripts/install_tenant_agents.py" --force || fail \
+        "host agent reconciliation failed; deployment aborted"
+    else
+      echo "Skipping host agent reconciliation (not root)" >&2
+    fi
+  else
+    echo "Skipping host agent reconciliation (no systemd)" >&2
+  fi
+fi
+
 echo "Deploying Spanel at https://$SPANEL_DOMAIN_VALUE"
 cd "$ROOT"
 exec docker compose \
