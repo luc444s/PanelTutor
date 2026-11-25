@@ -18,6 +18,7 @@ from pathlib import Path
 from typing import Any
 
 from .alloc import DEFAULT_CGROUP_DRIVER, LEGACY_CGROUP_DRIVER
+from .images import ensure_image as ensure_cell_image
 from .network import (
     cell_dns_resolver,
     cell_network_driver,
@@ -110,6 +111,9 @@ class Executor:
 
     def start_daemon(self, slug: str) -> int:
         raise NotImplementedError
+
+    def ensure_cell_images(self, socket_path: str, images: list[str]) -> None:
+        """A.SPEC 0119: no-op by default so fakes never shell out to Docker."""
 
     def stop_daemon(
         self,
@@ -327,6 +331,12 @@ class LocalExecutor(PlanExecutorMixin, Executor):
     def _run(self, argv: list[str]) -> None:
         self._ensure_gate()
         subprocess.run(argv, check=True)
+
+    def ensure_cell_images(self, socket_path: str, images: list[str]) -> None:
+        """A.SPEC 0119: stream hosting images into the cell from rootful Docker."""
+        self._ensure_gate()
+        for image in images:
+            ensure_cell_image(socket_path, image)
 
     def cell_dockerd_pid(self, cell_uid: int) -> int:
         """Find the cell's dockerd, never rootlesskit's host-netns parent."""

@@ -8,6 +8,9 @@ Two idempotent fixes run for every allocated cell:
 * make the in-cell nginx ingress stop calling ``io_setup`` (blocked by older
   profiles), reloading only when the config actually changed.
 
+A.SPEC 0119 adds a third: seed the hosting images (``wordpress``/``mariadb``)
+through the rootful daemon, because a cell has no egress to pull them.
+
 The app container never runs this: it needs root and the cell docker sockets.
 """
 
@@ -26,6 +29,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.tenant_cell import alloc
+from scripts.tenant_cell.images import ensure_cell_images
 
 PROFILE = Path(__file__).resolve().parent / "deploy" / "cell-seccomp.json"
 INGRESS = "spanel-cell-ingress"
@@ -112,6 +116,8 @@ def main(argv: list[str] | None = None) -> int:
         "dry_run": args.dry_run,
         "seccomp": reconcile_seccomp(data_root, dry_run=args.dry_run),
         "ingress": reconcile_ingress(data_root, dry_run=args.dry_run),
+        # A.SPEC 0119: every deploy repairs the hosting images of live cells.
+        "images": [] if args.dry_run else ensure_cell_images(data_root),
     }
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
@@ -121,6 +127,9 @@ def main(argv: list[str] | None = None) -> int:
         for item in payload["ingress"]:
             detail = f" ({item['detail']})" if item.get("detail") else ""
             print(f"ingress {item['slug']}: {item['ingress']}{detail}")
+        for item in payload["images"]:
+            detail = f" ({item['detail']})" if item.get("detail") else ""
+            print(f"images {item['slug']}: {item['images']}{detail}")
     return 0
 
 

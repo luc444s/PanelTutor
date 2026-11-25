@@ -10,7 +10,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from . import alloc, apparmor, audit, firewall, network
+from . import alloc, apparmor, audit, firewall, images, network
 from .alloc import DEFAULT_CGROUP_DRIVER, LEGACY_CGROUP_DRIVER, cgroup_driver
 from .doctor import DoctorReport, HostProbe, run_doctor
 from .executor import Executor  # re-exported for tests
@@ -217,6 +217,12 @@ class CellService:
                 self.executor.start_daemon(slug, int(cell["uid"]), driver) or 0
             )
             applied["daemon"] = True
+        # A.SPEC 0119: the daemon is up and its socket exists; seed the images
+        # hosting needs now, because the cell itself has no egress to pull them.
+        socket = self.socket_path(slug)
+        if not applied.get("images") and socket.exists():
+            self.executor.ensure_cell_images(str(socket), images.desired_images())
+            applied["images"] = True
         main_pid = self._main_pid(slug, cell) or pid
         live_pid = self.probe.daemon_pid(main_pid, int(cell["uid"]))
         if live_pid <= 0:
