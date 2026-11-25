@@ -358,6 +358,8 @@ def test_seccomp_allowlist_covers_runtime_syscalls() -> None:
         "newfstatat", "fstatat64",
         # GAP-0105-7: Gitea/MariaDB init needs chown, fifos and device nodes.
         "fchown", "fchownat", "lchown", "mkfifo", "mkfifoat", "mknod", "mknodat",
+        # A.SPEC 0118: nginx workers call io_setup at startup even with aio off.
+        "io_setup", "io_submit", "io_getevents", "io_cancel", "io_destroy",
     ):
         assert syscall in allowed, syscall
 

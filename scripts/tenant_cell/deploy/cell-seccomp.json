@@ -25,6 +25,7 @@
         "getresuid", "getrlimit", "getrusage", "getsid", "getsockname",
         "getsockopt", "gettid", "gettimeofday", "getuid", "inotify_add_watch",
         "inotify_init", "inotify_init1", "inotify_rm_watch", "ioctl",
+        "io_setup", "io_submit", "io_getevents", "io_cancel", "io_destroy",
         "ioperm", "iopl", "ipc", "kill", "listen", "lseek", "lstat",
         "madvise", "memfd_create", "mincore", "mkdir", "mkdirat", "mlock",
         "mlockall", "mmap", "mprotect", "mremap", "msgctl", "msgget",
