@@ -9,6 +9,7 @@ Traefik uid; without it the spec falls back to a per-cell netns.
 from __future__ import annotations
 
 import os
+import re
 from ipaddress import IPv4Address, IPv4Network
 from typing import Any
 
@@ -33,7 +34,15 @@ _CELL_NET_DNS = {
 # gives containers egress lives *inside* the cell netns; --iptables=false on the
 # daemon is preserved and no host iptables rule is ever installed.
 _CELL_EGRESS_ENV = "SPANEL_TENANT_CELL_EGRESS_SUBNET"
-_DEFAULT_CELL_EGRESS = "172.17.0.0/16"
+_CELL_EGRESS_IFACE_ENV = "SPANEL_TENANT_CELL_EGRESS_IFACE"
+# Docker assigns the cell bridges sequentially (docker0 172.17, then 172.18,
+# 172.19, ...). A single 172.17/16 rule left real WordPress containers without
+# egress NAT; the whole RFC1918 /12 covers every bridge the cell can create.
+# It is always paired with `-o <iface>` so intra-cell bridge traffic is never
+# masqueraded. Narrow to explicit /16 CIDRs with the env var if desired.
+_DEFAULT_CELL_EGRESS = "172.16.0.0/12"
+_DEFAULT_CELL_EGRESS_IFACE = "tap0"  # slirp4netns side inside the cell netns
+_IFACE_RE = re.compile(r"^[A-Za-z0-9_.-]{1,15}$")
 # The builtin rootlesskit port driver honours the requested host IP, so a cell
 # can publish on its dedicated 127.x.y.z:20000+ address.  The slirp4netns port
 # driver only binds 127.0.0.1, which is why the old cells had no listener.
@@ -98,9 +107,7 @@ def publish_port(index: int) -> int:
     return 20000 + (int(index) % 20000)
 
 
-def egress_subnet() -> str:
-    """Validated CIDR that receives MASQUERADE inside each cell netns."""
-    raw = os.environ.get(_CELL_EGRESS_ENV, _DEFAULT_CELL_EGRESS).strip()
+def _validate_egress_subnet(raw: str) -> str:
     try:
         network = IPv4Network(raw, strict=False)
     except ValueError:
@@ -112,18 +119,67 @@ def egress_subnet() -> str:
     return str(network)
 
 
-def masquerade_argv(subnet: str | None = None, action: str = "-A") -> list[str]:
+def egress_subnets() -> list[str]:
+    """Validated CIDRs that receive MASQUERADE inside each cell netns.
+
+    The env var accepts a comma/whitespace separated list so a host can pin the
+    exact bridges it uses (e.g. ``172.18.0.0/16,172.19.0.0/16``). The default
+    RFC1918 /12 covers docker0 and every br-* network a cell may create.
+    """
+    raw = os.environ.get(_CELL_EGRESS_ENV, "").strip()
+    if not raw:
+        return [_DEFAULT_CELL_EGRESS]
+    subnets: list[str] = []
+    for item in re.split(r"[,\s]+", raw):
+        if not item:
+            continue
+        value = _validate_egress_subnet(item)
+        if value not in subnets:
+            subnets.append(value)
+    if not subnets:
+        return [_DEFAULT_CELL_EGRESS]
+    return subnets
+
+
+def egress_subnet() -> str:
+    """First configured egress CIDR, kept for legacy single-subnet callers."""
+    return egress_subnets()[0]
+
+
+def cell_egress_iface() -> str:
+    """Egress interface inside the cell netns (slirp4netns tap0 by default).
+
+    Restricting MASQUERADE to this interface is what keeps WP -> MariaDB traffic
+    between the cell's bridges from being rewritten by the NAT rule.
+    """
+    iface = os.environ.get(_CELL_EGRESS_IFACE_ENV, _DEFAULT_CELL_EGRESS_IFACE).strip()
+    if not _IFACE_RE.fullmatch(iface):
+        raise ValueError(
+            f"{_CELL_EGRESS_IFACE_ENV} must be a network interface name (1-15 chars)"
+        )
+    return iface
+
+
+def masquerade_argv(
+    subnet: str | None = None,
+    action: str = "-A",
+    iface: str | None = None,
+) -> list[str]:
     """iptables argv for the cell-netns POSTROUTING MASQUERADE rule.
 
     ``action`` is ``-A`` (append), ``-C`` (check, for idempotency) or ``-D``
-    (delete, for deprovision).  The caller is responsible for running it with
-    ``nsenter -t <cell dockerd pid> -n`` so it never touches the host netns.
+    (delete, for deprovision). The rule is bound to the slirp egress interface
+    so intra-cell bridge traffic is never masqueraded. ``nsenter`` must enter
+    both the user and network namespaces: iptables needs CAP_NET_ADMIN in the
+    user namespace that owns the cell's netns.
     """
     if action not in {"-A", "-C", "-D"}:
         raise ValueError(f"unsupported iptables action: {action!r}")
     return [
         "iptables", "-t", "nat", action, "POSTROUTING",
-        "-s", subnet or egress_subnet(), "-j", "MASQUERADE",
+        "-s", subnet or egress_subnet(),
+        "-o", iface or cell_egress_iface(),
+        "-j", "MASQUERADE",
     ]
 
 
@@ -131,14 +187,15 @@ def netns_masquerade_argv(
     dockerd_pid: int,
     subnet: str | None = None,
     action: str = "-A",
+    iface: str | None = None,
 ) -> list[str]:
     """Build a root-only command targeting the cell dockerd network namespace."""
     pid = int(dockerd_pid)
     if pid <= 0:
         raise ValueError("dockerd pid must be positive")
     return [
-        "/usr/bin/nsenter", "-t", str(pid), "-n",
-        *masquerade_argv(subnet, action),
+        "/usr/bin/nsenter", "-t", str(pid), "-U", "-n", "--",
+        *masquerade_argv(subnet, action, iface),
     ]
 
 
@@ -173,7 +230,8 @@ def build_network_spec(
     uid = int(alloc["uid"])
     port = publish_port(index)
     table = f"spanel-cell-{slug}"
-    subnet = egress_subnet()
+    subnets = egress_subnets()
+    iface = cell_egress_iface()
     spec: dict[str, Any] = {
         "slug": slug,
         "mode": mode,
@@ -184,13 +242,24 @@ def build_network_spec(
         "traefik_uid": traefik_uid(),
         # A.SPEC 0109-R3: egress and publication are cell facts, carried on
         # every spec so provisioning and deprovisioning use the same truth.
-        "egress_subnet": subnet,
+        "egress_subnet": subnets[0],
+        "egress_subnets": subnets,
+        "egress_iface": iface,
         "egress": {
-            "subnet": subnet,
-            "check": masquerade_argv(subnet, "-C"),
-            "add": masquerade_argv(subnet, "-A"),
-            "delete": masquerade_argv(subnet, "-D"),
+            "subnet": subnets[0],
+            "check": masquerade_argv(subnets[0], "-C", iface),
+            "add": masquerade_argv(subnets[0], "-A", iface),
+            "delete": masquerade_argv(subnets[0], "-D", iface),
         },
+        "egress_rules": [
+            {
+                "subnet": subnet,
+                "check": masquerade_argv(subnet, "-C", iface),
+                "add": masquerade_argv(subnet, "-A", iface),
+                "delete": masquerade_argv(subnet, "-D", iface),
+            }
+            for subnet in subnets
+        ],
         "rootlesskit_env": rootlesskit_port_driver_env(index),
     }
     if mode == "skuid":

@@ -528,6 +528,42 @@ The plan-agent receives `SYSTUTOR_DATABASE_URL`, `SPANEL_DB_BROKER_BIND`,
 (mode `0600`). The last one pins the cell network driver: slirp4netns is the
 host policy, gvisor-tap-vsock is legacy-only and never used for new cells.
 
+### Cell egress NAT (slow `wp-admin`)
+
+Outbound traffic from a cell (e.g. WordPress update checks to
+`api.wordpress.org`) needs MASQUERADE **inside the cell netns**, never on the
+host. The installed rule is:
+
+```
+nsenter -t <pid> -U -n -- iptables -t nat -C POSTROUTING \
+  -s <subnet> -o tap0 -j MASQUERADE
+```
+
+- `-o tap0` keeps WP → MariaDB traffic between internal bridges out of the NAT.
+- The default `172.16.0.0/12` covers `docker0` and every `br-*`. To pin exact
+  bridges, set `SPANEL_TENANT_CELL_EGRESS_SUBNET` to a comma-separated list
+  (e.g. `172.18.0.0/16,172.19.0.0/16,172.20.0.0/16,172.22.0.0/16`) and
+  `SPANEL_TENANT_CELL_EGRESS_IFACE` to override `tap0`. Both belong in
+  `/etc/spanel/plan-agent.env` too.
+
+The rules live in the netns and **vanish when RootlessKit restarts**. Install
+the privileged reconcile timer to restore them automatically:
+
+```bash
+sudo install -m 0644 scripts/tenant_cell/deploy/spanel-cell-egress-reconcile.service /etc/systemd/system/
+sudo install -m 0644 scripts/tenant_cell/deploy/spanel-cell-egress-reconcile.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now spanel-cell-egress-reconcile.timer
+```
+
+Manual idempotent reapply:
+
+```bash
+cd /opt/spanel/scripts
+sudo SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1 \
+  /opt/spanel/host-venv/bin/python -m tenant_cell.cli nat reconcile --json
+```
+
 ## Mail certificates and scheduled tasks
 
 ### `install_cert_agent.py`

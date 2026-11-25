@@ -24,6 +24,7 @@ from scripts.tenant_cell.cells import (
     Executor,
     MigrationVerificationFailed,
     ProvisionRefused,
+    reconcile_cell_egress,
 )
 from scripts.tenant_cell.doctor import HostProbe
 from scripts.tenant_cell.executor import DELEGATE_CONTROLLERS, systemd_unit
@@ -534,10 +535,15 @@ def test_systemd_unit_uses_rootlesskit_netns_and_no_host_iptables() -> None:
     assert "ExecStopPost=" not in unit
 
 
-def test_netns_masquerade_command_always_targets_dockerd_pid() -> None:
-    argv = network.netns_masquerade_argv(4242, "172.17.0.0/16", "-C")
-    assert argv[:5] == ["/usr/bin/nsenter", "-t", "4242", "-n", "iptables"]
-    assert argv[-4:] == ["-s", "172.17.0.0/16", "-j", "MASQUERADE"]
+def test_netns_masquerade_command_enters_cell_user_and_net_namespace() -> None:
+    argv = network.netns_masquerade_argv(4242, "172.18.0.0/16", "-C")
+    assert argv[:7] == [
+        "/usr/bin/nsenter", "-t", "4242", "-U", "-n", "--", "iptables",
+    ]
+    assert argv[7:] == [
+        "-t", "nat", "-C", "POSTROUTING",
+        "-s", "172.18.0.0/16", "-o", "tap0", "-j", "MASQUERADE",
+    ]
 
 
 def test_cell_dns_is_configurable_and_rejects_host_loopback(monkeypatch) -> None:
@@ -939,15 +945,18 @@ def test_network_spec_carries_nat_and_port_driver_for_both_modes() -> None:
     for mode in ("skuid", "netns"):
         spec = network.build_network_spec("acme", {"index": 3, "uid": 60003}, mode)
 
-        assert spec["egress_subnet"] == "172.17.0.0/16"
-        assert spec["egress"]["subnet"] == "172.17.0.0/16"
+        assert spec["egress_subnet"] == "172.16.0.0/12"
+        assert spec["egress_subnets"] == ["172.16.0.0/12"]
+        assert spec["egress_iface"] == "tap0"
+        assert spec["egress"]["subnet"] == "172.16.0.0/12"
         assert spec["egress"]["check"] == [
             "iptables", "-t", "nat", "-C", "POSTROUTING",
-            "-s", "172.17.0.0/16", "-j", "MASQUERADE",
+            "-s", "172.16.0.0/12", "-o", "tap0", "-j", "MASQUERADE",
         ]
         assert spec["egress"]["add"][3] == "-A"
         assert spec["egress"]["delete"][3] == "-D"
         assert spec["egress"]["add"][4:] == spec["egress"]["delete"][4:]
+        assert [rule["subnet"] for rule in spec["egress_rules"]] == ["172.16.0.0/12"]
         assert spec["rootlesskit_env"] == {
             "DOCKERD_ROOTLESS_ROOTLESSKIT_PORT_DRIVER": "builtin"
         }
@@ -955,24 +964,49 @@ def test_network_spec_carries_nat_and_port_driver_for_both_modes() -> None:
         assert spec["publish_port"] == 20003
 
 
-def test_egress_subnet_is_validated_and_configurable(monkeypatch) -> None:
+def test_egress_subnets_are_validated_and_configurable(monkeypatch) -> None:
     monkeypatch.setenv("SPANEL_TENANT_CELL_EGRESS_SUBNET", "10.7.0.0/16")
+    assert network.egress_subnets() == ["10.7.0.0/16"]
     assert network.egress_subnet() == "10.7.0.0/16"
+
+    monkeypatch.setenv(
+        "SPANEL_TENANT_CELL_EGRESS_SUBNET",
+        "172.18.0.0/16, 172.19.0.0/16 172.20.0.0/16,172.18.0.0/16",
+    )
+    assert network.egress_subnets() == [
+        "172.18.0.0/16", "172.19.0.0/16", "172.20.0.0/16",
+    ]
 
     monkeypatch.setenv("SPANEL_TENANT_CELL_EGRESS_SUBNET", "127.0.0.0/8")
     with pytest.raises(ValueError, match="unicast subnet"):
-        network.egress_subnet()
+        network.egress_subnets()
 
     monkeypatch.setenv("SPANEL_TENANT_CELL_EGRESS_SUBNET", "0.0.0.0/0")
     with pytest.raises(ValueError, match="whole IPv4 space"):
-        network.egress_subnet()
+        network.egress_subnets()
 
     monkeypatch.setenv("SPANEL_TENANT_CELL_EGRESS_SUBNET", "not-a-cidr")
     with pytest.raises(ValueError, match="IPv4 CIDR"):
-        network.egress_subnet()
+        network.egress_subnets()
 
     with pytest.raises(ValueError, match="unsupported iptables action"):
         network.masquerade_argv(action="-I")
+
+
+def test_egress_iface_is_validated(monkeypatch) -> None:
+    monkeypatch.delenv("SPANEL_TENANT_CELL_EGRESS_IFACE", raising=False)
+    assert network.cell_egress_iface() == "tap0"
+
+    monkeypatch.setenv("SPANEL_TENANT_CELL_EGRESS_IFACE", "veth-cell1")
+    assert network.cell_egress_iface() == "veth-cell1"
+    assert network.masquerade_argv("10.0.0.0/8", "-A")[-4:] == [
+        "-o", "veth-cell1", "-j", "MASQUERADE",
+    ]
+
+    for bad in ("", "a/b", "x" * 16):
+        monkeypatch.setenv("SPANEL_TENANT_CELL_EGRESS_IFACE", bad)
+        with pytest.raises(ValueError, match="interface name"):
+            network.cell_egress_iface()
 
 
 def test_user_unit_leaves_nat_to_the_privileged_host_lifecycle() -> None:
@@ -1007,7 +1041,7 @@ def test_deprovision_spec_reverts_the_cell_nat(tmp_path) -> None:
     assert applied["egress"]["subnet"] == removed["egress"]["subnet"]
     assert removed["egress"]["delete"] == [
         "iptables", "-t", "nat", "-D", "POSTROUTING",
-        "-s", "172.17.0.0/16", "-j", "MASQUERADE",
+        "-s", "172.16.0.0/12", "-o", "tap0", "-j", "MASQUERADE",
     ]
 
 
@@ -1069,7 +1103,7 @@ def test_cell_egress_apply_is_pid_correct_and_idempotent(monkeypatch) -> None:
     def fake_run(argv, **_kwargs):
         nonlocal installed
         calls.append(list(argv))
-        action = argv[7]
+        action = argv[9]
         if action == "-C":
             return SimpleNamespace(returncode=0 if installed else 1)
         if action == "-A":
@@ -1078,11 +1112,12 @@ def test_cell_egress_apply_is_pid_correct_and_idempotent(monkeypatch) -> None:
 
     monkeypatch.setattr(exec_mod.subprocess, "run", fake_run)
 
-    local.ensure_cell_egress(60000, "172.17.0.0/16")
-    local.ensure_cell_egress(60000, "172.17.0.0/16")
+    local.ensure_cell_egress(60000, "172.18.0.0/16")
+    local.ensure_cell_egress(60000, "172.18.0.0/16")
 
-    assert all(call[2:4] == ["7331", "-n"] for call in calls)
-    assert [call[7] for call in calls].count("-A") == 1
+    assert all(call[2:5] == ["7331", "-U", "-n"] for call in calls)
+    assert [call[9] for call in calls].count("-A") == 1
+    assert all(call[-4:-2] == ["-o", "tap0"] for call in calls)
 
 
 def test_cell_egress_remove_reverts_only_cell_rule(monkeypatch) -> None:
@@ -1104,7 +1139,7 @@ def test_cell_egress_remove_reverts_only_cell_rule(monkeypatch) -> None:
     def fake_run(argv, **_kwargs):
         nonlocal installed
         calls.append(list(argv))
-        action = argv[7]
+        action = argv[9]
         if action == "-C":
             return SimpleNamespace(returncode=0 if installed else 1)
         if action == "-D":
@@ -1113,8 +1148,46 @@ def test_cell_egress_remove_reverts_only_cell_rule(monkeypatch) -> None:
 
     monkeypatch.setattr(exec_mod.subprocess, "run", fake_run)
 
-    local.remove_cell_egress(60000, "172.17.0.0/16")
+    local.remove_cell_egress(60000, "172.18.0.0/16")
 
     assert installed is False
-    assert [call[7] for call in calls].count("-D") == 1
-    assert all(call[2:4] == ["7331", "-n"] for call in calls)
+    assert [call[9] for call in calls].count("-D") == 1
+    assert all(call[2:5] == ["7331", "-U", "-n"] for call in calls)
+
+
+def test_provision_installs_nat_for_every_configured_subnet(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv(
+        "SPANEL_TENANT_CELL_EGRESS_SUBNET", "172.18.0.0/16,172.19.0.0/16"
+    )
+    svc, _, executor = _service(tmp_path)
+    svc.provision("acme")
+
+    applied = [
+        kw["subnet"]
+        for name, kw in executor.calls
+        if name == "ensure_cell_egress"
+    ]
+    assert applied == ["172.18.0.0/16", "172.19.0.0/16"]
+
+
+def test_reconcile_reinstalls_nat_only_for_provisioned_cells(
+    tmp_path, monkeypatch
+) -> None:
+    monkeypatch.setenv("SPANEL_TENANT_CELL_EGRESS_SUBNET", "172.18.0.0/16")
+    svc, _, executor = _service(tmp_path)
+    svc.provision("acme")
+    executor.calls.clear()
+
+    result = reconcile_cell_egress(tmp_path, executor)
+
+    assert result["ok"] is True
+    assert result["iface"] == "tap0"
+    assert result["subnets"] == ["172.18.0.0/16"]
+    assert result["cells"] == [{"slug": "acme", "ok": True}]
+    assert [
+        kw["subnet"]
+        for name, kw in executor.calls
+        if name == "ensure_cell_egress"
+    ] == ["172.18.0.0/16"]

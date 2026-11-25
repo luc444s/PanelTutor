@@ -38,8 +38,13 @@ temporal mientras el campo histórico siga existiendo.**
   y `--ip6tables=false`.
 - `scripts/tenant_cell/network.py`: conservar `egress_subnet()`, `masquerade_argv()` y el
   port-driver `builtin`; exponer un helper que, dado el PID de dockerd de la celda,
-  construya el argv `nsenter -t <pid> -n iptables -t nat -C/-A/-D POSTROUTING -s <subnet>
-  -j MASQUERADE`.
+  construya el argv `nsenter -t <pid> -U -n -- iptables -t nat -C/-A/-D POSTROUTING
+  -s <subnet> -o <iface> -j MASQUERADE` (el `-U` da CAP_NET_ADMIN en el user
+  namespace dueño del netns; el `-o tap0` evita NAT entre puentes internos).
+  **Corrección posterior:** una sola subnet `172.17/16` dejaba los contenedores
+  WordPress sin egress; el helper acepta múltiples CIDR y por defecto cubre
+  `172.16.0.0/12`. Ver `spanel-cell-egress-reconcile.timer` para la reaplicación
+  tras reiniciar RootlessKit.
 - `scripts/tenant_cell/cells.py`: en el aprovisionamiento (root), resolver el PID principal
   de dockerd de la celda y aplicar la regla **dentro de su netns** de forma idempotente; en
   el desaprovisionamiento, revertirla. Reintentar si el daemon aún no está listo; fallar

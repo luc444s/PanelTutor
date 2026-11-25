@@ -20,7 +20,7 @@ from typer.core import TyperOption
 
 from . import alloc, db_broker, host_agent, materializer, network, plans, relay
 from . import doctor as doctor_mod
-from .cells import CellNotFound, CellService, ProvisionRefused
+from .cells import CellNotFound, CellService, ProvisionRefused, reconcile_cell_egress
 from .executor import LocalExecutor
 
 
@@ -753,6 +753,29 @@ def db_relay_reconcile(
         lambda: _db_relay_request("db_relay_reconcile", "*"),
         json_output,
         "db_relay_reconcile",
+    )
+    _emit(result, json_output)
+
+
+# --- Cell egress NAT: privileged host-side reconciliation -------------------
+
+
+nat_app = typer.Typer(help="Reapply rootless cell egress NAT after a netns restart.")
+app.add_typer(nat_app, name="nat")
+
+
+@nat_app.command("reconcile")
+def nat_reconcile(
+    data_root: str = typer.Option(DEFAULT_DATA_ROOT, "--data-root"),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON."),
+) -> None:
+    """Install the MASQUERADE rule on every provisioned cell, idempotently.
+
+    Run by ``spanel-cell-egress-reconcile.service`` after RootlessKit restarts:
+    iptables rules live in the cell netns and vanish with it.
+    """
+    result = _execute(
+        lambda: reconcile_cell_egress(data_root), json_output, "nat_reconcile"
     )
     _emit(result, json_output)
 

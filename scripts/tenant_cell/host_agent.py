@@ -705,20 +705,25 @@ def _cell_nat(
     if allocation is None:
         raise AuthorizationError(ERR_TENANT, f"tenant {slug} has no cell allocation")
     uid = int(allocation["uid"])
-    subnet = network.egress_subnet()
+    subnets = network.egress_subnets()
     if op == "nat_apply":
-        executor.ensure_cell_egress(uid, subnet)
+        executor.ensure_cell_egress_all(uid, subnets)
     elif op == "nat_remove":
-        executor.remove_cell_egress(uid, subnet)
+        executor.remove_cell_egress_all(uid, subnets)
     pid = executor.cell_dockerd_pid(uid)
     if pid <= 0:
         raise RuntimeError(f"cell {slug} has no running dockerd")
-    enabled = executor.cell_egress_enabled(uid, subnet)
+    per_subnet = {
+        subnet: executor.cell_egress_enabled(uid, subnet) for subnet in subnets
+    }
     return {
         "slug": slug,
         "dockerd_pid": pid,
-        "subnet": subnet,
-        "enabled": enabled,
+        "subnet": subnets[0],
+        "subnets": subnets,
+        "iface": network.cell_egress_iface(),
+        "per_subnet": per_subnet,
+        "enabled": all(per_subnet.values()),
         "namespace": "cell",
     }
 

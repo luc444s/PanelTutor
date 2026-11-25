@@ -21,6 +21,7 @@ from .alloc import DEFAULT_CGROUP_DRIVER, LEGACY_CGROUP_DRIVER
 from .network import (
     cell_dns_resolver,
     cell_network_driver,
+    egress_subnets,
     netns_masquerade_argv,
     rootlesskit_port_driver_env,
 )
@@ -196,6 +197,27 @@ class Executor:
 
     def cell_egress_enabled(self, cell_uid: int, subnet: str) -> bool:
         raise NotImplementedError
+
+    def ensure_cell_egress_all(
+        self, cell_uid: int, subnets: list[str] | None = None
+    ) -> None:
+        """Apply every configured NAT rule; fake executors inherit this loop."""
+        for subnet in subnets or egress_subnets():
+            self.ensure_cell_egress(cell_uid, subnet)
+
+    def remove_cell_egress_all(
+        self, cell_uid: int, subnets: list[str] | None = None
+    ) -> None:
+        for subnet in subnets or egress_subnets():
+            self.remove_cell_egress(cell_uid, subnet)
+
+    def cell_egress_all_enabled(
+        self, cell_uid: int, subnets: list[str] | None = None
+    ) -> bool:
+        selected = subnets or egress_subnets()
+        return bool(selected) and all(
+            self.cell_egress_enabled(cell_uid, subnet) for subnet in selected
+        )
 
 
 def systemd_unit(

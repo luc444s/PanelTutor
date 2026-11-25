@@ -1,0 +1,15 @@
+[Unit]
+Description=Reapply rootless cell egress NAT (slirp4netns MASQUERADE)
+Documentation=man:systemd.service(5)
+After=network-online.target spanel-plan-agent.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# The MASQUERADE rules live inside each cell netns and vanish whenever
+# RootlessKit recreates it. Only the privileged host may reinstall them; the
+# cell's user unit must never run iptables (EPERM, see A.SPEC 0109-R4).
+Environment=SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1
+Environment=PYTHONPATH=/opt/spanel/scripts
+WorkingDirectory=/opt/spanel/scripts
+ExecStart=/opt/spanel/host-venv/bin/python -m tenant_cell.cli nat reconcile --data-root /var/lib/spanel --json

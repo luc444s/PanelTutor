@@ -1,0 +1,11 @@
+[Unit]
+Description=Reconcile rootless cell egress NAT after netns restarts
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=10s
+Unit=spanel-cell-egress-reconcile.service
+
+[Install]
+WantedBy=timers.target

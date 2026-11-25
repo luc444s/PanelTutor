@@ -222,7 +222,9 @@ class CellService:
         if live_pid <= 0:
             pid = 0
         elif not applied.get("egress"):
-            self.executor.ensure_cell_egress(int(cell["uid"]), network.egress_subnet())
+            self.executor.ensure_cell_egress_all(
+                int(cell["uid"]), network.egress_subnets()
+            )
             applied["egress"] = True
 
         # The relay port is fronted by the host firewall; without this rule a
@@ -276,8 +278,8 @@ class CellService:
         firewall_result = firewall.remove_relay_ingress(int(cell["index"]))
         driver = cgroup_driver(cell)
         if applied.get("egress"):
-            self.executor.remove_cell_egress(
-                int(cell["uid"]), network.egress_subnet()
+            self.executor.remove_cell_egress_all(
+                int(cell["uid"]), network.egress_subnets()
             )
         if applied.get("daemon"):
             self.executor.stop_daemon(slug, int(cell["uid"]), driver)
@@ -352,7 +354,9 @@ class CellService:
         live_pid = self.probe.daemon_pid(main_pid, int(cell["uid"]))
         if live_pid <= 0:
             raise RuntimeError("cannot repair cell egress NAT without a running daemon")
-        self.executor.ensure_cell_egress(int(cell["uid"]), network.egress_subnet())
+        self.executor.ensure_cell_egress_all(
+            int(cell["uid"]), network.egress_subnets()
+        )
         firewall_result = firewall.ensure_relay_ingress(int(cell["index"]))
         applied["firewall"] = bool(
             firewall_result.get("active") and not firewall_result.get("error")
@@ -551,3 +555,39 @@ class CellService:
             self.data_root, tenant_slug=slug, verb="apparmor_remove", exit_code=0
         )
         return {"slug": slug, "profile": apparmor.profile_name(slug), "removed": True}
+
+
+def reconcile_cell_egress(
+    data_root: str | Path, executor: Executor | None = None
+) -> dict[str, Any]:
+    """Reinstall cell egress NAT after a RootlessKit/netns restart.
+
+    iptables rules live in the cell netns and disappear with it. This is the
+    privileged host-side repair used by the reconcile timer; it is idempotent
+    and only touches cells that were provisioned with egress enabled.
+    """
+    if executor is None:
+        from .executor import LocalExecutor
+
+        executor = LocalExecutor()
+    subnets = network.egress_subnets()
+    allocations = alloc.load_registry(data_root)["allocations"]
+    results: list[dict[str, Any]] = []
+    for slug, cell in sorted(allocations.items()):
+        applied = cell.get("applied") or {}
+        if not applied.get("egress"):
+            continue
+        uid = int(cell["uid"])
+        try:
+            if executor.cell_dockerd_pid(uid) <= 0:
+                raise RuntimeError("cell dockerd is not running")
+            executor.ensure_cell_egress_all(uid, subnets)
+            results.append({"slug": slug, "ok": True})
+        except Exception as exc:  # noqa: BLE001 - keep reconciling the other cells
+            results.append({"slug": slug, "ok": False, "error": str(exc)[:300]})
+    return {
+        "iface": network.cell_egress_iface(),
+        "subnets": subnets,
+        "cells": results,
+        "ok": all(item["ok"] for item in results),
+    }
