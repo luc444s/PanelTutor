@@ -129,6 +129,25 @@ def test_install_restarts_units_it_rewrote(installer) -> None:
     assert any(call[:2] == ["systemctl", "daemon-reload"] for call in fake.calls)
 
 
+def test_install_reports_the_inspection_error_instead_of_none(
+    installer, monkeypatch
+) -> None:
+    inst, _fake = installer
+    real_inspect = inst.inspect
+    calls = {"n": 0}
+
+    def flaky_inspect():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_inspect()
+        return {"ok": False, "error": "capacity check failed: denied"}
+
+    monkeypatch.setattr(inst, "inspect", flaky_inspect)
+    payload = inst.install(start=False)
+    assert payload["ok"] is False
+    assert payload["error"] == "capacity check failed: denied"
+
+
 def test_install_never_rotates_an_existing_token(installer) -> None:
     inst, _fake = installer
     inst.etc_dir.mkdir(parents=True)

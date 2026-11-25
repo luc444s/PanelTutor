@@ -444,6 +444,7 @@ class Installer:
             result["capacity"] = capacity_check(self.agent_socket, self.token_path)
             if not result["capacity"].get("ok"):
                 result["ok"] = False
+                result["error"] = result["capacity"].get("error") or "capacity check failed"
         return result
 
     def install(
@@ -614,6 +615,9 @@ class Installer:
         results["inspect"] = self.inspect()
         if not results["inspect"].get("ok"):
             results["ok"] = False
+            results["error"] = (
+                results["inspect"].get("error") or "post-install inspection failed"
+            )
         return results
 
 

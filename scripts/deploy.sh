@@ -158,7 +158,9 @@ if [[ "${SPANEL_SKIP_HOST_AGENTS:-0}" != "1" ]]; then
   if [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
     if [[ $(id -u) -eq 0 ]]; then
       echo "Reconciling host agent units"
-      python3 "$ROOT/scripts/install_tenant_agents.py" --force || fail \
+      HOST_AGENT_PY="$ROOT/host-venv/bin/python"
+      [[ -x "$HOST_AGENT_PY" ]] || HOST_AGENT_PY=python3
+      "$HOST_AGENT_PY" "$ROOT/scripts/install_tenant_agents.py" --force || fail \
         "host agent reconciliation failed; deployment aborted"
     else
       echo "Skipping host agent reconciliation (not root)" >&2
