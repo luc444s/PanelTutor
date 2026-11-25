@@ -420,6 +420,9 @@ class HostingService:
         try:
             password = provisioner.create(names, tenant_id, domain, email)
         except Fallo as exc:
+            logger.error(
+                "hosting_provision_failed domain=%s detail=%s", domain, exc
+            )
             raise AppError(str(exc), status_code=409, code="hosting_provision_failed") from exc
         return self._finish_create(
             tenant_context,

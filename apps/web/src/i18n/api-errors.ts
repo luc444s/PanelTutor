@@ -38,4 +38,18 @@ export const ERROR_MESSAGES: Record<string, string> = {
   "apps.operation_active": "Another operation is already running for this application",
 };
 
-setApiErrorLocalizer((code, message) => (code ? t(ERROR_MESSAGES[code] ?? message) : t(message)));
+// For these codes the backend message carries the concrete failure (image,
+// container name, timeout) and hiding it makes the error undiagnosable.
+const DETAIL_CODES = new Set([
+  "hosting_provision_failed",
+  "hosting_site_conflict",
+  "tenant.cell_provision_failed",
+]);
+
+setApiErrorLocalizer((code, message) => {
+  const base = code ? t(ERROR_MESSAGES[code] ?? message) : t(message);
+  if (code && DETAIL_CODES.has(code) && message && message !== base) {
+    return `${base}: ${message}`;
+  }
+  return base;
+});
