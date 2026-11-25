@@ -21,6 +21,7 @@ from . import alloc
 
 DEFAULT_WP_IMAGE = "wordpress:latest"
 DEFAULT_DB_IMAGE = "mariadb:11"
+DEFAULT_STATIC_IMAGE = "nginx:alpine"
 DEFAULT_ROOTFUL_SOCKET = "/var/run/docker.sock"
 
 INSPECT_TIMEOUT = 30
@@ -34,6 +35,7 @@ def desired_images() -> list[str]:
     candidates = [
         os.environ.get("SPANEL_HOSTING_WP_IMAGE", DEFAULT_WP_IMAGE),
         os.environ.get("SPANEL_HOSTING_DB_IMAGE", DEFAULT_DB_IMAGE),
+        os.environ.get("SPANEL_HOSTING_STATIC_IMAGE", DEFAULT_STATIC_IMAGE),
     ]
     wanted: list[str] = []
     for image in candidates:

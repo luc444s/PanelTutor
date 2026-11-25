@@ -17,8 +17,9 @@ migraciones puntuales. Hay que generalizarlo.
 
 1. `scripts/tenant_cell/images.py` (nuevo, < 400 líneas) expone:
    - `desired_images() -> list[str]`: lee `SPANEL_HOSTING_WP_IMAGE`
-     (default `wordpress:latest`) y `SPANEL_HOSTING_DB_IMAGE`
-     (default `mariadb:11`), sin duplicados.
+     (default `wordpress:latest`), `SPANEL_HOSTING_DB_IMAGE`
+     (default `mariadb:11`) y `SPANEL_HOSTING_STATIC_IMAGE`
+     (default `nginx:alpine`, para sitios estáticos), sin duplicados.
    - `image_exists(socket_path, image) -> bool`: `docker -H unix://<socket> image inspect`.
    - `ensure_image(socket_path, image, *, rootful_socket="/var/run/docker.sock")`:
      idempotente. Si ya está en la celda, no hace nada. Si no está pero sí en el
@@ -44,8 +45,9 @@ migraciones puntuales. Hay que generalizarlo.
 
 ## Criterios de aceptación
 
-- Tras `bash scripts/deploy.sh`, `wordpress:latest` y `mariadb:11` existen en
-  cada celda con daemon activo (verificado con `docker -H ... image inspect`).
+- Tras `bash scripts/deploy.sh`, `wordpress:latest`, `mariadb:11` y
+  `nginx:alpine` existen en cada celda con daemon activo (verificado con
+  `docker -H ... image inspect`).
 - Una celda creada después del deploy ya nace con esas imágenes, sin pull desde
   la celda.
 - Un segundo deploy no transfiere nada (`unchanged`).

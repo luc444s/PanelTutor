@@ -94,11 +94,14 @@ def _install_fake(
 def test_desired_images_uses_hosting_env_without_duplicates(monkeypatch) -> None:
     monkeypatch.delenv("SPANEL_HOSTING_WP_IMAGE", raising=False)
     monkeypatch.delenv("SPANEL_HOSTING_DB_IMAGE", raising=False)
-    assert mod.desired_images() == ["wordpress:latest", "mariadb:11"]
+    monkeypatch.delenv("SPANEL_HOSTING_STATIC_IMAGE", raising=False)
+    assert mod.desired_images() == [
+        "wordpress:latest", "mariadb:11", "nginx:alpine"
+    ]
 
     monkeypatch.setenv("SPANEL_HOSTING_WP_IMAGE", "wordpress:6.8")
     monkeypatch.setenv("SPANEL_HOSTING_DB_IMAGE", "wordpress:6.8")
-    assert mod.desired_images() == ["wordpress:6.8"]
+    assert mod.desired_images() == ["wordpress:6.8", "nginx:alpine"]
 
 
 def test_image_exists_inspects_on_the_given_socket(monkeypatch) -> None:
@@ -171,7 +174,11 @@ def test_ensure_cell_images_reports_unchanged_when_present(tmp_path, monkeypatch
         {
             "slug": "acme",
             "images": "unchanged",
-            "detail": {"wordpress:latest": "present", "mariadb:11": "present"},
+            "detail": {
+                "wordpress:latest": "present",
+                "mariadb:11": "present",
+                "nginx:alpine": "present",
+            },
         }
     ]
 
@@ -195,7 +202,11 @@ def test_ensure_cell_images_reports_transfers_and_isolates_failures(
     assert results["acme"] == {
         "slug": "acme",
         "images": "updated",
-        "detail": {"wordpress:latest": "transferred", "mariadb:11": "present"},
+        "detail": {
+            "wordpress:latest": "transferred",
+            "mariadb:11": "present",
+            "nginx:alpine": "present",
+        },
     }
     assert results["beta"]["images"] == "failed"
     assert "cell daemon is stuck" in results["beta"]["detail"]
@@ -338,6 +349,7 @@ class _RecordingExecutor(Executor):
 def test_provision_seeds_images_once_the_socket_exists(tmp_path, monkeypatch) -> None:
     monkeypatch.setenv("SPANEL_HOSTING_WP_IMAGE", "wordpress:latest")
     monkeypatch.setenv("SPANEL_HOSTING_DB_IMAGE", "mariadb:11")
+    monkeypatch.setenv("SPANEL_HOSTING_STATIC_IMAGE", "nginx:alpine")
     socket = tmp_path / "cells" / "acme" / "docker.sock"
     socket.parent.mkdir(parents=True)
     socket.touch()
@@ -348,7 +360,7 @@ def test_provision_seeds_images_once_the_socket_exists(tmp_path, monkeypatch) ->
     svc.provision("acme")
 
     assert executor.image_calls == [
-        (str(socket), ["wordpress:latest", "mariadb:11"])
+        (str(socket), ["wordpress:latest", "mariadb:11", "nginx:alpine"])
     ]
     assert alloc.load_registry(tmp_path)["allocations"]["acme"]["applied"]["images"] is True
 
