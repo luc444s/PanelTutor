@@ -384,7 +384,7 @@ def delete_site(
     request: Request,
     site: HostingSite = Depends(get_owned_site),
     tenant_context: TenantContext = Depends(get_current_tenant_context),
-    _current_user: User = Depends(require_permission("hosting.sites.delete", platform_only=True)),
+    _current_user: User = Depends(require_permission("hosting.sites.delete")),
     service: HostingService = Depends(_get_hosting_service),
     db: Session = Depends(get_db_session),
 ) -> None:

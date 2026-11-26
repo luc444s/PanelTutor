@@ -179,7 +179,7 @@ def test_tenant_admin_recibe_solo_los_declarados(
 
     granted = _role_permission_names(db_session, role.id)
     assert granted == set(MAIL_TENANT_ADMIN) | TENANT_ADMIN_BASE
-    assert {"core.users.read", "core.roles.manage"} <= granted
+    assert not {"core.users.read", "core.roles.manage", "core.branches.read"} & granted
     assert "mail.accounts.all" not in granted, "el permiso cross-domain llego al tenant"
     assert "tenant.tenants.manage" not in granted, "el tenant recibio poder cross-tenant"
     assert user.tenant_id == tenant.id

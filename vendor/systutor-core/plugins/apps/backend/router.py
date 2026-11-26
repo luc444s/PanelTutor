@@ -629,8 +629,6 @@ def delete_application(
     context: TenantContext = Depends(get_current_tenant_context),
     user: User = Depends(require_permission("apps.applications.delete")),
 ) -> OperationView:
-    if not context.is_platform:
-        raise AppError("Platform permission required", status_code=403, code="apps.platform_required")
     app = catalog.get_application(db, context.current_tenant_id, application_id)
     if body.confirm != app.slug:
         raise AppError("Confirmation does not match", status_code=422, code="apps.confirmation_invalid")

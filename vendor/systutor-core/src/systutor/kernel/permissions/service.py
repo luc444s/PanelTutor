@@ -297,16 +297,11 @@ TENANT_ADMIN_ROLE_NAME = "tenant_admin"
 # runtime. It is a kernel capability, not a plugin declaration, so it is kept
 # here instead of forcing every plugin manifest to repeat it. The old
 # `MAIL_PERMISSIONS` list carried it for the same reason.
-TENANT_ADMIN_BASE_PERMISSIONS = (
-    "core.plugin.runtime.read",
-    "core.users.read",
-    "core.users.create",
-    "core.users.update",
-    "core.users.disable",
-    "core.roles.read",
-    "core.roles.manage",
-    "core.branches.read",
-)
+# A.SPEC 0122: only the capability needed to load plugin navigation. Users,
+# Roles and Branches are platform-level menus: a new tenant owner must not
+# receive them. The sync below is additive, so tenants that already have those
+# grants keep them until an operator explicitly revokes them.
+TENANT_ADMIN_BASE_PERMISSIONS = ("core.plugin.runtime.read",)
 
 
 def sync_tenant_admin_role(

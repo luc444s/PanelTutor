@@ -21,11 +21,11 @@
     "apps.applications.read",
     "apps.applications.manage",
     "apps.applications.create",
+    "apps.applications.delete",
     "apps.secrets.read"
   ],
   "platform_permissions": [
     "apps.deployments.create",
-    "apps.applications.delete",
     "apps.plans.manage"
   ],
   "events": [],

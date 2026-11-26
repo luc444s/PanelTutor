@@ -10,7 +10,7 @@ import { useT } from "@/i18n/use-i18n";
 
 import { appsKeys, listApplications } from "../api";
 import { domainsKeys, listRoutes } from "../../../domains/frontend/api";
-import { canDeploy, canPlatformMutate, isOwnedByTenant } from "../logic";
+import { canDeploy, isOwnedByTenant } from "../logic";
 import type { Application, OperationSummary } from "../types";
 import { ApplicationDetail } from "../components/ApplicationDetail";
 import { CreateApplicationDialog } from "../components/CreateApplicationDialog";
@@ -32,7 +32,7 @@ export default function AppsPage() {
   const canReveal = permissions.includes("apps.secrets.read");
   const platform = permissions.includes("core.platform.admin");
   const canDeployApp = canDeploy(permissions);
-  const canDelete = canPlatformMutate(permissions, "apps.applications.delete");
+  const canDelete = permissions.includes("apps.applications.delete");
   const [createOpen, setCreateOpen] = useState(false);
   const [selected, setSelected] = useState<Application | null>(null);
   const [tracked, setTracked] = useState<OperationSummary[]>([]);

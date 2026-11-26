@@ -85,15 +85,18 @@ def test_local_runtime_uses_shared_apps_state_root() -> None:
     }) == Path("/legacy/path")
 
 
-def test_delete_keeps_the_platform_gate(tmp_path: Path) -> None:
+def test_delete_is_scoped_to_the_current_tenant(tmp_path: Path) -> None:
+    # A.SPEC 0123: a tenant admin may delete its own application, but the
+    # lookup is scoped by current_tenant_id, so another tenant gets 404.
     db = database(tmp_path)
     user = db.get(User, "u1")
     request = SimpleNamespace(headers={})
     with pytest.raises(AppError) as delete:
         router_module.delete_application(
-            "a1", request, DeleteRequest(confirm="demo"), "key", db, context(), user,
+            "a1", request, DeleteRequest(confirm="demo"), "key", db,
+            context(tenant_id="t2"), user,
         )
-    assert delete.value.status_code == 403
+    assert delete.value.status_code == 404
 
 
 def test_deploy_prepends_stable_managed_database_environment(tmp_path: Path) -> None:

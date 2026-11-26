@@ -98,3 +98,30 @@ def test_application_boot_does_not_rewrite_existing_tenant_role(
     assert list_role_permission_names(db_session, role_id=role.id) == [
         "core.documents.manage"
     ]
+
+
+def test_new_tenant_owner_has_no_core_user_role_or_branch_menus(
+    db_session: Session,
+) -> None:
+    """A.SPEC 0122: the hardcoded base no longer grants platform menus."""
+    tenant = Tenant(name="No platform menus", slug="no-platform-menus")
+    db_session.add(tenant)
+    db_session.flush()
+
+    sync_tenant_admin_role(db_session, tenant_id=tenant.id)
+    role = db_session.scalar(
+        select(Role).where(Role.tenant_id == tenant.id, Role.name == "tenant_admin")
+    )
+    assert role is not None
+    granted = set(list_role_permission_names(db_session, role_id=role.id))
+
+    assert "core.plugin.runtime.read" in granted
+    assert not {
+        "core.users.read",
+        "core.users.create",
+        "core.users.update",
+        "core.users.disable",
+        "core.roles.read",
+        "core.roles.manage",
+        "core.branches.read",
+    } & granted

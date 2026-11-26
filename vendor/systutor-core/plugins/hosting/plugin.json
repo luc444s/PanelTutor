@@ -20,10 +20,10 @@
     "hosting.users.read",
     "hosting.users.password",
     "hosting.sites.create",
-    "hosting.sites.manage"
+    "hosting.sites.manage",
+    "hosting.sites.delete"
   ],
   "platform_permissions": [
-    "hosting.sites.delete",
     "hosting.profiles.manage"
   ],
   "events": [],

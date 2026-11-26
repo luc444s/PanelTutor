@@ -104,9 +104,27 @@ def test_real_hosting_manifest_declares_platform_permissions():
         Path(__file__).resolve().parents[1] / "plugins/hosting/plugin.json"
     )
     manifest = json.loads(plugin_json.read_text())
-    assert "hosting.sites.delete" in manifest["platform_permissions"]
+    # A.SPEC 0123: the owner may delete its own sites; profiles stay platform.
+    assert "hosting.sites.delete" in manifest["tenant_admin_permissions"]
+    assert "hosting.sites.delete" not in manifest["platform_permissions"]
     assert "hosting.profiles.manage" in manifest["platform_permissions"]
-    # INVARIANT I6: these must NOT become tenant-admin grants.
+    # INVARIANT I6: the two sets must not overlap.
+    assert not set(manifest["platform_permissions"]) & set(
+        manifest["tenant_admin_permissions"]
+    )
+
+
+def test_real_apps_manifest_delegates_application_delete_to_tenant_admin():
+    import json
+    from pathlib import Path
+
+    plugin_json = Path(__file__).resolve().parents[1] / "plugins/apps/plugin.json"
+    manifest = json.loads(plugin_json.read_text())
+    assert "apps.applications.delete" in manifest["tenant_admin_permissions"]
+    assert "apps.applications.delete" not in manifest["platform_permissions"]
+    assert {"apps.deployments.create", "apps.plans.manage"} <= set(
+        manifest["platform_permissions"]
+    )
     assert not set(manifest["platform_permissions"]) & set(
         manifest["tenant_admin_permissions"]
     )
