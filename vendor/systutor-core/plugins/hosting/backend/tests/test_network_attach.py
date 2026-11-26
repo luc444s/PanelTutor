@@ -231,13 +231,35 @@ def test_a_static_site_never_inspects_or_connects_a_database(monkeypatch) -> Non
 # --- provisioner ---------------------------------------------------------
 
 
-def provisioner(arbitrary: bool, network: str) -> Provisioner:
+class FakeRuntime:
+    """Container runtime handle that only records commands: never starts Docker."""
+
+    def __init__(self, kind: str) -> None:
+        self.runtime = kind
+        self.commands: list[tuple[str, ...]] = []
+
+    def command(self, args, *, input=None):  # noqa: ANN001
+        self.commands.append(tuple(args))
+        return b""
+
+    def write_private(self, name: str, content: bytes) -> str:
+        return f"/private/{name}"
+
+    def remove_private(self, name: str) -> None:
+        return None
+
+    def inspect(self, kind: str, name: str) -> None:
+        return None
+
+
+def provisioner(arbitrary: bool, network: str, runtime: FakeRuntime | None = None) -> Provisioner:
     return Provisioner(
         HostingSettings(
             docker_transport="local",
             phpmyadmin_arbitrary=arbitrary,
             phpmyadmin_db_network=network,
-        )
+        ),
+        runtime,
     )
 
 
@@ -313,3 +335,38 @@ def test_a_failed_attach_follows_the_existing_cleanup_path(monkeypatch) -> None:
     with pytest.raises(Fallo):
         instance.create(SiteNames("demo"), "t1", "demo.spanel", "admin@demo.spanel")
     assert cleaned == ["spanel-demo-db"]
+
+
+# --- A.SPEC 0120: rootless sites stay off the rootful database network -----
+
+
+def test_a_rootless_site_is_never_attached_to_the_database_network(monkeypatch) -> None:
+    commands: list[tuple] = []
+    runtime = FakeRuntime("rootless")
+    instance = provisioner(True, "spanel-db", runtime)
+    spy_create(monkeypatch, instance, commands)
+    instance.create(SiteNames("demo"), "t1", "demo.spanel", "admin@demo.spanel")
+
+    assert ("network", "connect", "spanel-db", "spanel-demo-db") not in commands
+    private = [args for args in commands if args[:3] == ("network", "create", "--internal")]
+    assert private and private[0][-1] == "spanel-demo-private"
+
+
+def test_a_rootful_site_is_attached_to_the_database_network(monkeypatch) -> None:
+    commands: list[tuple] = []
+    instance = provisioner(True, "spanel-db", FakeRuntime("rootful"))
+    spy_create(monkeypatch, instance, commands)
+    instance.create(SiteNames("demo"), "t1", "demo.spanel", "admin@demo.spanel")
+
+    assert ("network", "connect", "spanel-db", "spanel-demo-db") in commands
+
+
+def test_a_rootful_site_with_an_invalid_database_network_still_fails(monkeypatch) -> None:
+    commands: list[tuple] = []
+    instance = provisioner(True, "tcp://spanel-db", FakeRuntime("rootful"))
+    spy_create(monkeypatch, instance, commands)
+    monkeypatch.setattr(instance, "_owned", lambda *args: False)
+
+    with pytest.raises(Fallo) as error:
+        instance.create(SiteNames("demo"), "t1", "demo.spanel", "admin@demo.spanel")
+    assert "The database network is invalid" in str(error.value)

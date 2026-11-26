@@ -179,7 +179,10 @@ class Provisioner:
             # configured internal network. A failure here is part of creation:
             # the except path below removes the containers and volumes.
             db_network = self.settings.phpmyadmin_db_network.strip()
-            if multi_database_enabled(self.settings.phpmyadmin_arbitrary, db_network):
+            rootless = self.runtime is not None and self.runtime.runtime == "rootless"
+            if not rootless and multi_database_enabled(
+                self.settings.phpmyadmin_arbitrary, db_network
+            ):
                 try:
                     self.command(*connect_args(db_network, names.db))
                 except ValueError as exc:
