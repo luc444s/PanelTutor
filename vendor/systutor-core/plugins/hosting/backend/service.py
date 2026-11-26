@@ -49,7 +49,7 @@ from .database import (
 )
 from .database_binding import database_credentials as _database_credentials
 from .database_binding import resolve_database_binding
-from .inspection import candidato_de, inspect_container
+from .inspection import candidato_de, inspect_container, inspect_many_containers
 from .models import HostingSite, RootlessMigrationOperation, StaticProfile
 from .network import (
     connect_args,
@@ -166,13 +166,13 @@ class HostingService:
         self._settings = settings or get_hosting_settings()
         self._app = app
 
-    def _runtime_for(self, site: HostingSite):
+    def _runtime_for(self, site: HostingSite, *, check_health: bool = True):
         if self._app is None:
             return None
         if not getattr(self._app.state, "resource_runtime_registry_providers", None):
             return None
         return HostingRuntimeResolver(self._app, self._db).resolve(
-            site.tenant_id, site.kind, site.id
+            site.tenant_id, site.kind, site.id, check_health=check_health
         )
 
     def _provisioner_for(self, site: HostingSite):
@@ -202,6 +202,56 @@ class HostingService:
         if runtime is not None:
             return runtime.inspect("container", container_name)
         return self._inspect(container_name)
+
+    def _daemon_key(self, site: HostingSite, runtime) -> object:
+        """Group sites that live behind the same Docker daemon."""
+        if runtime is None:
+            return None
+        if getattr(runtime, "runtime", None) == "rootful":
+            return "rootful"
+        return f"tenant:{site.tenant_id}"
+
+    def _inspect_many(self, sites: list[HostingSite]) -> dict[str, dict | None]:
+        """One bulk `docker inspect` per daemon, never one per site.
+
+        The runtime is resolved once per tenant, without `health()`: a daemon
+        that is down answers `None` for every name, and the list renders that
+        as `missing`, so the extra `docker info` per site bought nothing. A
+        handle that does not expose `inspect_many()` (a third-party runtime)
+        keeps the previous per-site path.
+        """
+        runtimes: dict[str, object | None] = {}
+        for site in sites:
+            if site.tenant_id not in runtimes:
+                runtimes[site.tenant_id] = self._runtime_for(site, check_health=False)
+        groups: dict[object, tuple[object | None, list[HostingSite]]] = {}
+        for site in sites:
+            runtime = runtimes[site.tenant_id]
+            key = self._daemon_key(site, runtime)
+            if key in groups:
+                groups[key][1].append(site)
+            else:
+                groups[key] = (runtime, [site])
+        inspections: dict[str, dict | None] = {}
+        for runtime, group in groups.values():
+            names = [site.container_name for site in group]
+            if runtime is not None and callable(getattr(runtime, "inspect_many", None)):
+                inspections.update(runtime.inspect_many(names))
+                continue
+            if runtime is None:
+                # Legacy rootful sites without a runtime handle: still one
+                # batched call instead of one SSH round-trip per site.
+                inspections.update(
+                    inspect_many_containers(
+                        names, env=self._env, timeout=self._settings.command_timeout
+                    )
+                )
+                continue
+            for site in group:
+                inspections[site.container_name] = self._inspect_for(
+                    site, site.container_name
+                )
+        return inspections
 
     def _require_site(self, site: HostingSite) -> tuple[dict, bool]:
         """The container must exist and still be a managed site.
@@ -796,9 +846,11 @@ class HostingService:
         else:
             tenant_names = dict(self._db.execute(select(Tenant.id, Tenant.name)).all())
         stmt = stmt.order_by(HostingSite.container_name.asc())
+        sites = list(self._db.scalars(stmt))
+        inspections = self._inspect_many(sites)
         summaries: list[HostingSiteSummary] = []
-        for site in self._db.scalars(stmt):
-            info = self._inspect_for(site, site.container_name)
+        for site in sites:
+            info = inspections.get(site.container_name)
             if info is None:
                 # Visible, marked missing, and not offered as operable: a
                 # container that does not exist is not an exception in a list.

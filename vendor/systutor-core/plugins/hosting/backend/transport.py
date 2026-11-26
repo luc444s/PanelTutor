@@ -21,6 +21,35 @@ class Fallo(Exception):
     """An error that has to be explained to a person, not a traceback."""
 
 
+CONTROL_PERSIST_SECONDS = 60
+
+
+def _control_path(env: dict[str, str]) -> str | None:
+    """A usable ControlPath, or None when multiplexing has to be skipped.
+
+    The socket lives in a directory only its owner can enter: a world-writable
+    directory would let another local user pre-create the socket and hijack
+    the SSH session. The mode is set explicitly instead of trusting the umask.
+    Any failure (read-only filesystem, missing permissions) degrades to a new
+    connection per call, so the optimization can never break a command.
+    """
+    requested = (
+        env.get("SPANEL_DOCKER_SSH_CONTROL_PATH")
+        or os.environ.get("SPANEL_DOCKER_SSH_CONTROL_PATH", "")
+    ).strip()
+    if not requested:
+        return None
+    directory = os.path.dirname(requested)
+    if not directory:
+        return None
+    try:
+        os.makedirs(directory, mode=0o700, exist_ok=True)
+        os.chmod(directory, 0o700)
+    except OSError:
+        return None
+    return requested
+
+
 def load_env_file(path: Path) -> dict[str, str]:
     """Read a simple .env: key=value, ignoring comments and blank lines."""
     values: dict[str, str] = {}
@@ -76,6 +105,17 @@ def build_docker_argv(
     # SSHPASS del entorno. Si fuera con `-p`, quedaria escrita en el comando, y
     # desde ahi se escapa sola: en cualquier traceback de Python, en un `ps`, y
     # en los logs de error. Por eso `run` mete SSHPASS en el entorno del hijo.
+    control_path = _control_path(env)
+    control_args: list[str] = []
+    if control_path is not None:
+        control_args = [
+            "-o",
+            "ControlMaster=auto",
+            "-o",
+            f"ControlPath={control_path}",
+            "-o",
+            f"ControlPersist={CONTROL_PERSIST_SECONDS}",
+        ]
     return [
         "sshpass",
         "-e",
@@ -86,6 +126,7 @@ def build_docker_argv(
         f"StrictHostKeyChecking={strict}",
         "-o",
         "LogLevel=ERROR",
+        *control_args,
         f"{user}@{host}",
         remote_command,
     ]

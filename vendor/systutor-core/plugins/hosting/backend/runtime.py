@@ -7,7 +7,7 @@ import os
 import re
 import shlex
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -23,6 +23,7 @@ from systutor.contracts.container_runtime import (
 from systutor.contracts.resource_runtime import read_resource_runtime
 from systutor.core.errors import AppError
 
+from .inspection import inspect_many_containers
 from .settings import HostingSettings, docker_env
 from .transport import (
     borrar_archivo_remoto,
@@ -60,6 +61,14 @@ class RootfulDockerHandle:
                 return None
             raise
         return rows[0] if isinstance(rows, list) and rows else None
+
+    def inspect_many(self, names: Sequence[str]) -> dict[str, dict[str, Any] | None]:
+        """Bulk `docker inspect` over the rootful transport, one call per batch."""
+        return inspect_many_containers(
+            names,
+            env=self.env,
+            timeout=max(self.settings.command_timeout, self.settings.install_timeout),
+        )
 
     def export_volume(self, name: str) -> Iterator[bytes]:
         return self._export_mount(f"{name}:/data:ro")
@@ -141,7 +150,9 @@ class HostingRuntimeResolver:
     def assigned(self, tenant_id: str, kind: str, site_id: str) -> str | None:
         return read_resource_runtime(self.app, self.db, tenant_id, kind, site_id)
 
-    def resolve(self, tenant_id: str, kind: str, site_id: str) -> ContainerRuntimeHandle:
+    def resolve(
+        self, tenant_id: str, kind: str, site_id: str, *, check_health: bool = True
+    ) -> ContainerRuntimeHandle:
         assigned = self.assigned(tenant_id, kind, site_id)
         runtime = assigned or "rootful"  # unregistered rows are pre-0110 legacy sites
         try:
@@ -152,7 +163,7 @@ class HostingRuntimeResolver:
                 status_code=503,
                 code="hosting_runtime_unavailable",
             ) from exc
-        if handle.health().state != "ready":
+        if check_health and handle.health().state != "ready":
             raise AppError(
                 "The site's registered container runtime is not ready",
                 status_code=503,

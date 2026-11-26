@@ -6,18 +6,59 @@ import json
 import os
 import re
 import subprocess
-from collections.abc import Iterator
+import time
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
 
+from plugins.hosting.backend.inspection import inspect_many_containers
 from systutor.contracts.container_runtime import (
     ContainerRuntimeError,
     RuntimeHealth,
 )
 from systutor.contracts.tenant_slugs import InvalidCellSlug, cell_slug_for
 from systutor.kernel.tenants.models import Tenant
+
+REGISTRY_CACHE_TTL_SECONDS = 5.0
+_registry_cache: dict[str, tuple[float, float, dict[str, Any]]] = {}
+
+
+def _registry_payload(data_root: Path) -> dict[str, Any]:
+    """Parsed `registry.json`, cached for a short window keyed by mtime.
+
+    The registry is read for every tenant resolution; in a site list that is
+    once per tenant instead of once per site, but the file does not change
+    between requests. A five second window keeps the hot path on memory while
+    a new allocation is visible almost immediately. Any read or parse failure
+    drops the entry and fails closed, exactly like the uncached code.
+    """
+    path = data_root / "registry.json"
+    key = str(data_root)
+    try:
+        modified = path.stat().st_mtime
+    except OSError as exc:
+        _registry_cache.pop(key, None)
+        raise ContainerRuntimeError("tenant cell registry unavailable") from exc
+    now = time.monotonic()
+    cached = _registry_cache.get(key)
+    if (
+        cached is not None
+        and now - cached[0] < REGISTRY_CACHE_TTL_SECONDS
+        and cached[1] == modified
+    ):
+        return cached[2]
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        _registry_cache.pop(key, None)
+        raise ContainerRuntimeError("tenant cell registry unavailable") from exc
+    if not isinstance(payload, dict):
+        _registry_cache.pop(key, None)
+        raise ContainerRuntimeError("tenant cell registry unavailable")
+    _registry_cache[key] = (now, modified, payload)
+    return payload
 
 
 class RootlessCellHandle:
@@ -67,6 +108,25 @@ class RootlessCellHandle:
             raise
         rows = json.loads(payload)
         return rows[0] if isinstance(rows, list) and rows else None
+
+    def inspect_many(self, names: Sequence[str]) -> dict[str, dict[str, Any] | None]:
+        """Bulk `docker inspect` against the cell socket, one call per batch."""
+
+        def command(args: tuple[str, ...]) -> tuple[int, str]:
+            try:
+                result = subprocess.run(
+                    ["docker", *args],
+                    capture_output=True,
+                    text=True,
+                    env=self._env(),
+                    check=False,
+                    timeout=60,
+                )
+            except subprocess.TimeoutExpired:
+                return 124, ""
+            return result.returncode, result.stdout
+
+        return inspect_many_containers(names, command=command)
 
     def export_volume(self, name: str) -> Iterator[bytes]:
         process = subprocess.Popen(
@@ -179,10 +239,7 @@ class RootlessCellProvider:
             cell_slug = cell_slug_for(tenant.slug)
         except InvalidCellSlug as exc:
             raise ContainerRuntimeError("tenant has no valid cell slug") from exc
-        try:
-            registry = json.loads((self.data_root / "registry.json").read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
-            raise ContainerRuntimeError("tenant cell registry unavailable") from exc
+        registry = _registry_payload(self.data_root)
         cell = (registry.get("allocations") or {}).get(cell_slug)
         if (
             not isinstance(cell, dict)

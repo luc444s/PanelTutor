@@ -12,9 +12,13 @@ from __future__ import annotations
 
 import json
 import shlex
+from collections.abc import Callable, Iterator, Sequence
 
 from .discovery import Candidato, detectar_capa2
 from .transport import Fallo, build_docker_argv, run
+
+INSPECT_BATCH_SIZE = 50
+InspectRunner = Callable[[tuple[str, ...]], tuple[int, str]]
 
 
 def inspect_container(
@@ -37,6 +41,63 @@ def inspect_container(
     if isinstance(payload, list):
         payload = payload[0] if payload else None
     return payload if isinstance(payload, dict) else None
+
+
+def _payloads(stdout: str) -> Iterator[dict]:
+    """One inspect payload per line, as printed by `--format '{{json .}}'`."""
+    for raw_line in stdout.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        try:
+            parsed = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        rows = parsed if isinstance(parsed, list) else [parsed]
+        for row in rows:
+            if isinstance(row, dict):
+                yield row
+
+
+def inspect_many_containers(
+    names: Sequence[str],
+    *,
+    env: dict[str, str] | None = None,
+    command: InspectRunner | None = None,
+    timeout: int = 60,
+) -> dict[str, dict | None]:
+    """Inspect many containers with one Docker call per batch of 50 names.
+
+    `env` is the rootful transport (the argv is built by `build_docker_argv`).
+    `command` lets a handle run the same arguments over its own daemon without
+    going through the SSH transport. `docker inspect` exits 1 when any name is
+    missing but still prints the containers that do exist, so a non-zero exit
+    is not an error here: stdout decides which names are present. Every name
+    that is absent maps to `None`.
+    """
+    result: dict[str, dict | None] = {name: None for name in names}
+    if not names:
+        return result
+    if command is None and env is None:
+        raise ValueError("inspect_many_containers requires env or command")
+    for start in range(0, len(names), INSPECT_BATCH_SIZE):
+        batch = tuple(names[start : start + INSPECT_BATCH_SIZE])
+        args = ("inspect", "--format", "{{json .}}", *batch)
+        if command is not None:
+            _, stdout = command(args)
+        else:
+            assert env is not None
+            line = "docker " + " ".join(shlex.quote(part) for part in args)
+            completed = run(build_docker_argv(line, env=env), env=env, timeout=timeout)
+            stdout = completed.stdout
+        for payload in _payloads(stdout):
+            name = payload.get("Name")
+            if not isinstance(name, str) or not name:
+                continue
+            key = name.removeprefix("/")
+            if key in result:
+                result[key] = payload
+    return result
 
 
 def candidato_de(info: dict) -> Candidato:
