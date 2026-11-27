@@ -985,6 +985,7 @@ def _cloudflare_host_adopt_all(args: argparse.Namespace, factory: Any) -> int:
             f"Claims: {len(cast(list[object], payload['claims']))}",
             f"Conflicts: {len(cast(list[object], payload['conflicts']))}",
             f"Errors: {len(cast(list[object], payload['errors']))}",
+            f"Reassigned: {payload.get('reassigned', 0)}",
             "Applied." if payload.get("applied") else "Plan only; pass --apply to adopt.",
         ],
     )

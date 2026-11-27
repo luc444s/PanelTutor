@@ -8,7 +8,9 @@ another tenant owns the zone.
 
 from __future__ import annotations
 
-from sqlalchemy import select, text
+from dataclasses import dataclass
+
+from sqlalchemy import inspect, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -21,6 +23,54 @@ from plugins.domains.backend.models import CloudflareZoneOwnership
 
 def normalize_zone_name(value: str) -> str:
     return (value or "").strip().rstrip(".").lower()
+
+
+@dataclass(frozen=True)
+class ZoneOwnerResolution:
+    """Explicit domain ownership evidence for a Cloudflare zone name.
+
+    ``tenant_id`` is set only when every existing source agrees. When two
+    sources disagree it stays ``None`` and ``candidates`` lists the distinct
+    tenant ids so the caller can report a conflict instead of guessing.
+    """
+
+    tenant_id: str | None
+    sources: tuple[str, ...]
+    candidates: tuple[str, ...]
+
+
+# Tables that already own a domain in the platform. They are read with plain
+# SQL because this helper also runs from the CLI, where the FastAPI app (and
+# therefore the domain_namespace providers) is not available.
+_OWNER_TABLES = ("hosting_sites", "domains_routes", "tenant_domains")
+
+
+def resolve_zone_owner(db: Session, zone_name: str) -> ZoneOwnerResolution:
+    name = normalize_zone_name(zone_name)
+    bind = db.get_bind()
+    if bind is None:
+        return ZoneOwnerResolution(None, (), ())
+    existing_tables = set(inspect(bind).get_table_names())
+    found: list[tuple[str, str]] = []
+    for table in _OWNER_TABLES:
+        if table not in existing_tables:
+            continue
+        tenant_id = db.execute(
+            text(
+                f"SELECT tenant_id FROM {table} "  # noqa: S608 - fixed table allowlist
+                "WHERE lower(domain) = :name LIMIT 1"
+            ),
+            {"name": name},
+        ).scalar()
+        if tenant_id:
+            found.append((table, str(tenant_id)))
+    candidates = tuple(sorted({tenant_id for _table, tenant_id in found}))
+    tenant_id = candidates[0] if len(candidates) == 1 else None
+    return ZoneOwnerResolution(
+        tenant_id=tenant_id,
+        sources=tuple(table for table, _tenant_id in found),
+        candidates=candidates,
+    )
 
 
 def get_ownership_by_zone_id(db: Session, zone_id: str) -> CloudflareZoneOwnership | None:

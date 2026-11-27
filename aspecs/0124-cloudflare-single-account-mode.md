@@ -236,9 +236,12 @@ python3 scripts/spanel_dns.py cloudflare host adopt-all --from-tenant-connection
 - `host adopt` verifica que `DOMINIO` exista en la cuenta compartida; sin
   `--apply` es dry-run. Con `--apply` inserta la propiedad y audita.
 - `host adopt-all --from-tenant-connections` recorre las conexiones por tenant
-  existentes, lista sus zonas y crea filas de propiedad. Si dos tenants
-  reclaman la misma zona, se detiene con conflicto y no escribe parcialmente.
-  Es la vía de migración de una instalación que ya tenía conexiones por tenant.
+  existentes, lista sus zonas y deduce el dueño real de cada zona desde
+  `hosting_sites`, `domains_routes` y `tenant_domains`. Solo usa el tenant de
+  la conexión antigua cuando no hay evidencia explícita. Con `--apply` crea
+  filas nuevas y reasigna filas antiguas mal asignadas. Si dos fuentes dan
+  dueños distintos, se detiene con conflicto y no escribe parcialmente. Es la
+  vía de migración de una instalación que ya tenía conexiones por tenant.
 - En modo `single`, `cloudflare connect|disconnect --tenant` fallan con un
   mensaje claro que apunta a `cloudflare host ...`.
 - `zones`, `records` y `provision` por tenant siguen funcionando y aplican el

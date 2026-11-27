@@ -10,7 +10,7 @@ from urllib.parse import parse_qs, urlsplit
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine, select
+from sqlalchemy import create_engine, select, text
 from sqlalchemy.orm import Session
 
 import systutor.kernel.models  # noqa: F401
@@ -25,6 +25,10 @@ from plugins.domains.backend.cloudflare.client import (
 )
 from plugins.domains.backend.cloudflare.config import CloudflareConfig
 from plugins.domains.backend.cloudflare.crypto import CloudflareCipher
+from plugins.domains.backend.cloudflare.ownership import (
+    ZoneOwnerResolution,
+    resolve_zone_owner,
+)
 from plugins.domains.backend.cloudflare.provisioning import CloudflareProvisioningService
 from plugins.domains.backend.cloudflare.service import (
     HOST_IDENTITY,
@@ -530,6 +534,126 @@ def test_adopt_zone_and_adopt_all_are_platform_operations(tmp_path) -> None:
         assert result["applied"] is True
     finally:
         db.close()
+        engine.dispose()
+
+
+def test_adopt_all_uses_domain_ownership_and_reassigns(
+    tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    engine, db, config, cipher, fake = _seed(tmp_path)
+    service = _service(db, config, fake, cipher)
+    resolution = {"milt.test": ("t2", ("tenant_domains",), ("t2",))}
+
+    def fake_resolver(_db, zone_name):
+        tenant_id, sources, candidates = resolution.get(
+            zone_name, (None, (), ())
+        )
+        return ZoneOwnerResolution(tenant_id, sources, candidates)
+
+    monkeypatch.setattr(
+        "plugins.domains.backend.cloudflare.service.resolve_zone_owner",
+        fake_resolver,
+    )
+    try:
+        fake.zones.append(
+            CloudflareZone("z4", "milt.test", "active", "acct1", "Lab", ("ns1",), None, None)
+        )
+        db.add(
+            CloudflareZoneOwnership(
+                tenant_id="t1", zone_id="z4", zone_name="milt.test", account_id="acct1"
+            )
+        )
+        access = cipher.encrypt(PURPOSE_ACCESS, "t1", "legacy-access")
+        db.add(
+            CloudflareConnection(
+                tenant_id="t1",
+                cloudflare_account_id="acct1",
+                account_name="Lab",
+                access_ciphertext=access.ciphertext,
+                access_nonce=access.nonce,
+                refresh_ciphertext=None,
+                refresh_nonce=None,
+                key_version=access.key_version,
+                scopes_json=["Zone Read", "Zone Write", "DNS Read", "DNS Write"],
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                status="active",
+            )
+        )
+        db.query(CloudflareZoneOwnership).filter_by(zone_name="other.test").delete()
+        db.commit()
+
+        plan = service.adopt_all_from_tenant_connections(apply=False)
+        claim = next(item for item in plan["claims"] if item["zone_name"] == "milt.test")
+        assert claim["tenant_id"] == "t2"
+        assert claim["previous_tenant_id"] == "t1"
+        assert claim["action"] == "reassign"
+        assert claim["owner_source"] == "tenant_domains"
+        assert plan["conflicts"] == []
+
+        result = service.adopt_all_from_tenant_connections(apply=True)
+        assert result["applied"] is True
+        assert result["reassigned"] == 1
+        row = db.query(CloudflareZoneOwnership).filter_by(zone_name="milt.test").one()
+        assert row.tenant_id == "t2"
+
+        # Two explicit sources disagreeing must be reported, never guessed.
+        resolution["milt.test"] = (None, ("hosting_sites", "tenant_domains"), ("t1", "t2"))
+        ambiguous = service.adopt_all_from_tenant_connections(apply=False)
+        conflict = next(
+            item for item in ambiguous["conflicts"] if item["zone_name"] == "milt.test"
+        )
+        assert conflict["reason"] == "ambiguous_domain_owner"
+        assert conflict["candidates"] == ["t1", "t2"]
+        with pytest.raises(CloudflareZoneInUse):
+            service.adopt_all_from_tenant_connections(apply=True)
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_resolve_zone_owner_reads_explicit_tables() -> None:
+    engine = create_engine("sqlite+pysqlite:///:memory:")
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text(
+                    "CREATE TABLE tenant_domains ("
+                    "domain VARCHAR(255) PRIMARY KEY, tenant_id VARCHAR(36) NOT NULL)"
+                )
+            )
+            connection.execute(
+                text(
+                    "INSERT INTO tenant_domains (domain, tenant_id) "
+                    "VALUES ('milt.test', 't2')"
+                )
+            )
+        with Session(engine) as session:
+            resolved = resolve_zone_owner(session, "MILT.test.")
+            assert resolved.tenant_id == "t2"
+            assert resolved.sources == ("tenant_domains",)
+            assert resolved.candidates == ("t2",)
+
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        "CREATE TABLE hosting_sites ("
+                        "domain VARCHAR(255), tenant_id VARCHAR(36) NOT NULL)"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO hosting_sites (domain, tenant_id) "
+                        "VALUES ('milt.test', 't1')"
+                    )
+                )
+            ambiguous = resolve_zone_owner(session, "milt.test")
+            assert ambiguous.tenant_id is None
+            assert ambiguous.candidates == ("t1", "t2")
+
+            missing = resolve_zone_owner(session, "unknown.test")
+            assert missing.tenant_id is None
+            assert missing.candidates == ()
+    finally:
         engine.dispose()
 
 

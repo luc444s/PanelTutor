@@ -250,9 +250,12 @@ python3 scripts/spanel_dns.py cloudflare host adopt-all --from-tenant-connection
 `host adopt` verifica que la zona exista en la cuenta compartida y, con
 `--apply`, registra la propiedad del tenant. `host adopt-all
 --from-tenant-connections` es la vía de migración para instalaciones que ya
-tenían conexiones por tenant: se detiene ante reclamaciones en conflicto y no
-escribe nada si no son inequívocas. Desconectar el host nunca borra la propiedad
-de zonas, así que al reconectar cada tenant recupera las suyas.
+tenían conexiones por tenant: deduce el dueño real de cada zona desde
+`hosting_sites`, `domains_routes` y `tenant_domains`; solo usa el tenant de la
+conexión antigua cuando no hay evidencia explícita. Con `--apply` también
+reasigna filas antiguas mal asignadas. Si dos fuentes dan dueños distintos, se
+detiene, reporta el conflicto y no escribe nada. Desconectar el host nunca borra
+la propiedad de zonas, así que al reconectar cada tenant recupera las suyas.
 
 `oauth register` es dry-run salvo `--apply`; el bootstrap token debe ser
 solo-propietario y nunca se persiste. Re-registrar es conflicto; la rotación

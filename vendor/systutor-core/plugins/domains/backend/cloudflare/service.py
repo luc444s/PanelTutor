@@ -63,6 +63,7 @@ from plugins.domains.backend.cloudflare.ownership import (
     normalize_zone_name,
     owned_zone_ids,
     require_tenant_ownership,
+    resolve_zone_owner,
 )
 from plugins.domains.backend.cloudflare.store import (
     cancel_pending_flows,
@@ -1641,9 +1642,9 @@ class CloudflareService:
     def adopt_all_from_tenant_connections(
         self, *, apply: bool
     ) -> dict[str, object]:
-        claims: dict[str, dict[str, str]] = {}
-        conflicts: list[dict[str, str]] = []
-        errors: list[dict[str, str]] = []
+        claims: dict[str, dict[str, object]] = {}
+        conflicts: list[dict[str, object]] = []
+        errors: list[dict[str, object]] = []
         for connection in self._db.scalars(select(CloudflareConnection)).all():
             try:
                 zones = self._tenant_connection_zones(connection)
@@ -1658,34 +1659,66 @@ class CloudflareService:
                 continue
             for zone in zones:
                 name = normalize_zone_name(zone.name)
-                existing = claims.get(name)
-                if existing is not None and existing["tenant_id"] != connection.tenant_id:
+                resolution = resolve_zone_owner(self._db, name)
+                if resolution.candidates and resolution.tenant_id is None:
                     conflicts.append(
                         {
                             "zone_name": name,
                             "zone_id": zone.id,
                             "tenant_id": connection.tenant_id,
-                            "other_tenant_id": existing["tenant_id"],
+                            "reason": "ambiguous_domain_owner",
+                            "candidates": list(resolution.candidates),
+                            "sources": list(resolution.sources),
                         }
                     )
+                    continue
+                owner = resolution.tenant_id or connection.tenant_id
+                owner_source = (
+                    ",".join(resolution.sources)
+                    if resolution.tenant_id is not None
+                    else "connection"
+                )
+                existing = claims.get(name)
+                if existing is not None:
+                    if existing["tenant_id"] != owner:
+                        conflicts.append(
+                            {
+                                "zone_name": name,
+                                "zone_id": zone.id,
+                                "tenant_id": owner,
+                                "other_tenant_id": existing["tenant_id"],
+                                "reason": "multiple_connections",
+                            }
+                        )
                     continue
                 ownership = get_ownership_by_zone_id(
                     self._db, zone.id
                 ) or get_ownership_by_zone_name(self._db, name)
-                if ownership is not None and ownership.tenant_id != connection.tenant_id:
-                    conflicts.append(
-                        {
-                            "zone_name": name,
-                            "zone_id": zone.id,
-                            "tenant_id": connection.tenant_id,
-                            "other_tenant_id": ownership.tenant_id,
-                        }
-                    )
-                    continue
+                previous = ownership.tenant_id if ownership is not None else None
+                if previous is not None and previous != owner:
+                    if resolution.tenant_id is None:
+                        conflicts.append(
+                            {
+                                "zone_name": name,
+                                "zone_id": zone.id,
+                                "tenant_id": owner,
+                                "other_tenant_id": previous,
+                                "reason": "owned_by_other_tenant",
+                            }
+                        )
+                        continue
+                    action = "reassign"
+                elif ownership is None:
+                    action = "create"
+                else:
+                    action = "already_adopted"
                 claims[name] = {
-                    "tenant_id": connection.tenant_id,
+                    "tenant_id": owner,
                     "zone_id": zone.id,
                     "account_id": zone.account_id,
+                    "owner_source": owner_source,
+                    "action": action,
+                    "previous_tenant_id": previous,
                 }
         plan: dict[str, object] = {
             "applied": False,
@@ -1705,26 +1738,51 @@ class CloudflareService:
             return plan
         created = 0
         adopted = 0
+        reassigned = 0
         try:
             for name, values in sorted(claims.items()):
-                _row, was_created = claim_zone(
-                    self._db,
-                    tenant_id=values["tenant_id"],
-                    zone_id=values["zone_id"],
-                    zone_name=name,
-                    account_id=values["account_id"],
-                )
-                created += int(was_created)
-                adopted += int(not was_created)
+                tenant_id = str(values["tenant_id"])
+                zone_id = str(values["zone_id"])
+                account_id = str(values["account_id"])
+                ownership = get_ownership_by_zone_id(
+                    self._db, zone_id
+                ) or get_ownership_by_zone_name(self._db, name)
+                if ownership is not None and ownership.tenant_id != tenant_id:
+                    if values["owner_source"] == "connection":
+                        raise CloudflareZoneInUse(
+                            "the Cloudflare zone belongs to another tenant"
+                        )
+                    ownership.tenant_id = tenant_id
+                    ownership.zone_id = zone_id
+                    ownership.zone_name = name
+                    ownership.account_id = account_id
+                    self._db.flush()
+                    action = "reassigned"
+                    was_created = False
+                    reassigned += 1
+                else:
+                    _row, was_created = claim_zone(
+                        self._db,
+                        tenant_id=tenant_id,
+                        zone_id=zone_id,
+                        zone_name=name,
+                        account_id=account_id,
+                    )
+                    created += int(was_created)
+                    adopted += int(not was_created)
+                    action = "created" if was_created else "already_adopted"
                 self._audit(
                     "domains.dns.cloudflare_zone_adopted",
-                    tenant_id=values["tenant_id"],
-                    entity_id=values["zone_id"],
+                    tenant_id=tenant_id,
+                    entity_id=zone_id,
                     details={
-                        "zone_id": values["zone_id"],
+                        "zone_id": zone_id,
                         "zone_name": name,
-                        "account_id": values["account_id"],
+                        "account_id": account_id,
                         "created": was_created,
+                        "action": action,
+                        "previous_tenant_id": values["previous_tenant_id"],
+                        "owner_source": values["owner_source"],
                     },
                 )
             self._db.commit()
@@ -1735,14 +1793,15 @@ class CloudflareService:
             self._publish(
                 "domains.dns.cloudflare_zone_adopted",
                 {"zone_id": values["zone_id"], "zone_name": name},
-                values["tenant_id"],
-                values["zone_id"],
+                str(values["tenant_id"]),
+                str(values["zone_id"]),
             )
         return {
             **plan,
             "applied": True,
             "created": created,
             "already_adopted": adopted,
+            "reassigned": reassigned,
         }
 
     def _revoke(self, row: CloudflareConnection) -> bool:
