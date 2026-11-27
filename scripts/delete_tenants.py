@@ -15,7 +15,7 @@ Examples::
     sudo SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1 \
         python3 scripts/delete_tenants.py --apply --slug acme
 
-    # additionally remove /var/lib/spanel/cells/<slug> once it is empty
+    # additionally remove /var/lib/spanel/cells/<slug> and free the slug
     sudo SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1 \
         python3 scripts/delete_tenants.py --apply --purge-files --slug acme
 
@@ -288,6 +288,28 @@ def cell_state(data_root: str, slug: str) -> str:
     return "absent"
 
 
+def forget_tombstone(data_root: str, slug: str) -> bool:
+    """Free a purged slug so it can be allocated again.
+
+    ``next_index`` is monotonic, so the retired uid block is never reused
+    even after its tombstone is gone.
+    """
+    import json
+
+    registry = Path(data_root) / "registry.json"
+    if not registry.is_file():
+        return False
+    data = json.loads(registry.read_text(encoding="utf-8"))
+    before = data.get("tombstones") or []
+    data["tombstones"] = [row for row in before if row.get("slug") != slug]
+    if len(data["tombstones"]) == len(before):
+        return False
+    tmp = registry.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
+    tmp.replace(registry)
+    return True
+
+
 def deprovision_cells(slugs: list[str], data_root: str, purge_files: bool) -> list[str]:
     if os.geteuid() != 0:
         raise SystemExit("cell teardown requires root")
@@ -321,6 +343,8 @@ def deprovision_cells(slugs: list[str], data_root: str, purge_files: bool) -> li
         if directory.exists():
             shutil.rmtree(directory)
             print(f"[cell] {slug}: removed {directory}")
+        if forget_tombstone(data_root, slug):
+            print(f"[cell] {slug}: tombstone removed (slug can be reused)")
     return removed
 
 
@@ -343,7 +367,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--purge-files",
         action="store_true",
-        help="remove /var/lib/spanel/cells/<slug> after a clean teardown",
+        help="remove the cell directory and free its slug for reuse",
     )
     parser.add_argument(
         "--yes",
