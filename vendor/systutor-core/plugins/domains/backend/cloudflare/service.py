@@ -14,6 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from fastapi import FastAPI
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from plugins.domains.backend.cloudflare.client import (
@@ -21,10 +22,12 @@ from plugins.domains.backend.cloudflare.client import (
     CloudflareConflict,
     CloudflareCredentials,
     CloudflareError,
+    CloudflareHostManaged,
     CloudflareNotFound,
     CloudflarePermission,
     CloudflareValidation,
     CloudflareZone,
+    CloudflareZoneInUse,
     OAuthTokens,
 )
 from plugins.domains.backend.cloudflare.config import (
@@ -51,18 +54,36 @@ from plugins.domains.backend.cloudflare.oauth import (
     state_hash,
     success_page,
 )
+from plugins.domains.backend.cloudflare.ownership import (
+    claim_zone,
+    get_ownership_by_zone_id,
+    get_ownership_by_zone_name,
+    list_ownerships,
+    lock_zone_name,
+    normalize_zone_name,
+    owned_zone_ids,
+    require_tenant_ownership,
+)
 from plugins.domains.backend.cloudflare.store import (
     cancel_pending_flows,
+    cancel_pending_host_flows,
     get_connection,
     get_flow,
     get_flow_by_state_hash,
+    get_host_connection,
+    get_host_flow,
+    get_host_flow_by_state_hash,
     get_oauth_client,
     list_pending_flows,
+    list_pending_host_flows,
 )
 from plugins.domains.backend.models import (
     CloudflareConnection,
+    CloudflareHostConnection,
+    CloudflareHostOAuthFlow,
     CloudflareOAuthClient,
     CloudflareOAuthFlow,
+    CloudflareZoneOwnership,
 )
 from systutor.kernel.audit.service import record_audit
 from systutor.kernel.tenants.context import TenantContext
@@ -74,6 +95,7 @@ PURPOSE_VERIFIER = "cloudflare-pkce-verifier"
 PURPOSE_ACCESS = "cloudflare-access-token"
 PURPOSE_REFRESH = "cloudflare-refresh-token"
 FLOW_TTL_SECONDS = 300
+HOST_IDENTITY = "host"
 _ACCOUNT_RE = re.compile(r"^[A-Za-z0-9]{1,32}$")
 _ERROR_RE = re.compile(r"^[a-z0-9_.-]{1,64}$")
 
@@ -147,6 +169,44 @@ class CloudflareService:
     def config(self) -> CloudflareConfig:
         return self._config
 
+    @property
+    def mode(self) -> str:
+        return self._config.mode
+
+    @property
+    def host_managed(self) -> bool:
+        return self._config.mode == "single"
+
+    @property
+    def db(self) -> Session:
+        return self._db
+
+    def lock_zone_name(self, zone_name: str) -> None:
+        lock_zone_name(self._db, zone_name)
+
+    def claim_zone_ownership(
+        self,
+        *,
+        tenant_id: str,
+        zone_id: str,
+        zone_name: str,
+        account_id: str,
+    ) -> CloudflareZoneOwnership:
+        row, _created = claim_zone(
+            self._db,
+            tenant_id=tenant_id,
+            zone_id=zone_id,
+            zone_name=zone_name,
+            account_id=account_id,
+        )
+        return row
+
+    def _require_tenant_mode(self) -> None:
+        if self.host_managed:
+            raise CloudflareHostManaged(
+                "Cloudflare is managed by the platform; use the cloudflare host commands"
+            )
+
     def _cipher(self) -> CloudflareCipher:
         if self._cipher_instance is None:
             try:
@@ -163,6 +223,10 @@ class CloudflareService:
     @staticmethod
     def _flow_identity(tenant_id: str, flow_id: str) -> str:
         return f"{tenant_id}:{flow_id}"
+
+    @staticmethod
+    def _host_flow_identity(flow_id: str) -> str:
+        return f"{HOST_IDENTITY}:{flow_id}"
 
     def _decrypt(self, purpose: str, identity: str, row: Any) -> str:
         value = EncryptedValue(
@@ -429,7 +493,7 @@ class CloudflareService:
         return row, secret
 
     # -- authorization flow -------------------------------------------------
-    def start_flow_for_tenant(self, tenant_id: str) -> dict[str, object]:
+    def _flow_client(self) -> CloudflareOAuthClient:
         client_row, _secret = self._client_secrets()
         scope_ids = _oauth_scope_ids(client_row.scopes_json)
         scope_names = set(_oauth_scope_names(client_row.scopes_json))
@@ -440,6 +504,12 @@ class CloudflareService:
             raise CloudflareValidation(
                 "the Cloudflare OAuth client must be repaired before authorization"
             )
+        return client_row
+
+    def start_flow_for_tenant(self, tenant_id: str) -> dict[str, object]:
+        self._require_tenant_mode()
+        client_row = self._flow_client()
+        scope_ids = _oauth_scope_ids(client_row.scopes_json)
         now = self._clock()
         state = generate_state()
         verifier, challenge = generate_pkce()
@@ -480,6 +550,49 @@ class CloudflareService:
             "expires_at": _iso(flow.expires_at),
         }
 
+    def start_host_flow(self) -> dict[str, object]:
+        client_row = self._flow_client()
+        scope_ids = _oauth_scope_ids(client_row.scopes_json)
+        now = self._clock()
+        state = generate_state()
+        verifier, challenge = generate_pkce()
+        flow = CloudflareHostOAuthFlow(
+            state_hash=state_hash(state),
+            verifier_ciphertext=b"",
+            verifier_nonce=b"",
+            key_version=self._cipher().key_version,
+            redirect_uri=client_row.redirect_uri,
+            status=FLOW_PENDING,
+            expires_at=now + timedelta(seconds=FLOW_TTL_SECONDS),
+        )
+        self._db.add(flow)
+        self._db.flush()
+        encrypted = self._cipher().encrypt(
+            PURPOSE_VERIFIER,
+            self._host_flow_identity(flow.id),
+            verifier,
+        )
+        flow.verifier_ciphertext = encrypted.ciphertext
+        flow.verifier_nonce = encrypted.nonce
+        flow.key_version = encrypted.key_version
+        self._db.commit()
+        url = self._client.authorization_url(
+            client_id=client_row.client_id,
+            redirect_uri=client_row.redirect_uri,
+            state=state,
+            code_challenge=challenge,
+            scopes=scope_ids,
+        )
+        return {
+            "tenant_id": None,
+            "mode": "single",
+            "flow_id": flow.id,
+            "authorization_url": url,
+            "redirect_uri": client_row.redirect_uri,
+            "scopes": _oauth_scope_names(client_row.scopes_json),
+            "expires_at": _iso(flow.expires_at),
+        }
+
     def start(self, context: TenantContext) -> dict[str, object]:
         return self.start_flow_for_tenant(self._tenant_id(context))
 
@@ -490,6 +603,19 @@ class CloudflareService:
         return {
             "flow_id": flow.id,
             "tenant_id": flow.tenant_id,
+            "status": flow.status,
+            "error_code": flow.error_code,
+            "expires_at": _iso(flow.expires_at),
+            "consumed_at": _iso(flow.consumed_at),
+        }
+
+    def host_flow_status(self, flow_id: str) -> dict[str, object]:
+        flow = get_host_flow(self._db, flow_id)
+        if flow is None:
+            raise CloudflareNotFound("authorization flow not found")
+        return {
+            "flow_id": flow.id,
+            "tenant_id": None,
             "status": flow.status,
             "error_code": flow.error_code,
             "expires_at": _iso(flow.expires_at),
@@ -507,6 +633,17 @@ class CloudflareService:
         if not state or len(state) > 512:
             return CallbackResult(False, failure_page())
         flow = get_flow_by_state_hash(self._db, state_hash(state))
+        host_flow = get_host_flow_by_state_hash(self._db, state_hash(state))
+        if flow is not None and host_flow is not None:
+            # Collision is practically impossible; never guess which one wins.
+            return CallbackResult(False, failure_page())
+        if host_flow is not None:
+            return self._complete_host_callback(
+                host_flow,
+                code=code,
+                error=error,
+                redirect_uri=redirect_uri,
+            )
         if flow is None:
             return CallbackResult(False, failure_page())
         now = self._clock()
@@ -600,6 +737,115 @@ class CloudflareService:
         )
         return CallbackResult(True, success_page())
 
+    def _complete_host_callback(
+        self,
+        flow: CloudflareHostOAuthFlow,
+        *,
+        code: str | None,
+        error: str | None,
+        redirect_uri: str | None,
+    ) -> CallbackResult:
+        now = self._clock()
+        if redirect_uri is not None and redirect_uri != flow.redirect_uri:
+            return CallbackResult(False, failure_page())
+        if flow.status != FLOW_PENDING or flow.consumed_at is not None:
+            return CallbackResult(False, failure_page())
+        expires_at = _aware(flow.expires_at)
+        if expires_at is None or expires_at <= now:
+            flow.status = FLOW_EXPIRED
+            flow.consumed_at = now
+            self._db.commit()
+            return CallbackResult(False, failure_page())
+        if error is not None:
+            flow.status = FLOW_DENIED
+            flow.error_code = error if _ERROR_RE.match(error) else "access_denied"
+            flow.consumed_at = now
+            self._db.commit()
+            return CallbackResult(False, failure_page())
+        if not code:
+            flow.status = FLOW_FAILED
+            flow.error_code = "invalid_request"
+            flow.consumed_at = now
+            self._db.commit()
+            return CallbackResult(False, failure_page())
+
+        try:
+            verifier = self._decrypt(
+                PURPOSE_VERIFIER,
+                self._host_flow_identity(flow.id),
+                _SecretRow(
+                    flow.verifier_ciphertext, flow.verifier_nonce, flow.key_version
+                ),
+            )
+        except CloudflareError:
+            flow.status = FLOW_FAILED
+            flow.error_code = "invalid_verifier"
+            flow.consumed_at = now
+            self._db.commit()
+            return CallbackResult(False, failure_page())
+
+        flow.status = FLOW_CONSUMED
+        flow.consumed_at = now
+        self._db.commit()
+
+        client_row, secret = self._client_secrets()
+        try:
+            tokens = self._client.exchange_code(
+                client_id=client_row.client_id,
+                client_secret=secret,
+                code=code,
+                redirect_uri=flow.redirect_uri,
+                code_verifier=verifier,
+            )
+        except Exception as exc:  # noqa: BLE001 - public callback stays opaque
+            self._mark_host_callback_failed(flow.id, now, exc, stage="token_exchange")
+            return CallbackResult(False, failure_page())
+
+        try:
+            account_id, account_name = self._discover_account(
+                tokens, client_row.account_id
+            )
+            connection = self._upsert_host_connection(
+                account_id=account_id,
+                account_name=account_name,
+                tokens=tokens,
+            )
+        except Exception as exc:  # noqa: BLE001 - the public page must stay opaque
+            self._mark_host_callback_failed(flow.id, now, exc, stage="account_discovery")
+            return CallbackResult(False, failure_page())
+
+        self._audit(
+            "domains.dns.cloudflare_host_connected",
+            tenant_id=None,
+            entity_id=HOST_IDENTITY,
+            details={
+                "account_id": account_id,
+                "account_name": account_name,
+                "scopes": list(connection.scopes_json or []),
+            },
+        )
+        self._db.commit()
+        self._publish(
+            "domains.dns.cloudflare_host_connected",
+            {"account_id": account_id, "account_name": account_name},
+            None,
+            HOST_IDENTITY,
+        )
+        return CallbackResult(True, success_page())
+
+    def _mark_host_callback_failed(
+        self, flow_id: str, now: datetime, exc: Exception, *, stage: str
+    ) -> None:
+        self._db.rollback()
+        failed = get_host_flow(self._db, flow_id)
+        if failed is None:
+            return
+        code = exc.code.rsplit(".", 1)[-1] if isinstance(exc, CloudflareError) else "failed"
+        failed.status = FLOW_FAILED
+        failed.error_code = f"{stage}.{code}"[:64]
+        failed.consumed_at = now
+        self._db.commit()
+
     def _mark_callback_failed(
         self, flow_id: str, now: datetime, exc: Exception, *, stage: str
     ) -> None:
@@ -684,6 +930,52 @@ class CloudflareService:
         self._db.commit()
         return row
 
+    def _upsert_host_connection(
+        self,
+        *,
+        account_id: str,
+        account_name: str,
+        tokens: OAuthTokens,
+    ) -> CloudflareHostConnection:
+        existing = get_host_connection(self._db, for_update=True)
+        scopes = list(REQUIRED_SCOPE_NAMES)
+        access = self._cipher().encrypt(
+            PURPOSE_ACCESS, HOST_IDENTITY, tokens.access_token
+        )
+        refresh_value = tokens.refresh_token
+        if refresh_value is None and existing is not None and existing.refresh_ciphertext:
+            refresh_value = self._decrypt(
+                PURPOSE_REFRESH,
+                HOST_IDENTITY,
+                _SecretRow(
+                    existing.refresh_ciphertext,
+                    existing.refresh_nonce,
+                    existing.key_version,
+                ),
+            )
+        refresh = (
+            self._cipher().encrypt(PURPOSE_REFRESH, HOST_IDENTITY, refresh_value)
+            if refresh_value
+            else None
+        )
+        expires_at = tokens.expires_at(self._clock())
+        row = existing or CloudflareHostConnection(id=1)
+        row.cloudflare_account_id = account_id
+        row.account_name = account_name
+        row.access_ciphertext = access.ciphertext
+        row.access_nonce = access.nonce
+        row.refresh_ciphertext = refresh.ciphertext if refresh else None
+        row.refresh_nonce = refresh.nonce if refresh else None
+        row.key_version = access.key_version
+        row.scopes_json = scopes
+        row.expires_at = expires_at
+        row.status = "active"
+        if existing is None:
+            self._db.add(row)
+        self._db.flush()
+        self._db.commit()
+        return row
+
     # -- connection status and refresh -------------------------------------
     def _tenant_id(self, context: TenantContext) -> str:
         if not context.current_tenant_id:
@@ -696,17 +988,24 @@ class CloudflareService:
             raise CloudflareNotFound("no active Cloudflare connection for this tenant")
         return row
 
-    def _credentials(self, row: CloudflareConnection) -> CloudflareCredentials:
+    def _credentials(
+        self, row: CloudflareConnection | CloudflareHostConnection, identity: str | None = None
+    ) -> CloudflareCredentials:
+        scope = identity or (
+            HOST_IDENTITY
+            if isinstance(row, CloudflareHostConnection)
+            else row.tenant_id
+        )
         access = self._decrypt(
             PURPOSE_ACCESS,
-            row.tenant_id,
+            scope,
             _SecretRow(row.access_ciphertext, row.access_nonce, row.key_version),
         )
         refresh = None
         if row.refresh_ciphertext is not None and row.refresh_nonce is not None:
             refresh = self._decrypt(
                 PURPOSE_REFRESH,
-                row.tenant_id,
+                scope,
                 _SecretRow(row.refresh_ciphertext, row.refresh_nonce, row.key_version),
             )
         return CloudflareCredentials(
@@ -715,13 +1014,13 @@ class CloudflareService:
             expires_at=_aware(row.expires_at),
         )
 
-    def _refresh_locked(
-        self, tenant_id: str, stale_access: str
+    def _refresh_row_locked(
+        self,
+        row: CloudflareConnection | CloudflareHostConnection,
+        identity: str,
+        stale_access: str,
     ) -> CloudflareCredentials:
-        row = get_connection(self._db, tenant_id, for_update=True)
-        if row is None:
-            raise CloudflareNotFound("no active Cloudflare connection for this tenant")
-        current = self._credentials(row)
+        current = self._credentials(row, identity)
         if current.access_token != stale_access:
             return current
         if not current.refresh_token:
@@ -732,9 +1031,9 @@ class CloudflareService:
             client_secret=secret,
             refresh_token=current.refresh_token,
         )
-        access = self._cipher().encrypt(PURPOSE_ACCESS, tenant_id, tokens.access_token)
+        access = self._cipher().encrypt(PURPOSE_ACCESS, identity, tokens.access_token)
         refresh_value = tokens.refresh_token or current.refresh_token
-        refresh = self._cipher().encrypt(PURPOSE_REFRESH, tenant_id, refresh_value)
+        refresh = self._cipher().encrypt(PURPOSE_REFRESH, identity, refresh_value)
         row.access_ciphertext = access.ciphertext
         row.access_nonce = access.nonce
         row.refresh_ciphertext = refresh.ciphertext
@@ -749,11 +1048,67 @@ class CloudflareService:
             expires_at=_aware(row.expires_at),
         )
 
+    def _refresh_locked(
+        self, tenant_id: str, stale_access: str
+    ) -> CloudflareCredentials:
+        row = get_connection(self._db, tenant_id, for_update=True)
+        if row is None:
+            raise CloudflareNotFound("no active Cloudflare connection for this tenant")
+        return self._refresh_row_locked(row, tenant_id, stale_access)
+
+    def _host_connection(self, *, for_update: bool = False) -> CloudflareHostConnection:
+        row = get_host_connection(self._db, for_update=for_update)
+        if row is None:
+            raise CloudflareNotFound(
+                "no active Cloudflare connection for this platform"
+            )
+        return row
+
+    def _refresh_host_locked(self, stale_access: str) -> CloudflareCredentials:
+        row = get_host_connection(self._db, for_update=True)
+        if row is None:
+            raise CloudflareNotFound(
+                "no active Cloudflare connection for this platform"
+            )
+        return self._refresh_row_locked(row, HOST_IDENTITY, stale_access)
+
     def status_for_tenant(self, tenant_id: str) -> dict[str, object]:
+        if self.host_managed:
+            return self.host_status()
         row = self._connection(tenant_id)
         return {
             "connected": row.status == "active",
             "tenant_id": row.tenant_id,
+            "mode": "tenant",
+            "managed_by_host": False,
+            "account_id": row.cloudflare_account_id,
+            "account_name": row.account_name,
+            "scopes": list(row.scopes_json or []),
+            "expires_at": _iso(row.expires_at),
+            "status": row.status,
+            "updated_at": _iso(row.updated_at),
+        }
+
+    def host_status(self) -> dict[str, object]:
+        row = get_host_connection(self._db)
+        if row is None:
+            return {
+                "connected": False,
+                "tenant_id": None,
+                "mode": "single",
+                "managed_by_host": True,
+                "account_id": None,
+                "account_name": None,
+                "scopes": [],
+                "expires_at": None,
+                "status": "disconnected",
+                "updated_at": None,
+            }
+        return {
+            "connected": row.status == "active",
+            "tenant_id": None,
+            "mode": "single",
+            "managed_by_host": True,
             "account_id": row.cloudflare_account_id,
             "account_name": row.account_name,
             "scopes": list(row.scopes_json or []),
@@ -767,6 +1122,8 @@ class CloudflareService:
 
     # -- tenant-scoped discovery and DNS management ------------------------
     def _active_credentials(self, tenant_id: str) -> CloudflareCredentials:
+        if self.host_managed:
+            return self._active_host_credentials()
         row = self._connection(tenant_id)
         if row.status != "active":
             raise CloudflarePermission("Cloudflare authorization must be renewed")
@@ -778,6 +1135,18 @@ class CloudflareService:
             raise CloudflarePermission("Cloudflare authorization must be renewed")
         return credentials
 
+    def _active_host_credentials(self) -> CloudflareCredentials:
+        row = self._host_connection()
+        if row.status != "active":
+            raise CloudflarePermission("Cloudflare authorization must be renewed")
+        credentials = self._credentials(row, HOST_IDENTITY)
+        expires_at = credentials.expires_at
+        if expires_at is not None and expires_at <= self._clock():
+            if credentials.refresh_token:
+                return self._refresh_host_locked(credentials.access_token)
+            raise CloudflarePermission("Cloudflare authorization must be renewed")
+        return credentials
+
     def provisioning_access(
         self, tenant_id: str
     ) -> tuple[
@@ -786,6 +1155,18 @@ class CloudflareService:
         str,
     ]:
         """Return the narrow tenant credential bundle used by the provisioner."""
+        if self.host_managed:
+            row = self._host_connection()
+            if row.status != "active" or "Zone Write" not in set(row.scopes_json or []):
+                raise CloudflarePermission(
+                    "Cloudflare authorization must be renewed with Zone Write"
+                )
+            credentials = self._active_host_credentials()
+
+            def refresh_host() -> CloudflareCredentials:
+                return self._refresh_host_locked(credentials.access_token)
+
+            return credentials, refresh_host, row.cloudflare_account_id
         row = self._connection(tenant_id)
         if row.status != "active" or "Zone Write" not in set(row.scopes_json or []):
             raise CloudflarePermission(
@@ -831,6 +1212,24 @@ class CloudflareService:
         )
 
     def _zones(self, tenant_id: str) -> list[CloudflareZone]:
+        if self.host_managed:
+            credentials = self._active_host_credentials()
+
+            def refresh_host() -> CloudflareCredentials:
+                return self._refresh_host_locked(credentials.access_token)
+
+            zones = self._client.list_zones(credentials, refresh_host)
+            owned = owned_zone_ids(self._db, tenant_id, {zone.id for zone in zones})
+            return [
+                replace(
+                    zone,
+                    record_count=self._client.count_records(
+                        credentials, zone.id, refresh_host
+                    ),
+                )
+                for zone in zones
+                if zone.id in owned
+            ]
         credentials = self._active_credentials(tenant_id)
 
         def refresh() -> CloudflareCredentials:
@@ -869,6 +1268,25 @@ class CloudflareService:
     def _zone_access(
         self, tenant_id: str, zone_id: str
     ) -> tuple[CloudflareCredentials, Callable[[], CloudflareCredentials], CloudflareZone]:
+        if self.host_managed:
+            require_tenant_ownership(self._db, tenant_id, zone_id)
+            connection = self._host_connection()
+            credentials = self._active_host_credentials()
+
+            def refresh_host() -> CloudflareCredentials:
+                return self._refresh_host_locked(credentials.access_token)
+
+            zone = self._client.get_zone(credentials, zone_id, refresh_host)
+            if (
+                not zone.id
+                or (
+                    zone.account_id
+                    and connection.cloudflare_account_id
+                    and zone.account_id != connection.cloudflare_account_id
+                )
+            ):
+                raise CloudflareNotFound("Cloudflare zone not found")
+            return credentials, refresh_host, zone
         connection = self._connection(tenant_id)
         credentials = self._active_credentials(tenant_id)
 
@@ -963,6 +1381,7 @@ class CloudflareService:
         apply: bool,
         context: TenantContext | None = None,
     ) -> dict[str, object]:
+        self._require_tenant_mode()
         row = get_connection(self._db, tenant_id)
         if row is None:
             return {
@@ -1019,6 +1438,311 @@ class CloudflareService:
             "already_disconnected": False,
             "revoked": revoked,
             "cancelled_flows": pending,
+        }
+
+    # -- host/platform operations (single mode) ----------------------------
+    def disconnect_host(
+        self, *, apply: bool, context: TenantContext | None = None
+    ) -> dict[str, object]:
+        row = get_host_connection(self._db)
+        if row is None:
+            return {
+                "tenant_id": None,
+                "mode": "single",
+                "managed_by_host": True,
+                "applied": bool(apply),
+                "disconnected": False,
+                "already_disconnected": True,
+                "revoked": False,
+                "pending_flows": 0,
+            }
+        pending = len(list_pending_host_flows(self._db))
+        scopes = list(row.scopes_json or [])
+        if not apply:
+            return {
+                "tenant_id": None,
+                "mode": "single",
+                "managed_by_host": True,
+                "applied": False,
+                "disconnected": False,
+                "already_disconnected": False,
+                "revoked": False,
+                "account_id": row.cloudflare_account_id,
+                "account_name": row.account_name,
+                "scopes": scopes,
+                "pending_flows": pending,
+            }
+
+        revoked = self._revoke_host(row)
+        cancel_pending_host_flows(self._db, now=self._clock())
+        self._db.delete(row)
+        self._db.flush()
+        self._audit(
+            "domains.dns.cloudflare_host_disconnected",
+            tenant_id=None,
+            entity_id=HOST_IDENTITY,
+            details={
+                "account_id": row.cloudflare_account_id,
+                "account_name": row.account_name,
+                "scopes": scopes,
+                "revoked": revoked,
+                "cancelled_flows": pending,
+            },
+            context=context,
+        )
+        self._db.commit()
+        self._publish(
+            "domains.dns.cloudflare_host_disconnected",
+            {"revoked": revoked},
+            None,
+            HOST_IDENTITY,
+        )
+        return {
+            "tenant_id": None,
+            "mode": "single",
+            "managed_by_host": True,
+            "applied": True,
+            "disconnected": True,
+            "already_disconnected": False,
+            "revoked": revoked,
+            "cancelled_flows": pending,
+        }
+
+    def _revoke_host(self, row: CloudflareHostConnection) -> bool:
+        try:
+            client_row, secret = self._client_secrets()
+            credentials = self._credentials(row, HOST_IDENTITY)
+            token = credentials.refresh_token or credentials.access_token
+            self._client.revoke(
+                client_id=client_row.client_id,
+                client_secret=secret,
+                token=token,
+            )
+            return True
+        except Exception:  # noqa: BLE001 - revocation is explicitly best effort
+            return False
+
+    def host_zones(self, *, include_unowned: bool = False) -> list[dict[str, object]]:
+        credentials = self._active_host_credentials()
+
+        def refresh() -> CloudflareCredentials:
+            return self._refresh_host_locked(credentials.access_token)
+
+        ownerships = {row.zone_id: row for row in list_ownerships(self._db)}
+        items: list[dict[str, object]] = []
+        for zone in self._client.list_zones(credentials, refresh):
+            ownership = ownerships.get(zone.id)
+            if ownership is None and not include_unowned:
+                continue
+            count = self._client.count_records(credentials, zone.id, refresh)
+            items.append(
+                {
+                    **replace(zone, record_count=count).to_dict(),
+                    "owned": ownership is not None,
+                    "tenant_id": ownership.tenant_id if ownership is not None else None,
+                }
+            )
+        return items
+
+    def adopt_zone(
+        self,
+        *,
+        domain: str,
+        tenant_id: str,
+        apply: bool,
+    ) -> dict[str, object]:
+        name = normalize_zone_name(domain)
+        credentials = self._active_host_credentials()
+
+        def refresh() -> CloudflareCredentials:
+            return self._refresh_host_locked(credentials.access_token)
+
+        zone = next(
+            (
+                item
+                for item in self._client.list_zones(credentials, refresh)
+                if normalize_zone_name(item.name) == name
+            ),
+            None,
+        )
+        if zone is None:
+            raise CloudflareNotFound(
+                "the domain is not a zone in the shared Cloudflare account"
+            )
+        existing = get_ownership_by_zone_id(
+            self._db, zone.id
+        ) or get_ownership_by_zone_name(self._db, name)
+        if existing is not None and existing.tenant_id != tenant_id:
+            raise CloudflareZoneInUse("the Cloudflare zone belongs to another tenant")
+        plan: dict[str, object] = {
+            "domain": name,
+            "zone_id": zone.id,
+            "tenant_id": tenant_id,
+            "applied": False,
+            "adopted": existing is None,
+            "already_adopted": existing is not None,
+            "account_id": zone.account_id,
+        }
+        if not apply:
+            return plan
+        row, created = claim_zone(
+            self._db,
+            tenant_id=tenant_id,
+            zone_id=zone.id,
+            zone_name=name,
+            account_id=zone.account_id,
+        )
+        self._audit(
+            "domains.dns.cloudflare_zone_adopted",
+            tenant_id=tenant_id,
+            entity_id=zone.id,
+            details={
+                "zone_id": zone.id,
+                "zone_name": name,
+                "account_id": zone.account_id,
+                "created": created,
+            },
+        )
+        self._db.commit()
+        self._publish(
+            "domains.dns.cloudflare_zone_adopted",
+            {"zone_id": zone.id, "zone_name": name},
+            tenant_id,
+            zone.id,
+        )
+        return {
+            **plan,
+            "applied": True,
+            "adopted": created,
+            "already_adopted": not created,
+            "ownership_id": row.id,
+        }
+
+    def _tenant_connection_zones(
+        self, connection: CloudflareConnection
+    ) -> list[CloudflareZone]:
+        credentials = self._credentials(connection)
+        expires_at = credentials.expires_at
+        if expires_at is not None and expires_at <= self._clock():
+            if credentials.refresh_token:
+                credentials = self._refresh_locked(
+                    connection.tenant_id, credentials.access_token
+                )
+            else:
+                raise CloudflarePermission("Cloudflare authorization must be renewed")
+
+        def refresh() -> CloudflareCredentials:
+            return self._refresh_locked(
+                connection.tenant_id, credentials.access_token
+            )
+
+        return list(self._client.list_zones(credentials, refresh))
+
+    def adopt_all_from_tenant_connections(
+        self, *, apply: bool
+    ) -> dict[str, object]:
+        claims: dict[str, dict[str, str]] = {}
+        conflicts: list[dict[str, str]] = []
+        errors: list[dict[str, str]] = []
+        for connection in self._db.scalars(select(CloudflareConnection)).all():
+            try:
+                zones = self._tenant_connection_zones(connection)
+            except CloudflareError as exc:
+                errors.append(
+                    {
+                        "tenant_id": connection.tenant_id,
+                        "code": exc.code,
+                        "message": str(exc),
+                    }
+                )
+                continue
+            for zone in zones:
+                name = normalize_zone_name(zone.name)
+                existing = claims.get(name)
+                if existing is not None and existing["tenant_id"] != connection.tenant_id:
+                    conflicts.append(
+                        {
+                            "zone_name": name,
+                            "zone_id": zone.id,
+                            "tenant_id": connection.tenant_id,
+                            "other_tenant_id": existing["tenant_id"],
+                        }
+                    )
+                    continue
+                ownership = get_ownership_by_zone_id(
+                    self._db, zone.id
+                ) or get_ownership_by_zone_name(self._db, name)
+                if ownership is not None and ownership.tenant_id != connection.tenant_id:
+                    conflicts.append(
+                        {
+                            "zone_name": name,
+                            "zone_id": zone.id,
+                            "tenant_id": connection.tenant_id,
+                            "other_tenant_id": ownership.tenant_id,
+                        }
+                    )
+                    continue
+                claims[name] = {
+                    "tenant_id": connection.tenant_id,
+                    "zone_id": zone.id,
+                    "account_id": zone.account_id,
+                }
+        plan: dict[str, object] = {
+            "applied": False,
+            "mode": "single",
+            "claims": [
+                {"zone_name": name, **values}
+                for name, values in sorted(claims.items())
+            ],
+            "conflicts": conflicts,
+            "errors": errors,
+        }
+        if conflicts and apply:
+            raise CloudflareZoneInUse(
+                "two tenants claim the same Cloudflare zone; resolve the conflict first"
+            )
+        if not apply:
+            return plan
+        created = 0
+        adopted = 0
+        try:
+            for name, values in sorted(claims.items()):
+                _row, was_created = claim_zone(
+                    self._db,
+                    tenant_id=values["tenant_id"],
+                    zone_id=values["zone_id"],
+                    zone_name=name,
+                    account_id=values["account_id"],
+                )
+                created += int(was_created)
+                adopted += int(not was_created)
+                self._audit(
+                    "domains.dns.cloudflare_zone_adopted",
+                    tenant_id=values["tenant_id"],
+                    entity_id=values["zone_id"],
+                    details={
+                        "zone_id": values["zone_id"],
+                        "zone_name": name,
+                        "account_id": values["account_id"],
+                        "created": was_created,
+                    },
+                )
+            self._db.commit()
+        except Exception:
+            self._db.rollback()
+            raise
+        for name, values in sorted(claims.items()):
+            self._publish(
+                "domains.dns.cloudflare_zone_adopted",
+                {"zone_id": values["zone_id"], "zone_name": name},
+                values["tenant_id"],
+                values["zone_id"],
+            )
+        return {
+            **plan,
+            "applied": True,
+            "created": created,
+            "already_adopted": adopted,
         }
 
     def _revoke(self, row: CloudflareConnection) -> bool:

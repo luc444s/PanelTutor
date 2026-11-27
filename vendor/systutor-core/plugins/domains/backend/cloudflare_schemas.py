@@ -10,12 +10,14 @@ class _Strict(BaseModel):
 
 
 class OAuthStartResponse(BaseModel):
-    tenant_id: str
+    tenant_id: str | None = None
     flow_id: str
     authorization_url: str
     redirect_uri: str
     scopes: list[str] = Field(default_factory=list)
     expires_at: str | None = None
+    mode: str = "tenant"
+    managed_by_host: bool = False
 
 
 class OAuthClientStatusResponse(BaseModel):
@@ -36,13 +38,15 @@ class OAuthClientRegistrationRequest(BaseModel):
 
 class ConnectionStatusResponse(BaseModel):
     connected: bool
-    tenant_id: str
+    tenant_id: str | None = None
     account_id: str | None = None
     account_name: str | None = None
     scopes: list[str] = Field(default_factory=list)
     expires_at: str | None = None
     status: str = "disconnected"
     updated_at: str | None = None
+    mode: str = "tenant"
+    managed_by_host: bool = False
 
 
 class DisconnectRequest(_Strict):
@@ -50,7 +54,7 @@ class DisconnectRequest(_Strict):
 
 
 class DisconnectResponse(BaseModel):
-    tenant_id: str
+    tenant_id: str | None = None
     applied: bool
     disconnected: bool
     already_disconnected: bool = False
@@ -60,6 +64,8 @@ class DisconnectResponse(BaseModel):
     scopes: list[str] = Field(default_factory=list)
     pending_flows: int = 0
     cancelled_flows: int = 0
+    mode: str = "tenant"
+    managed_by_host: bool = False
 
 
 class CloudflareZoneItem(BaseModel):
@@ -76,6 +82,15 @@ class CloudflareZoneItem(BaseModel):
 
 class CloudflareZoneListResponse(BaseModel):
     items: list[CloudflareZoneItem] = Field(default_factory=list)
+
+
+class CloudflareHostZoneItem(CloudflareZoneItem):
+    owned: bool = False
+    tenant_id: str | None = None
+
+
+class CloudflareHostZoneListResponse(BaseModel):
+    items: list[CloudflareHostZoneItem] = Field(default_factory=list)
 
 
 class CloudflareRecordItem(BaseModel):

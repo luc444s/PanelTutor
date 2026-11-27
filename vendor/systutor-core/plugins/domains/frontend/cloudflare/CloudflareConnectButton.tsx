@@ -9,17 +9,23 @@ import { t } from "@/i18n";
 import {
   cloudflareKeys,
   disconnectCloudflare,
+  disconnectCloudflareHost,
   getCloudflareClient,
   getCloudflareStatus,
+  startCloudflareHostOAuth,
   startCloudflareOAuth,
 } from "./api";
 import {
   CLOUDFLARE_POLL_INTERVAL_MS,
   canManageCloudflareClient,
+  canManageCloudflareHost,
+  canStartTenantCloudflare,
   canUseCloudflare,
+  cloudflareHostStateMessage,
   errorMessageFrom,
   flowDeadline,
   isCloudflareConnected,
+  isCloudflareHostMode,
   needsClientRegistration,
   pollDecision,
 } from "./logic";
@@ -52,19 +58,24 @@ export function CloudflareConnectButton({ permissions, onConnected }: Props) {
 
   const visible = canUseCloudflare(permissions);
   const canRegister = canManageCloudflareClient(permissions);
-  const clientQuery = useQuery({
-    queryKey: cloudflareKeys.client,
-    queryFn: getCloudflareClient,
-    enabled: visible && canRegister,
-    retry: false,
-  });
   const statusQuery = useQuery({
     queryKey: cloudflareKeys.status,
     queryFn: getCloudflareStatus,
     enabled: visible,
     retry: false,
   });
-  const connected = isCloudflareConnected(statusQuery.data ?? null);
+  const status = statusQuery.data ?? null;
+  const hostMode = isCloudflareHostMode(status);
+  const hostManager = canManageCloudflareHost(permissions, status);
+  const tenantCanStart = canStartTenantCloudflare(permissions, status);
+  const connected = isCloudflareConnected(status);
+  const hostState = cloudflareHostStateMessage(status);
+  const clientQuery = useQuery({
+    queryKey: cloudflareKeys.client,
+    queryFn: getCloudflareClient,
+    enabled: visible && (canRegister || hostManager),
+    retry: false,
+  });
   const clientAction = canRegister && needsClientRegistration(clientQuery.data)
     ? clientQuery.data?.registered === false ? "register" : "repair"
     : null;
@@ -72,6 +83,8 @@ export function CloudflareConnectButton({ permissions, onConnected }: Props) {
   const refresh = () => {
     void queryClient.invalidateQueries({ queryKey: cloudflareKeys.status });
     void queryClient.invalidateQueries({ queryKey: cloudflareKeys.zones });
+    void queryClient.invalidateQueries({ queryKey: cloudflareKeys.hostStatus });
+    void queryClient.invalidateQueries({ queryKey: cloudflareKeys.hostZones });
     void queryClient.invalidateQueries({ queryKey: ["domains", "dns", "zones"] });
   };
 
@@ -91,11 +104,40 @@ export function CloudflareConnectButton({ permissions, onConnected }: Props) {
     onError: (failure: unknown) => toast.error(t(errorMessageFrom(failure))),
   });
 
+  const startHostMutation = useMutation({
+    mutationFn: startCloudflareHostOAuth,
+    onSuccess: (start) => {
+      setPending({ deadline: flowDeadline(start.expires_at, Date.now()) });
+      const popup = window.open("about:blank", "cloudflare-oauth", "width=560,height=760");
+      if (popup) {
+        popup.opener = null;
+        popup.location.replace(start.authorization_url);
+      } else {
+        toast.info(t("Allow popups or open the authorization page from the browser prompt."));
+        window.open(start.authorization_url, "_blank", "noreferrer");
+      }
+    },
+    onError: (failure: unknown) => toast.error(t(errorMessageFrom(failure))),
+  });
+
   const disconnectMutation = useMutation({
     mutationFn: disconnectCloudflare,
     onSuccess: () => {
       setConfirmDisconnect(false);
       toast.success(t("Cloudflare disconnected"));
+      refresh();
+    },
+    onError: (failure: unknown) => {
+      setConfirmDisconnect(false);
+      toast.error(t(errorMessageFrom(failure)));
+    },
+  });
+
+  const disconnectHostMutation = useMutation({
+    mutationFn: disconnectCloudflareHost,
+    onSuccess: () => {
+      setConfirmDisconnect(false);
+      toast.success(t("Cloudflare host disconnected"));
       refresh();
     },
     onError: (failure: unknown) => {
@@ -165,20 +207,29 @@ export function CloudflareConnectButton({ permissions, onConnected }: Props) {
     return null;
   }
 
-  const busy = startMutation.isPending || Boolean(pending);
+  if (hostMode && !hostManager) {
+    return hostState ? (
+      <span className="text-sm text-muted-foreground">{t(hostState)}</span>
+    ) : null;
+  }
+
+  const busy =
+    startMutation.isPending || startHostMutation.isPending || Boolean(pending);
 
   return (
     <>
       <Button
         size="sm"
         variant="secondary"
-        disabled={busy || disconnectMutation.isPending}
+        disabled={busy || disconnectMutation.isPending || disconnectHostMutation.isPending}
         onClick={() => {
           if (clientAction) {
             setRegisterOpen(true);
           } else if (connected) {
             setConfirmDisconnect(true);
-          } else {
+          } else if (hostMode) {
+            startHostMutation.mutate();
+          } else if (tenantCanStart) {
             startMutation.mutate();
           }
         }}
@@ -190,8 +241,12 @@ export function CloudflareConnectButton({ permissions, onConnected }: Props) {
             : clientAction === "repair"
               ? t("Repair Cloudflare")
               : connected
-                ? t("Disconnect Cloudflare")
-                : t("Connect Cloudflare")}
+                ? hostMode
+                  ? t("Disconnect platform Cloudflare")
+                  : t("Disconnect Cloudflare")
+                : hostMode
+                  ? t("Connect platform Cloudflare")
+                  : t("Connect Cloudflare")}
       </Button>
 
       <CloudflareRegisterDialog
@@ -206,15 +261,23 @@ export function CloudflareConnectButton({ permissions, onConnected }: Props) {
       <ConfirmDialog
         open={confirmDisconnect}
         onClose={() => setConfirmDisconnect(false)}
-        onConfirm={() => disconnectMutation.mutate()}
-        title={t("Disconnect Cloudflare?")}
-        description={t(
-          "Cloudflare will stop showing its zones for this tenant. You can connect it again at any time.",
-        )}
+        onConfirm={() =>
+          hostMode ? disconnectHostMutation.mutate() : disconnectMutation.mutate()
+        }
+        title={hostMode ? t("Disconnect platform Cloudflare?") : t("Disconnect Cloudflare?")}
+        description={
+          hostMode
+            ? t(
+                "Cloudflare will stop showing its zones for every tenant. Tenant zone ownership is preserved.",
+              )
+            : t(
+                "Cloudflare will stop showing its zones for this tenant. You can connect it again at any time.",
+              )
+        }
         confirmLabel={t("Disconnect")}
         cancelLabel={t("Cancel")}
         destructive
-        loading={disconnectMutation.isPending}
+        loading={disconnectMutation.isPending || disconnectHostMutation.isPending}
       />
     </>
   );

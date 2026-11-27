@@ -414,6 +414,12 @@ envía a `app-backend:8000`, mientras el resto del dominio sigue llegando al
 frontend. Los contenedores se conectan a la red del proxy sin publicar sus
 puertos en el host.
 
+Cloudflare se puede configurar por tenant (por defecto) o una sola vez para todo
+el host. Usa `SPANEL_CLOUDFLARE_MODE=single` (o `1`) para compartir una cuenta de
+plataforma; el aislamiento por tenant pasa a PostgreSQL y PowerDNS no cambia.
+Consulta el README del plugin Dominios para el CLI `cloudflare host`.
+`tenant`/`0` mantiene el comportamiento actual.
+
 ## Desarrollo
 
 ### Estructura del Proyecto

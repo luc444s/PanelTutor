@@ -12,6 +12,13 @@ from plugins.domains.backend.cloudflare.client import (
     CloudflareRecord,
     CloudflareValidation,
     CloudflareZone,
+    CloudflareZoneInUse,
+    CloudflareZoneUnowned,
+)
+from plugins.domains.backend.cloudflare.ownership import (
+    get_ownership_by_zone_id,
+    get_ownership_by_zone_name,
+    normalize_zone_name,
 )
 from plugins.domains.backend.cloudflare.service import CloudflareService
 from systutor.kernel.tenants.context import TenantContext
@@ -95,6 +102,9 @@ class CloudflareProvisioningService:
     def _access(self, tenant_id: str):
         return self._service.provisioning_access(tenant_id)
 
+    def _host_managed(self) -> bool:
+        return bool(getattr(self._service, "host_managed", False))
+
     @staticmethod
     def _select_zone(domain: str, zones: list[CloudflareZone]) -> CloudflareZone | None:
         candidates = [
@@ -108,6 +118,19 @@ class CloudflareProvisioningService:
     def _state(self, tenant_id: str, domain: str) -> _State:
         credentials, refresh, _account_id = self._access(tenant_id)
         zone = self._select_zone(domain, self._client.list_zones(credentials, refresh))
+        if zone is not None and self._host_managed():
+            ownership = get_ownership_by_zone_id(
+                self._service.db, zone.id
+            ) or get_ownership_by_zone_name(self._service.db, zone.name)
+            if ownership is None:
+                raise CloudflareZoneUnowned(
+                    "the Cloudflare zone is not assigned to this tenant; "
+                    "adopt it from the platform CLI"
+                )
+            if ownership.tenant_id != tenant_id:
+                raise CloudflareZoneInUse(
+                    "the Cloudflare zone belongs to another tenant"
+                )
         records = (
             self._client.list_records(credentials, zone.id, refresh) if zone is not None else []
         )
@@ -201,6 +224,10 @@ class CloudflareProvisioningService:
         replace: bool,
         context: TenantContext | None = None,
     ) -> dict[str, object]:
+        if self._host_managed():
+            # Serialize concurrent applies of the same domain before the plan
+            # reads the shared account, closing the check-then-create race.
+            self._service.lock_zone_name(normalize_domain(domain))
         plan = self.plan_for_tenant(
             tenant_id, domain=domain, ipv4=ipv4, www=www, replace=replace
         )
@@ -211,9 +238,16 @@ class CloudflareProvisioningService:
         credentials, refresh, account_id = self._access(tenant_id)
         zone_payload = plan["zone"]
         zone_id = str(zone_payload["id"]) if isinstance(zone_payload, dict) else ""
+        zone_name = normalize_zone_name(
+            str(zone_payload.get("name"))
+            if isinstance(zone_payload, dict)
+            else str(plan["domain"])
+        )
         created_zone = False
         try:
             if not zone_id:
+                if self._host_managed():
+                    self._service.lock_zone_name(zone_name)
                 zone = self._client.create_zone(
                     credentials,
                     account_id=account_id,
@@ -221,7 +255,15 @@ class CloudflareProvisioningService:
                     refresh=refresh,
                 )
                 zone_id = zone.id
+                zone_name = normalize_zone_name(zone.name)
                 created_zone = True
+            if self._host_managed():
+                self._service.claim_zone_ownership(
+                    tenant_id=tenant_id,
+                    zone_id=zone_id,
+                    zone_name=zone_name,
+                    account_id=account_id,
+                )
             actions = cast(list[dict[str, object]], plan["actions"])
             for action in actions:
                 if action["action"] == "delete_record":

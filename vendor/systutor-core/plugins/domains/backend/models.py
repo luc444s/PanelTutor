@@ -13,6 +13,7 @@ from uuid import uuid4
 from sqlalchemy import (
     JSON,
     Boolean,
+    CheckConstraint,
     DateTime,
     ForeignKey,
     Integer,
@@ -183,6 +184,71 @@ class CloudflareOAuthFlow(Base):
     error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class CloudflareHostConnection(Base):
+    """Singleton platform-wide Cloudflare authorization for `single` mode."""
+
+    __tablename__ = "domains_cloudflare_host_connection"
+    __table_args__ = (CheckConstraint("id = 1", name="ck_cloudflare_host_connection_singleton"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    cloudflare_account_id: Mapped[str] = mapped_column(String(32))
+    account_name: Mapped[str] = mapped_column(String(255))
+    access_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    access_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    refresh_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    refresh_nonce: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    key_version: Mapped[int] = mapped_column(Integer, default=1)
+    scopes_json: Mapped[list] = mapped_column(JSON, default=list)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    status: Mapped[str] = mapped_column(String(32), default="active")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class CloudflareHostOAuthFlow(Base):
+    """Single-use platform-wide authorization transaction (no tenant_id)."""
+
+    __tablename__ = "domains_cloudflare_host_oauth_flows"
+    __table_args__ = (UniqueConstraint("state_hash"),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    state_hash: Mapped[str] = mapped_column(String(64), index=True)
+    verifier_ciphertext: Mapped[bytes] = mapped_column(LargeBinary)
+    verifier_nonce: Mapped[bytes] = mapped_column(LargeBinary)
+    key_version: Mapped[int] = mapped_column(Integer, default=1)
+    redirect_uri: Mapped[str] = mapped_column(String(1000))
+    status: Mapped[str] = mapped_column(String(32), default="pending")
+    error_code: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class CloudflareZoneOwnership(Base):
+    """Tenant ownership of one zone inside the shared Cloudflare account."""
+
+    __tablename__ = "domains_cloudflare_zone_ownership"
+    __table_args__ = (
+        UniqueConstraint("zone_id"),
+        UniqueConstraint("zone_name"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=new_id)
+    tenant_id: Mapped[str] = mapped_column(ForeignKey("tenants.id"), index=True)
+    zone_id: Mapped[str] = mapped_column(String(32), index=True)
+    zone_name: Mapped[str] = mapped_column(String(253), index=True)
+    account_id: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now

@@ -3,6 +3,7 @@ import { ApiError, apiRequest } from "@systutor/shell/api/client";
 import type {
   CloudflareClientStatus,
   CloudflareDisconnectResponse,
+  CloudflareHostZoneList,
   CloudflareProvisionApply,
   CloudflareProvisionPlan,
   CloudflareRecord,
@@ -22,6 +23,8 @@ export const cloudflareKeys = {
   client: ["domains", "cloudflare", "client"] as const,
   zones: ["domains", "cloudflare", "zones"] as const,
   records: (zoneId: string) => ["domains", "cloudflare", "zones", zoneId, "records"] as const,
+  hostStatus: ["domains", "cloudflare", "host", "status"] as const,
+  hostZones: ["domains", "cloudflare", "host", "zones"] as const,
 };
 
 export const getCloudflareClient = () =>
@@ -83,6 +86,23 @@ export const disconnectCloudflare = () =>
     method: "POST",
     body: JSON.stringify({ apply: true }),
   });
+
+export const getCloudflareHostStatus = () =>
+  apiRequest<CloudflareStatus>(`${BASE}/host/status`);
+
+export const startCloudflareHostOAuth = () =>
+  apiRequest<CloudflareStartResponse>(`${BASE}/host/oauth/start`, { method: "POST" });
+
+export const disconnectCloudflareHost = () =>
+  apiRequest<CloudflareDisconnectResponse>(`${BASE}/host/disconnect`, {
+    method: "POST",
+    body: JSON.stringify({ apply: true }),
+  });
+
+export const listCloudflareHostZones = (includeUnowned = false) =>
+  apiRequest<CloudflareHostZoneList>(
+    `${BASE}/host/zones?include_unowned=${includeUnowned ? "true" : "false"}`,
+  );
 
 export const provisionPlan = (payload: {
   domain: string;

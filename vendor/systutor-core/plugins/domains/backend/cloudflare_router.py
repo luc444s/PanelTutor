@@ -17,6 +17,8 @@ from plugins.domains.backend.cloudflare.config import CloudflareConfig, Cloudfla
 from plugins.domains.backend.cloudflare.provisioning import CloudflareProvisioningService
 from plugins.domains.backend.cloudflare.service import CloudflareService
 from plugins.domains.backend.cloudflare_schemas import (
+    CloudflareHostZoneItem,
+    CloudflareHostZoneListResponse,
     CloudflareProvisionApplyResponse,
     CloudflareProvisionPlanResponse,
     CloudflareProvisionRequest,
@@ -91,6 +93,62 @@ def _translate(exc: CloudflareError) -> AppError:
             code="domains.dns.cloudflare.upstream_validation",
         )
     return AppError(str(exc), status_code=exc.status_code, code=exc.code)
+
+
+@router.get("/dns/cloudflare/host/status", response_model=ConnectionStatusResponse)
+def host_connection_status(
+    request: Request,
+    _current_user: User = Depends(require_permission(CLOUDFLARE, platform_only=True)),
+    db: Session = Depends(get_db_session),
+) -> ConnectionStatusResponse:
+    return ConnectionStatusResponse.model_validate(_service(request, db).host_status())
+
+
+@router.post("/dns/cloudflare/host/oauth/start", response_model=OAuthStartResponse)
+def host_start_oauth(
+    request: Request,
+    _current_user: User = Depends(require_permission(CLOUDFLARE, platform_only=True)),
+    db: Session = Depends(get_db_session),
+) -> OAuthStartResponse:
+    try:
+        payload = _service(request, db).start_host_flow()
+    except CloudflareError as exc:
+        raise _translate(exc) from exc
+    return OAuthStartResponse.model_validate(payload)
+
+
+@router.post("/dns/cloudflare/host/disconnect", response_model=DisconnectResponse)
+def host_disconnect(
+    request: Request,
+    body: DisconnectRequest | None = None,
+    _current_user: User = Depends(require_permission(CLOUDFLARE, platform_only=True)),
+    db: Session = Depends(get_db_session),
+) -> DisconnectResponse:
+    apply = True if body is None else body.apply
+    try:
+        payload = _service(request, db).disconnect_host(apply=apply)
+    except CloudflareError as exc:
+        raise _translate(exc) from exc
+    return DisconnectResponse.model_validate(payload)
+
+
+@router.get(
+    "/dns/cloudflare/host/zones",
+    response_model=CloudflareHostZoneListResponse,
+)
+def host_list_zones(
+    request: Request,
+    include_unowned: bool = Query(default=False),
+    _current_user: User = Depends(require_permission(CLOUDFLARE, platform_only=True)),
+    db: Session = Depends(get_db_session),
+) -> CloudflareHostZoneListResponse:
+    try:
+        items = _service(request, db).host_zones(include_unowned=include_unowned)
+    except CloudflareError as exc:
+        raise _translate(exc) from exc
+    return CloudflareHostZoneListResponse(
+        items=[CloudflareHostZoneItem.model_validate(item) for item in items]
+    )
 
 
 @router.post(

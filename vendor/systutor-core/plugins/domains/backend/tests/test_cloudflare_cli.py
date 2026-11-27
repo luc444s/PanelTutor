@@ -17,9 +17,14 @@ from plugins.domains.backend.cloudflare.client import (
 )
 from plugins.domains.backend.cloudflare.config import CloudflareConfig
 from plugins.domains.backend.cloudflare.crypto import CloudflareCipher
-from plugins.domains.backend.cloudflare.service import PURPOSE_ACCESS
+from plugins.domains.backend.cloudflare.service import HOST_IDENTITY, PURPOSE_ACCESS
 from plugins.domains.backend.dns.cli import run
-from plugins.domains.backend.models import CloudflareConnection, CloudflareOAuthClient
+from plugins.domains.backend.models import (
+    CloudflareConnection,
+    CloudflareHostConnection,
+    CloudflareOAuthClient,
+    CloudflareZoneOwnership,
+)
 from systutor.core.database import Base
 from systutor.kernel.tenants.models import Tenant
 
@@ -400,5 +405,201 @@ def test_provision_plan_apply_and_json_contract(tmp_path, capsys) -> None:
         assert applied["applied"] is True
         assert applied["drift"] is False
         assert [record["type"] for record in applied["records"]] == ["A", "CNAME"]
+    finally:
+        engine.dispose()
+
+
+def _single_config(config: CloudflareConfig) -> CloudflareConfig:
+    return CloudflareConfig(
+        config.encryption_key_file,
+        config.public_url,
+        timeout_seconds=config.timeout_seconds,
+        key_version=config.key_version,
+        mode="single",
+    )
+
+
+def seed_host_connection(engine, config) -> None:
+    cipher = CloudflareCipher(config.load_key())
+    access = cipher.encrypt(PURPOSE_ACCESS, HOST_IDENTITY, "host-access-canary")
+    with Session(engine) as db:
+        db.add(
+            CloudflareHostConnection(
+                id=1,
+                cloudflare_account_id="acct1",
+                account_name="Lab",
+                access_ciphertext=access.ciphertext,
+                access_nonce=access.nonce,
+                refresh_ciphertext=None,
+                refresh_nonce=None,
+                key_version=access.key_version,
+                scopes_json=["Zone Read", "Zone Write", "DNS Read", "DNS Write"],
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                status="active",
+            )
+        )
+        db.commit()
+
+
+def test_host_status_zones_adopt_and_disconnect(tmp_path, capsys) -> None:
+    engine, base_config, fake, factory = build(tmp_path)
+    config = _single_config(base_config)
+    try:
+        seed_host_connection(engine, config)
+        code = run(
+            ["cloudflare", "host", "status", "--json"],
+            session_factory=factory,
+            cloudflare_client=fake,
+            cloudflare_config=config,
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert code == 0
+        assert payload["mode"] == "single"
+        assert payload["connected"] is True
+        assert "host-access-canary" not in json.dumps(payload)
+
+        code = run(
+            ["cloudflare", "host", "zones", "list", "--include-unowned", "--json"],
+            session_factory=factory,
+            cloudflare_client=fake,
+            cloudflare_config=config,
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert code == 0
+        assert payload["zones"][0]["owned"] is False
+
+        code = run(
+            [
+                "cloudflare",
+                "host",
+                "adopt",
+                "example.com",
+                "--tenant",
+                "one",
+                "--json",
+            ],
+            session_factory=factory,
+            cloudflare_client=fake,
+            cloudflare_config=config,
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert code == 0
+        assert payload["applied"] is False
+        with Session(engine) as db:
+            assert db.scalar(select(CloudflareZoneOwnership)) is None
+
+        code = run(
+            [
+                "cloudflare",
+                "host",
+                "adopt",
+                "example.com",
+                "--tenant",
+                "one",
+                "--apply",
+                "--json",
+            ],
+            session_factory=factory,
+            cloudflare_client=fake,
+            cloudflare_config=config,
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert code == 0
+        assert payload["applied"] is True
+        with Session(engine) as db:
+            ownership = db.scalar(select(CloudflareZoneOwnership))
+            assert ownership is not None and ownership.tenant_id == "t1"
+
+        code = run(
+            ["cloudflare", "host", "disconnect", "--apply", "--json"],
+            session_factory=factory,
+            cloudflare_client=fake,
+            cloudflare_config=config,
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert code == 0
+        assert payload["disconnected"] is True
+        with Session(engine) as db:
+            assert db.scalar(select(CloudflareHostConnection)) is None
+            assert db.scalar(select(CloudflareZoneOwnership)) is not None
+    finally:
+        engine.dispose()
+
+
+def test_host_connect_returns_url_without_tokens(tmp_path, capsys) -> None:
+    engine, base_config, fake, factory = build(tmp_path)
+    config = _single_config(base_config)
+    try:
+        register(engine, tmp_path, config, fake)
+        code = run(
+            ["cloudflare", "host", "connect", "--wait-seconds", "0"],
+            session_factory=factory,
+            cloudflare_client=fake,
+            cloudflare_config=config,
+        )
+        output = capsys.readouterr().out
+        assert code == 0
+        assert "https://dash.cloudflare.com/oauth2/auth" in output
+        assert "pending" in output
+        assert SECRET not in output
+    finally:
+        engine.dispose()
+
+
+def test_tenant_commands_point_to_host_in_single_mode(tmp_path, capsys) -> None:
+    engine, base_config, fake, factory = build(tmp_path)
+    config = _single_config(base_config)
+    try:
+        register(engine, tmp_path, config, fake)
+        code = run(
+            ["cloudflare", "connect", "--tenant", "one", "--wait-seconds", "0"],
+            session_factory=factory,
+            cloudflare_client=fake,
+            cloudflare_config=config,
+        )
+        assert code == 4
+        assert "cloudflare host" in capsys.readouterr().err
+        code = run(
+            ["cloudflare", "disconnect", "--tenant", "one", "--apply"],
+            session_factory=factory,
+            cloudflare_client=fake,
+            cloudflare_config=config,
+        )
+        assert code == 4
+        assert "cloudflare host" in capsys.readouterr().err
+    finally:
+        engine.dispose()
+
+
+def test_adopt_all_from_existing_tenant_connections(tmp_path, capsys) -> None:
+    engine, base_config, fake, factory = build(tmp_path)
+    config = _single_config(base_config)
+    try:
+        seed_host_connection(engine, config)
+        seed_connection(engine, config)
+        code = run(
+            [
+                "cloudflare",
+                "host",
+                "adopt-all",
+                "--from-tenant-connections",
+                "--apply",
+                "--json",
+            ],
+            session_factory=factory,
+            cloudflare_client=fake,
+            cloudflare_config=config,
+        )
+        payload = json.loads(capsys.readouterr().out)
+        assert code == 0
+        assert payload["applied"] is True
+        assert payload["created"] >= 1
+        with Session(engine) as db:
+            ownership = db.scalar(
+                select(CloudflareZoneOwnership).where(
+                    CloudflareZoneOwnership.zone_name == "example.com"
+                )
+            )
+            assert ownership is not None and ownership.tenant_id == "t1"
     finally:
         engine.dispose()

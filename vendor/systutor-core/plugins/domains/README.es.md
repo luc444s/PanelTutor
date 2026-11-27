@@ -198,6 +198,20 @@ segundos. `SPANEL_DOMAIN` también se acepta en despliegues que la utilicen.
 `SPANEL_CLOUDFLARE_PUBLIC_URL` y `SPANEL_CLOUDFLARE_TIMEOUT_SECONDS` siguen
 disponibles como overrides avanzados opcionales.
 
+`SPANEL_CLOUDFLARE_MODE` decide quién posee la autorización de Cloudflare. Es un
+interruptor de arranque: cámbialo y reinicia el backend.
+
+- `tenant` (por defecto) o `0`: una conexión OAuth por tenant. El
+  comportamiento es el actual.
+- `single` o `1`: una sola cuenta Cloudflare del host. Los tenants dejan de
+  conectar/desconectar Cloudflare; lo hace una vez la plataforma. El aislamiento
+  se aplica en PostgreSQL con `domains_cloudflare_zone_ownership`. PowerDNS, la
+  autoridad de RRsets y los nameservers públicos no cambian en ningún modo.
+
+Cualquier otro valor falla con `CloudflareConfigError` y sin secretos. Las
+tablas nuevas son aditivas; volver a `tenant` las ignora y las conexiones por
+tenant nunca se modifican.
+
 El archivo de clave es regular, solo propietario y contiene exactamente 32
 bytes crudos o una codificación base64/base64url de 32 bytes. La ruta por
 defecto reutiliza el mismo archivo `apps_key` que monta el plugin Apps (texto
@@ -221,6 +235,24 @@ python3 scripts/spanel_dns.py cloudflare records list ZONA --tenant SLUG_TENANT
 python3 scripts/spanel_dns.py cloudflare provision plan DOMINIO --tenant SLUG_TENANT --ipv4 DIRECCION [--www] [--replace]
 python3 scripts/spanel_dns.py cloudflare provision apply DOMINIO --tenant SLUG_TENANT --ipv4 DIRECCION [--www] [--replace] --apply
 ```
+
+En modo `single` la cuenta de plataforma se gestiona con:
+
+```text
+python3 scripts/spanel_dns.py cloudflare host status
+python3 scripts/spanel_dns.py cloudflare host connect [--wait-seconds 300]
+python3 scripts/spanel_dns.py cloudflare host disconnect [--apply]
+python3 scripts/spanel_dns.py cloudflare host zones list [--include-unowned]
+python3 scripts/spanel_dns.py cloudflare host adopt DOMINIO --tenant SLUG_TENANT [--apply]
+python3 scripts/spanel_dns.py cloudflare host adopt-all --from-tenant-connections [--apply]
+```
+
+`host adopt` verifica que la zona exista en la cuenta compartida y, con
+`--apply`, registra la propiedad del tenant. `host adopt-all
+--from-tenant-connections` es la vía de migración para instalaciones que ya
+tenían conexiones por tenant: se detiene ante reclamaciones en conflicto y no
+escribe nada si no son inequívocas. Desconectar el host nunca borra la propiedad
+de zonas, así que al reconectar cada tenant recupera las suyas.
 
 `oauth register` es dry-run salvo `--apply`; el bootstrap token debe ser
 solo-propietario y nunca se persiste. Re-registrar es conflicto; la rotación

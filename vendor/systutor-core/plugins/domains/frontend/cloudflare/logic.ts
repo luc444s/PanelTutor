@@ -2,9 +2,13 @@ import type { CloudflareStatus } from "./types";
 
 export const CLOUDFLARE_PERMISSION = "domains.dns.cloudflare";
 export const CLOUDFLARE_REGISTER_PERMISSION = "domains.cloudflare.register";
+export const CLOUDFLARE_PLATFORM_PERMISSION = "core.platform.admin";
 export const CLOUDFLARE_POLL_INTERVAL_MS = 2000;
 export const CLOUDFLARE_FLOW_MAX_MS = 5 * 60 * 1000;
 export const CLOUDFLARE_UPSTREAM_VALIDATION = "domains.dns.cloudflare.upstream_validation";
+export const CLOUDFLARE_HOST_MANAGED = "domains.dns.cloudflare.host_managed";
+export const CLOUDFLARE_ZONE_UNOWNED = "domains.dns.cloudflare.zone_unowned";
+export const CLOUDFLARE_ZONE_IN_USE = "domains.dns.cloudflare.zone_in_use";
 
 const IPV4_PATTERN = /^(?:(?:25[0-5]|2[0-4]\d|1?\d?\d)\.){3}(?:25[0-5]|2[0-4]\d|1?\d?\d)$/;
 const IPV6_PATTERN = /^[0-9A-Fa-f:]+$/;
@@ -15,6 +19,36 @@ export function canUseCloudflare(permissions: readonly string[]): boolean {
 
 export function canManageCloudflareClient(permissions: readonly string[]): boolean {
   return permissions.includes(CLOUDFLARE_REGISTER_PERMISSION);
+}
+
+export function isCloudflareHostMode(status: CloudflareStatus | null | undefined): boolean {
+  return status?.mode === "single" || status?.managed_by_host === true;
+}
+
+export function canManageCloudflareHost(
+  permissions: readonly string[],
+  status: CloudflareStatus | null | undefined,
+): boolean {
+  return (
+    isCloudflareHostMode(status) &&
+    permissions.includes(CLOUDFLARE_PLATFORM_PERMISSION) &&
+    permissions.includes(CLOUDFLARE_PERMISSION)
+  );
+}
+
+/** Whether the tenant button may call the tenant-scoped `/oauth/start`. */
+export function canStartTenantCloudflare(
+  permissions: readonly string[],
+  status: CloudflareStatus | null | undefined,
+): boolean {
+  return canUseCloudflare(permissions) && !isCloudflareHostMode(status);
+}
+
+export function cloudflareHostStateMessage(status: CloudflareStatus | null): string | null {
+  if (!isCloudflareHostMode(status)) return null;
+  return status?.connected
+    ? "Cloudflare is managed by the platform."
+    : "Cloudflare is managed by the platform and is not connected yet.";
 }
 
 export function needsClientRegistration(
@@ -143,6 +177,15 @@ export function cloudflareErrorMessage(
   }
   if (code === "domains.dns.cloudflare.account_not_found") {
     return "Cloudflare could not find that Account ID. Check it and try again.";
+  }
+  if (code === CLOUDFLARE_HOST_MANAGED) {
+    return "Cloudflare is managed by the platform. A platform administrator must connect or disconnect it.";
+  }
+  if (code === CLOUDFLARE_ZONE_UNOWNED) {
+    return "This zone exists in the platform Cloudflare account but is not assigned to this tenant yet. A platform administrator must adopt it.";
+  }
+  if (code === CLOUDFLARE_ZONE_IN_USE) {
+    return "This Cloudflare zone is assigned to another tenant.";
   }
   switch (httpStatus) {
     case 401:

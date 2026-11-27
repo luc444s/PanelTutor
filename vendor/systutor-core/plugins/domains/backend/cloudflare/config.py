@@ -16,6 +16,7 @@ import stat
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlsplit
 
 API_BASE = "https://api.cloudflare.com/client/v4"
@@ -69,12 +70,25 @@ def _decode_key(raw: bytes) -> bytes | None:
     return decoded if len(decoded) == 32 else None
 
 
+def _parse_mode(value: str | None) -> Literal["tenant", "single"]:
+    """Startup-only switch: tenant (default) or a single host-wide account."""
+    normalized = _clean(value).lower()
+    if normalized in {"", "tenant", "0"}:
+        return "tenant"
+    if normalized in {"single", "1"}:
+        return "single"
+    raise CloudflareConfigError(
+        "SPANEL_CLOUDFLARE_MODE must be tenant or single"
+    )
+
+
 @dataclass(frozen=True)
 class CloudflareConfig:
     encryption_key_file: Path
     public_url: str
     timeout_seconds: float = 10.0
     key_version: int = 1
+    mode: Literal["tenant", "single"] = "tenant"
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> CloudflareConfig:
@@ -92,6 +106,7 @@ class CloudflareConfig:
                 public_url = f"https://{domain}"
         raw_timeout = _clean(env.get("SPANEL_CLOUDFLARE_TIMEOUT_SECONDS")) or "10"
         raw_version = _clean(env.get("SPANEL_CLOUDFLARE_KEY_VERSION")) or "1"
+        mode = _parse_mode(env.get("SPANEL_CLOUDFLARE_MODE"))
 
         if not public_url:
             raise CloudflareConfigError(
@@ -134,6 +149,7 @@ class CloudflareConfig:
             public_url=_origin(parts),
             timeout_seconds=timeout,
             key_version=key_version,
+            mode=mode,
         )
 
     @property
@@ -209,6 +225,7 @@ class CloudflareConfig:
         facts = self.inspect_key_file()
         return {
             "configured": True,
+            "mode": self.mode,
             "public_url": self.public_url,
             "redirect_uri": self.redirect_uri,
             "timeout_seconds": self.timeout_seconds,

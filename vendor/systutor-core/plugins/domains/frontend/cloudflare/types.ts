@@ -8,23 +8,29 @@ export type CloudflareClientStatus = {
 };
 
 export type CloudflareStartResponse = {
-  tenant_id: string;
+  tenant_id: string | null;
   flow_id: string;
   authorization_url: string;
   redirect_uri: string;
   scopes: string[];
   expires_at: string | null;
+  mode?: "tenant" | "single";
+  managed_by_host?: boolean;
 };
+
+export type CloudflareMode = "tenant" | "single";
 
 export type CloudflareStatus = {
   connected: boolean;
-  tenant_id: string;
+  tenant_id?: string | null;
   account_id: string | null;
   account_name: string | null;
   scopes: string[];
   expires_at: string | null;
   status: string;
   updated_at: string | null;
+  mode?: CloudflareMode;
+  managed_by_host?: boolean;
 };
 
 export type CloudflareZone = {
@@ -40,6 +46,13 @@ export type CloudflareZone = {
 };
 
 export type CloudflareZoneList = { items: CloudflareZone[] };
+
+export type CloudflareHostZone = CloudflareZone & {
+  owned: boolean;
+  tenant_id: string | null;
+};
+
+export type CloudflareHostZoneList = { items: CloudflareHostZone[] };
 
 export type CloudflareRecord = {
   id: string;
@@ -71,7 +84,7 @@ export type CloudflareRecordDeleteResponse = {
 };
 
 export type CloudflareDisconnectResponse = {
-  tenant_id: string;
+  tenant_id?: string | null;
   applied: boolean;
   disconnected: boolean;
   already_disconnected: boolean;
@@ -81,6 +94,8 @@ export type CloudflareDisconnectResponse = {
   scopes: string[];
   pending_flows: number;
   cancelled_flows: number;
+  mode?: CloudflareMode;
+  managed_by_host?: boolean;
 };
 
 export type CloudflareProvisionRecord = {

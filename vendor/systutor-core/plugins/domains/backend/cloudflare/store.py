@@ -9,6 +9,8 @@ from sqlalchemy.orm import Session
 
 from plugins.domains.backend.models import (
     CloudflareConnection,
+    CloudflareHostConnection,
+    CloudflareHostOAuthFlow,
     CloudflareOAuthClient,
     CloudflareOAuthFlow,
 )
@@ -62,6 +64,51 @@ def cancel_pending_flows(
 ) -> int:
     cancelled = 0
     for flow in list_pending_flows(db, tenant_id):
+        flow.status = status
+        flow.consumed_at = now
+        cancelled += 1
+    db.flush()
+    return cancelled
+
+
+def get_host_connection(
+    db: Session, *, for_update: bool = False
+) -> CloudflareHostConnection | None:
+    statement = select(CloudflareHostConnection).where(CloudflareHostConnection.id == 1)
+    if for_update:
+        statement = statement.with_for_update()
+    return db.scalar(statement)
+
+
+def list_pending_host_flows(db: Session) -> list[CloudflareHostOAuthFlow]:
+    statement = (
+        select(CloudflareHostOAuthFlow)
+        .where(CloudflareHostOAuthFlow.status == "pending")
+        .order_by(CloudflareHostOAuthFlow.created_at.asc())
+    )
+    return list(db.scalars(statement).all())
+
+
+def get_host_flow_by_state_hash(
+    db: Session, state_hash_value: str, *, for_update: bool = False
+) -> CloudflareHostOAuthFlow | None:
+    statement = select(CloudflareHostOAuthFlow).where(
+        CloudflareHostOAuthFlow.state_hash == state_hash_value
+    )
+    if for_update:
+        statement = statement.with_for_update()
+    return db.scalar(statement)
+
+
+def get_host_flow(db: Session, flow_id: str) -> CloudflareHostOAuthFlow | None:
+    return db.get(CloudflareHostOAuthFlow, flow_id)
+
+
+def cancel_pending_host_flows(
+    db: Session, *, now: datetime, status: str = "cancelled"
+) -> int:
+    cancelled = 0
+    for flow in list_pending_host_flows(db):
         flow.status = status
         flow.consumed_at = now
         cancelled += 1

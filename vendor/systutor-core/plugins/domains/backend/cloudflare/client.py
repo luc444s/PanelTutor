@@ -83,6 +83,32 @@ class CloudflareConflict(CloudflareError):
     exit_code = 4
 
 
+class CloudflareHostManaged(CloudflarePermission):
+    """A tenant tried to change a connection owned by the platform."""
+
+    status_code = 409
+    code = "domains.dns.cloudflare.host_managed"
+    exit_code = 4
+
+
+class CloudflareZoneInUse(CloudflareConflict):
+    status_code = 409
+    code = "domains.dns.cloudflare.zone_in_use"
+    exit_code = 4
+
+
+class CloudflareZoneUnowned(CloudflareConflict):
+    status_code = 409
+    code = "domains.dns.cloudflare.zone_unowned"
+    exit_code = 4
+
+
+class CloudflareZoneNotFound(CloudflareNotFound):
+    status_code = 404
+    code = "domains.dns.cloudflare.zone_not_found"
+    exit_code = 6
+
+
 class CloudflareRateLimit(CloudflareError):
     status_code = 429
     code = "domains.dns.cloudflare.rate_limit"

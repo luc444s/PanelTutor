@@ -822,6 +822,175 @@ def _cloudflare_records_list(args: argparse.Namespace, factory: Any) -> int:
     return 0
 
 
+def _cloudflare_host(args: argparse.Namespace, factory: Any) -> int:
+    command = getattr(args, "cloudflare_host_command", "")
+    if command == "status":
+        return _cloudflare_host_status(args, factory)
+    if command == "connect":
+        return _cloudflare_host_connect(args, factory)
+    if command == "disconnect":
+        return _cloudflare_host_disconnect(args, factory)
+    if command == "zones":
+        return _cloudflare_host_zones_list(args, factory)
+    if command == "adopt":
+        return _cloudflare_host_adopt(args, factory)
+    if command == "adopt-all":
+        return _cloudflare_host_adopt_all(args, factory)
+    raise DnsValidationError("unknown cloudflare host command")
+
+
+def _cloudflare_host_status(args: argparse.Namespace, factory: Any) -> int:
+    config, client, sessions = _cloudflare_runtime(args, factory)
+    with sessions() as db:
+        payload = CloudflareService(db, None, client, config).host_status()
+    lines = [
+        "Cloudflare host connected" if payload["connected"] else "Cloudflare host not connected",
+        f"Mode: {payload['mode']}",
+        f"Account: {payload['account_name']} ({payload['account_id']})",
+        f"Status: {payload['status']}",
+        f"Expires: {payload['expires_at']}",
+    ]
+    _emit(payload, json_output=args.json, lines=lines)
+    return 0
+
+
+def _cloudflare_host_connect(args: argparse.Namespace, factory: Any) -> int:
+    config, client, sessions = _cloudflare_runtime(args, factory)
+    wait_seconds = max(0, min(int(args.wait_seconds), 900))
+    with sessions() as db:
+        start = CloudflareService(db, None, client, config).start_host_flow()
+    if not args.json:
+        print(f"Authorize the platform Cloudflare account: {start['authorization_url']}")
+        print(f"Waiting up to {wait_seconds}s for the callback...")
+    if wait_seconds == 0:
+        _emit(
+            {**start, "status": "pending"},
+            json_output=args.json,
+            lines=[f"flow: {start['flow_id']}", "status: pending"],
+        )
+        return 0
+    deadline = time.monotonic() + wait_seconds
+    state = "pending"
+    while time.monotonic() < deadline:
+        time.sleep(min(1.0, max(0.0, deadline - time.monotonic())))
+        with sessions() as db:
+            state = str(
+                CloudflareService(
+                    db, None, client, config
+                ).host_flow_status(str(start["flow_id"]))["status"]
+            )
+        if state != "pending":
+            break
+    if state != "consumed":
+        _emit(
+            {**start, "status": state},
+            json_output=args.json,
+            lines=[f"authorization {state}", "run host connect again if the flow expired"],
+        )
+        return 4 if state in {"failed", "denied", "expired"} else 3
+    with sessions() as db:
+        service = CloudflareService(db, None, client, config)
+        connection = service.host_status()
+        zones = service.host_zones(include_unowned=True)
+    _emit(
+        {**start, "connection": connection, "zones": zones, "status": "consumed"},
+        json_output=args.json,
+        lines=[
+            "SUCCESS platform Cloudflare connected",
+            f"Account: {connection['account_name']}",
+            f"Zones discovered: {len(zones)}",
+        ],
+    )
+    return 0
+
+
+def _cloudflare_host_disconnect(args: argparse.Namespace, factory: Any) -> int:
+    config, client, sessions = _cloudflare_runtime(args, factory)
+    with sessions() as db:
+        payload = CloudflareService(db, None, client, config).disconnect_host(
+            apply=args.apply
+        )
+    if payload["already_disconnected"]:
+        lines = ["Cloudflare host is already disconnected"]
+    elif args.apply:
+        lines = [
+            "Cloudflare host disconnected",
+            f"Revoked upstream: {'yes' if payload['revoked'] else 'no'}",
+            "Tenant zone ownership was preserved.",
+        ]
+    else:
+        lines = [
+            "Cloudflare host disconnect plan",
+            f"Account: {payload['account_name']} ({payload['account_id']})",
+            f"Pending flows: {payload.get('pending_flows', 0)}",
+            "dry-run; pass --apply to revoke and remove host credentials",
+        ]
+    _emit(payload, json_output=args.json, lines=lines)
+    return 0
+
+
+def _cloudflare_host_zones_list(args: argparse.Namespace, factory: Any) -> int:
+    config, client, sessions = _cloudflare_runtime(args, factory)
+    with sessions() as db:
+        zones = CloudflareService(db, None, client, config).host_zones(
+            include_unowned=bool(args.include_unowned)
+        )
+    payload = {"mode": "single", "zones": zones}
+    lines = [
+        f"Zones discovered: {len(zones)}",
+        *(
+            f"  {zone['name']}  {zone['status']}  "
+            f"{'owned' if zone.get('owned') else 'unowned'}"
+            for zone in zones
+        ),
+    ]
+    _emit(payload, json_output=args.json, lines=lines)
+    return 0
+
+
+def _cloudflare_host_adopt(args: argparse.Namespace, factory: Any) -> int:
+    config, client, sessions = _cloudflare_runtime(args, factory)
+    with sessions() as db:
+        tenant_id = _tenant_id(db, args.tenant)
+        payload = CloudflareService(db, None, client, config).adopt_zone(
+            domain=args.domain, tenant_id=tenant_id, apply=bool(args.apply)
+        )
+    payload["tenant_slug"] = args.tenant
+    _emit(
+        payload,
+        json_output=args.json,
+        lines=[
+            f"Zone: {payload['domain']} ({payload['zone_id']})",
+            f"Tenant: {args.tenant}",
+            "Adopted." if payload.get("applied") else "Plan only; pass --apply to adopt.",
+        ],
+    )
+    return 0
+
+
+def _cloudflare_host_adopt_all(args: argparse.Namespace, factory: Any) -> int:
+    if not args.from_tenant_connections:
+        raise DnsValidationError(
+            "--from-tenant-connections is required; zones are never auto-claimed"
+        )
+    config, client, sessions = _cloudflare_runtime(args, factory)
+    with sessions() as db:
+        payload = CloudflareService(
+            db, None, client, config
+        ).adopt_all_from_tenant_connections(apply=bool(args.apply))
+    _emit(
+        payload,
+        json_output=args.json,
+        lines=[
+            f"Claims: {len(cast(list[object], payload['claims']))}",
+            f"Conflicts: {len(cast(list[object], payload['conflicts']))}",
+            f"Errors: {len(cast(list[object], payload['errors']))}",
+            "Applied." if payload.get("applied") else "Plan only; pass --apply to adopt.",
+        ],
+    )
+    return 0 if not payload["conflicts"] else 4
+
+
 def _provision_lines(payload: dict[str, Any], *, applied: bool) -> list[str]:
     action = "created" if payload["zone_action"] == "create" else "reused"
     zone = payload.get("zone")

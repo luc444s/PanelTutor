@@ -18,6 +18,7 @@ from plugins.domains.backend.cloudflare.config import CloudflareConfig
 from plugins.domains.backend.dns.cli_commands import (
     _cloudflare_connect,
     _cloudflare_disconnect,
+    _cloudflare_host,
     _cloudflare_provision,
     _cloudflare_records_list,
     _cloudflare_register,
@@ -170,6 +171,43 @@ def build_parser() -> argparse.ArgumentParser:
     _add_tenant(cf_records_list)
     _add_db(cf_records_list)
 
+    host = cloudflare_commands.add_parser(
+        "host", help="Platform-wide Cloudflare account in single mode"
+    )
+    host_commands = host.add_subparsers(dest="cloudflare_host_command", required=True)
+    host_status = _leaf(host_commands, "status", "Show the platform Cloudflare connection.")
+    _add_db(host_status)
+    host_connect = _leaf(host_commands, "connect", "Authorize the platform Cloudflare account.")
+    _add_db(host_connect)
+    host_connect.add_argument("--wait-seconds", type=int, default=300)
+    host_disconnect = _leaf(
+        host_commands, "disconnect", "Plan or remove the platform Cloudflare authorization."
+    )
+    _add_db(host_disconnect)
+    host_disconnect.add_argument("--apply", action="store_true")
+    host_zones = host_commands.add_parser("zones", help="Platform Cloudflare zone inventory")
+    host_zone_commands = host_zones.add_subparsers(
+        dest="cloudflare_host_zones_command", required=True
+    )
+    host_zones_list = _leaf(
+        host_zone_commands, "list", "List zones and their tenant ownership."
+    )
+    host_zones_list.add_argument("--include-unowned", action="store_true")
+    _add_db(host_zones_list)
+    host_adopt = _leaf(host_commands, "adopt", "Assign one shared-account zone to a tenant.")
+    host_adopt.add_argument("domain")
+    _add_tenant(host_adopt)
+    _add_db(host_adopt)
+    host_adopt.add_argument("--apply", action="store_true")
+    host_adopt_all = _leaf(
+        host_commands,
+        "adopt-all",
+        "Adopt zones from existing per-tenant connections.",
+    )
+    host_adopt_all.add_argument("--from-tenant-connections", action="store_true")
+    _add_db(host_adopt_all)
+    host_adopt_all.add_argument("--apply", action="store_true")
+
     provision = cloudflare_commands.add_parser(
         "provision", help="Plan or apply a Cloudflare zone and origin records"
     )
@@ -277,6 +315,8 @@ def run(
                 return _cloudflare_records_list(args, session_factory)
             if args.cloudflare_command == "provision":
                 return _cloudflare_provision(args, session_factory)
+            if args.cloudflare_command == "host":
+                return _cloudflare_host(args, session_factory)
             raise DnsValidationError("unknown cloudflare command")
         if args.command == "doctor":
             return _doctor(args, active)  # type: ignore[arg-type]

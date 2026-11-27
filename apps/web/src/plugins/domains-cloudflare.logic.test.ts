@@ -2,16 +2,24 @@ import { describe, expect, it } from "vitest";
 
 import {
   CLOUDFLARE_FLOW_MAX_MS,
+  CLOUDFLARE_HOST_MANAGED,
+  CLOUDFLARE_PLATFORM_PERMISSION,
   CLOUDFLARE_UPSTREAM_VALIDATION,
+  CLOUDFLARE_ZONE_IN_USE,
+  CLOUDFLARE_ZONE_UNOWNED,
   canManageCloudflareClient,
+  canManageCloudflareHost,
   canProvisionCloudflare,
   canRegisterClient,
+  canStartTenantCloudflare,
   canUseCloudflare,
   cloudflareErrorMessage,
+  cloudflareHostStateMessage,
   errorMessageFrom,
   flowDeadline,
   hasZoneWriteScope,
   isCloudflareConnected,
+  isCloudflareHostMode,
   needsClientRegistration,
   pollDecision,
   provisionStateMessage,
@@ -35,6 +43,13 @@ const connected = {
 const connectedProvisioning = {
   ...connected,
   scopes: ["Zone Read", "Zone Write", "DNS Read", "DNS Write", "offline_access"],
+};
+
+const hostConnected = {
+  ...connected,
+  tenant_id: null,
+  mode: "single" as const,
+  managed_by_host: true,
 };
 
 describe("Cloudflare panel policy", () => {
@@ -155,5 +170,37 @@ describe("Cloudflare panel policy", () => {
     expect(canProvisionCloudflare(connectedProvisioning)).toBe(true);
     expect(provisionStateMessage(connected)).toMatch(/Zone Write/);
     expect(provisionStateMessage(connectedProvisioning)).toBeNull();
+  });
+
+  it("hides tenant OAuth actions in single mode", () => {
+    const tenant = ["domains.dns.cloudflare"];
+    expect(isCloudflareHostMode(null)).toBe(false);
+    expect(isCloudflareHostMode(connected)).toBe(false);
+    expect(isCloudflareHostMode(hostConnected)).toBe(true);
+    expect(isCloudflareHostMode({ ...connected, managed_by_host: true })).toBe(true);
+    expect(canStartTenantCloudflare(tenant, hostConnected)).toBe(false);
+    expect(canStartTenantCloudflare(tenant, connected)).toBe(true);
+  });
+
+  it("shows host actions only to platform administrators in single mode", () => {
+    const tenant = ["domains.dns.cloudflare"];
+    const platform = [...tenant, CLOUDFLARE_PLATFORM_PERMISSION];
+    expect(canManageCloudflareHost(tenant, hostConnected)).toBe(false);
+    expect(canManageCloudflareHost(platform, hostConnected)).toBe(true);
+    expect(canManageCloudflareHost(platform, connected)).toBe(false);
+    expect(cloudflareHostStateMessage(hostConnected)).toMatch(/managed by the platform/);
+    expect(
+      cloudflareHostStateMessage({ ...hostConnected, connected: false, status: "disconnected" }),
+    ).toMatch(/not connected/);
+    expect(cloudflareHostStateMessage(connected)).toBeNull();
+  });
+
+  it("explains host-managed and zone ownership errors", () => {
+    expect(cloudflareErrorMessage(409, CLOUDFLARE_HOST_MANAGED)).toMatch(/platform/);
+    expect(cloudflareErrorMessage(409, CLOUDFLARE_ZONE_UNOWNED)).toMatch(/adopt/);
+    expect(cloudflareErrorMessage(409, CLOUDFLARE_ZONE_IN_USE)).toMatch(/another tenant/);
+    expect(
+      errorMessageFrom({ status: 409, code: CLOUDFLARE_HOST_MANAGED, message: "raw" }),
+    ).toMatch(/platform/);
   });
 });
