@@ -21,6 +21,7 @@ import json
 import os
 import subprocess
 import sys
+import time
 from pathlib import Path
 from typing import Any
 
@@ -34,15 +35,24 @@ from scripts.tenant_cell.images import ensure_cell_images
 PROFILE = Path(__file__).resolve().parent / "deploy" / "cell-seccomp.json"
 INGRESS = "spanel-cell-ingress"
 AIO_LINE = "worker_aio_requests 0;"
+# A wedged cell daemon must never hang a deploy; docker exec has no timeout of
+# its own.
+DOCKER_TIMEOUT = 30
 
 
 def _docker(socket: Path, argv: list[str]) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["docker", "-H", f"unix://{socket}", *argv],
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        return subprocess.run(
+            ["docker", "-H", f"unix://{socket}", *argv],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=DOCKER_TIMEOUT,
+        )
+    except subprocess.TimeoutExpired:
+        return subprocess.CompletedProcess(
+            argv, 124, "", f"docker timed out after {DOCKER_TIMEOUT}s"
+        )
 
 
 def reconcile_seccomp(data_root: Path, *, dry_run: bool = False) -> list[dict[str, Any]]:
@@ -71,6 +81,11 @@ def reconcile_ingress(data_root: Path, *, dry_run: bool = False) -> list[dict[st
             results.append({"slug": slug, "ingress": "no-cell-daemon"})
             continue
         running = _docker(socket, ["inspect", "-f", "{{.State.Running}}", INGRESS])
+        if running.returncode == 124:
+            results.append(
+                {"slug": slug, "ingress": "timeout", "detail": running.stderr.strip()}
+            )
+            continue
         if running.returncode != 0 or running.stdout.strip() != "true":
             results.append({"slug": slug, "ingress": "not-running"})
             continue
@@ -158,20 +173,32 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     data_root = Path(args.data_root)
+    timings: dict[str, float] = {}
+
+    def phase(name: str, fn, *fn_args, **fn_kwargs):
+        started = time.monotonic()
+        try:
+            return fn(*fn_args, **fn_kwargs)
+        finally:
+            timings[name] = round(time.monotonic() - started, 1)
+
     payload: dict[str, Any] = {
         "ok": True,
         "dry_run": args.dry_run,
-        "seccomp": reconcile_seccomp(data_root, dry_run=args.dry_run),
-        "ingress": reconcile_ingress(data_root, dry_run=args.dry_run),
+        "seccomp": phase("seccomp", reconcile_seccomp, data_root, dry_run=args.dry_run),
+        "ingress": phase("ingress", reconcile_ingress, data_root, dry_run=args.dry_run),
         # A.SPEC 0119: every deploy repairs the hosting images of live cells.
-        "images": [] if args.dry_run else ensure_cell_images(data_root),
+        "images": [] if args.dry_run else phase("images", ensure_cell_images, data_root),
         # A failed provision leaves the allocation in ``provisioning``; finish
         # it here so a redeploy repairs the tenant instead of requiring a retry
         # from the panel.
-        "provision": reconcile_provision(data_root, dry_run=args.dry_run),
+        "provision": phase(
+            "provision", reconcile_provision, data_root, dry_run=args.dry_run
+        ),
     }
     if not args.dry_run:
-        payload["egress"] = reconcile_egress(data_root)
+        payload["egress"] = phase("egress", reconcile_egress, data_root)
+    payload["timings"] = timings
     failed = [item for item in payload["provision"] if item.get("provision") == "failed"]
     if failed:
         payload["ok"] = False
@@ -194,6 +221,7 @@ def main(argv: list[str] | None = None) -> int:
         for item in (payload.get("egress") or {}).get("cells", []):
             detail = f" ({item['error']})" if item.get("error") else ""
             print(f"egress {item['slug']}: {'ok' if item['ok'] else 'failed'}{detail}")
+        print("timings: " + ", ".join(f"{k}={v}s" for k, v in timings.items()))
     return 0 if payload["ok"] else 1
 
 
