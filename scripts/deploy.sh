@@ -165,10 +165,12 @@ if [[ "${SPANEL_SKIP_HOST_AGENTS:-0}" != "1" ]]; then
       # A code-only change (e.g. scripts/tenant_cell/executor.py) does not
       # rewrite a unit, so the installer restarts the agents from the payload
       # digest. This reconcile then finishes any cell left half-provisioned by
-      # the previous agent and re-applies the in-cell egress NAT. Per-cell
-      # failures are reported but never block the application deploy.
+      # the previous agent and re-applies the in-cell egress NAT. It runs as
+      # root from this privileged deploy, so it carries the same local-mutation
+      # gate the plan agent unit declares; without it every repair is refused.
       echo "Reconciling cell artifacts"
-      if ! "$HOST_AGENT_PY" "$ROOT/scripts/tenant_cell/reconcile_cells.py"; then
+      if ! SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1 \
+        "$HOST_AGENT_PY" "$ROOT/scripts/tenant_cell/reconcile_cells.py"; then
         echo "WARNING: cell reconciliation reported failures (see above)" >&2
       fi
     else
