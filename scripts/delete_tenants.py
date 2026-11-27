@@ -136,7 +136,7 @@ def resolve_tenants(
             if tenant_slug == cell_slug or cell_slug_for(tenant_slug) == cell_slug
         ]
         if not matches:
-            print(f"[skip] {cell_slug}: no tenant with that slug")
+            print(f"[cell] {cell_slug}: no tenant row")
             continue
         if len(matches) > 1:
             found = ", ".join(repr(slug) for _, slug in matches)
@@ -272,6 +272,22 @@ def cell_containers(data_root: str, slug: str) -> bool | None:
     return bool(result.stdout.strip())
 
 
+def cell_state(data_root: str, slug: str) -> str:
+    """Registry state for one cell, without importing the host agent."""
+    registry = Path(data_root) / "registry.json"
+    if not registry.is_file():
+        return "no-registry"
+    import json
+
+    data = json.loads(registry.read_text(encoding="utf-8"))
+    cell = (data.get("allocations") or {}).get(slug)
+    if cell is not None:
+        return str(cell.get("state") or "allocated")
+    if any(row.get("slug") == slug for row in data.get("tombstones") or []):
+        return "retired"
+    return "absent"
+
+
 def deprovision_cells(slugs: list[str], data_root: str, purge_files: bool) -> list[str]:
     if os.geteuid() != 0:
         raise SystemExit("cell teardown requires root")
@@ -329,6 +345,11 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="remove /var/lib/spanel/cells/<slug> after a clean teardown",
     )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="skip the interactive confirmation required by --apply",
+    )
     args = parser.parse_args(argv)
 
     if not args.slugs:
@@ -340,12 +361,11 @@ def main(argv: list[str] | None = None) -> int:
     with engine.connect() as connection:
         existing = present_tables(connection)
         resolved = resolve_tenants(connection, slugs)
-        if not resolved:
-            print("nothing to delete")
-            return 0
         tenant_ids = sorted(set(resolved.values()))
-        counts = count_rows(connection, tenant_ids, existing)
-        missing = uncovered_tables(connection, tenant_ids, existing)
+        counts = count_rows(connection, tenant_ids, existing) if tenant_ids else {}
+        missing = (
+            uncovered_tables(connection, tenant_ids, existing) if tenant_ids else []
+        )
         if missing:
             print("\nrefusing: tenant-scoped tables without a delete rule:")
             for item in missing:
@@ -353,22 +373,48 @@ def main(argv: list[str] | None = None) -> int:
             print("add them to TENANT_TABLES and rerun")
             return 2
 
+        print("\ncells to deprovision:")
+        for slug in slugs:
+            print(f"  {slug:38} state={cell_state(args.data_root, slug)}")
+
         print("\nrows to delete:")
         if not counts:
             print("  (none)")
         for table, total in counts.items():
             print(f"  {table:38} {total}")
 
+        owned = {
+            table: counts[table]
+            for table in ("apps_applications", "hosting_sites")
+            if counts.get(table)
+        }
+        if owned:
+            print("\nWARNING: selected tenants own applications/sites:")
+            for table, total in owned.items():
+                print(f"  {table}: {total}")
+            print("  delete them only if they are disposable")
+
         if not args.apply:
             print("\ndry-run: pass --apply to deprovision cells and delete rows")
             return 0
 
-        deprovision_cells(list(resolved), args.data_root, args.purge_files)
+        if not args.yes:
+            if not sys.stdin.isatty():
+                parser.error("--apply requires --yes when stdin is not a terminal")
+            answer = input(f"\ntype 'yes' to delete {len(slugs)} cell(s): ")
+            if answer.strip().lower() != "yes":
+                print("aborted")
+                return 1
 
-        connection.commit()
-        with connection.begin():
-            delete_rows(connection, tenant_ids, existing)
-        print(f"\ndeleted {len(tenant_ids)} tenant(s) from the database")
+        deprovision_cells(slugs, args.data_root, args.purge_files)
+
+        if tenant_ids:
+            connection.commit()
+            with connection.begin():
+                delete_rows(connection, tenant_ids, existing)
+            print(f"\ndeleted {len(tenant_ids)} tenant(s) from the database")
+        else:
+            print("\nno tenant rows to delete")
 
     engine.dispose()
     return 0
