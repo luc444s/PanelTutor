@@ -105,11 +105,15 @@ Opciones rápidas (cualquier otro argumento se pasa a `docker compose up`):
 ```bash
 ./scripts/deploy.sh --no-build          # reusa la imagen actual
 ./scripts/deploy.sh --skip-cells        # no reconcilia celdas (seccomp/ingress/imágenes/NAT)
+./scripts/deploy.sh --images            # además sincroniza las imágenes de cada celda (lento)
 ./scripts/deploy.sh --fast              # solo aplica compose: sin probe, sin agentes, sin celdas, sin build
 ```
 
 El `--fast` es para reiniciar/aplicar configuración; no sirve para desplegar
-código nuevo.
+código nuevo. La sincronización de imágenes de celdas está desactivada por
+defecto porque copiar imágenes es lo más lento del reconcile; las celdas nuevas
+las reciben durante su `provision`. Actívala con `--images` cuando cambies de
+versión las imágenes de hosting.
 
 ### Desarrollo Local
 

@@ -25,6 +25,9 @@ Options:
   --skip-agents   Do not install/restart the privileged host agents.
   --skip-cells    Do not reconcile cells (seccomp, ingress, images, repair, NAT).
   --skip-probe    Do not verify/pull the pinned probe image.
+  --images        Also verify/seed hosting images in every cell. Off by default
+                  because copying an image into a cell is the slow step; new
+                  cells are seeded during provisioning anyway.
   -h, --help      Show this help.
 
 Any other argument is forwarded to "docker compose up" (e.g. app apps-worker).
@@ -35,6 +38,7 @@ BUILD=1
 RUN_AGENTS=1
 RUN_CELLS=1
 RUN_PROBE=1
+SYNC_IMAGES=0
 COMPOSE_ARGS=()
 while (($#)); do
   case "$1" in
@@ -44,6 +48,8 @@ while (($#)); do
     --skip-agents) RUN_AGENTS=0 ;;
     --skip-cells)  RUN_CELLS=0 ;;
     --skip-probe)  RUN_PROBE=0 ;;
+    --images)      SYNC_IMAGES=1 ;;
+    --skip-images) SYNC_IMAGES=0 ;;
     -h|--help)     usage; exit 0 ;;
     --)            shift; COMPOSE_ARGS+=("$@"); break ;;
     *)             COMPOSE_ARGS+=("$1") ;;
@@ -227,9 +233,14 @@ else
   # agent unit declares; without it every repair is refused.
   if [[ $RUN_CELLS -eq 1 ]]; then
     cells_started=$SECONDS
+    RECONCILE_ARGS=()
+    if [[ $SYNC_IMAGES -eq 0 ]]; then
+      RECONCILE_ARGS+=(--skip-images)
+    fi
     echo "Reconciling cell artifacts"
     if ! SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1 \
-      "$HOST_AGENT_PY" "$ROOT/scripts/tenant_cell/reconcile_cells.py"; then
+      "$HOST_AGENT_PY" "$ROOT/scripts/tenant_cell/reconcile_cells.py" \
+      "${RECONCILE_ARGS[@]}"; then
       echo "WARNING: cell reconciliation reported failures (see above)" >&2
     fi
     CELLS_SECONDS=$((SECONDS - cells_started))
