@@ -110,10 +110,13 @@ Opciones rápidas (cualquier otro argumento se pasa a `docker compose up`):
 ```
 
 El `--fast` es para reiniciar/aplicar configuración; no sirve para desplegar
-código nuevo. La sincronización de imágenes de celdas está desactivada por
-defecto porque copiar imágenes es lo más lento del reconcile; las celdas nuevas
-las reciben durante su `provision`. Actívala con `--images` cuando cambies de
-versión las imágenes de hosting.
+código nuevo.
+
+Las imágenes de hosting se descargan bajo demanda desde la propia celda
+(egress), así que `provision` ya no las copia. Para volver a la copia eager
+desde el host, exporta `SPANEL_CELL_IMAGE_PRELOAD=1`. La sincronización masiva
+del reconcile sigue disponible con `--images`, por ejemplo al cambiar las
+versiones de las imágenes de hosting.
 
 ### Desarrollo Local
 

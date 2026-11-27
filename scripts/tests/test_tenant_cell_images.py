@@ -347,6 +347,7 @@ class _RecordingExecutor(Executor):
 
 
 def test_provision_seeds_images_once_the_socket_exists(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("SPANEL_CELL_IMAGE_PRELOAD", "1")
     monkeypatch.setenv("SPANEL_HOSTING_WP_IMAGE", "wordpress:latest")
     monkeypatch.setenv("SPANEL_HOSTING_DB_IMAGE", "mariadb:11")
     monkeypatch.setenv("SPANEL_HOSTING_STATIC_IMAGE", "nginx:alpine")
@@ -373,6 +374,30 @@ def test_provision_does_not_seed_images_without_a_socket(tmp_path) -> None:
     assert "ensure_cell_images" not in executor.calls
 
 
+def test_provision_is_lazy_by_default(tmp_path, monkeypatch) -> None:
+    """A.SPEC 0119-R1: no copy unless the operator opts into eager preload."""
+    monkeypatch.delenv("SPANEL_CELL_IMAGE_PRELOAD", raising=False)
+    socket = tmp_path / "cells" / "acme" / "docker.sock"
+    socket.parent.mkdir(parents=True)
+    socket.touch()
+    executor = _RecordingExecutor()
+
+    CellService(_Probe(), executor, tmp_path).provision("acme")
+
+    assert "ensure_cell_images" not in executor.calls
+    applied = alloc.load_registry(tmp_path)["allocations"]["acme"]["applied"]
+    assert "images" not in applied
+
+
+def test_preload_enabled_parses_the_env() -> None:
+    from scripts.tenant_cell import images as images_mod
+
+    assert images_mod.preload_enabled({}) is False
+    assert images_mod.preload_enabled({images_mod.PRELOAD_ENV: "0"}) is False
+    for raw in ("1", "true", "YES", "on", "eager"):
+        assert images_mod.preload_enabled({images_mod.PRELOAD_ENV: raw}) is True
+
+
 def test_reconcile_main_calls_ensure_cell_images(tmp_path, monkeypatch) -> None:
     from scripts.tenant_cell import reconcile_cells as reconcile
 
@@ -386,9 +411,13 @@ def test_reconcile_main_calls_ensure_cell_images(tmp_path, monkeypatch) -> None:
         lambda data_root: images_calls.append(Path(data_root)) or [],
     )
 
-    assert reconcile.main(["--data-root", str(tmp_path)]) == 0
+    assert reconcile.main(
+        ["--data-root", str(tmp_path), "--skip-provision", "--skip-egress"]
+    ) == 0
     assert images_calls == [tmp_path]
 
     images_calls.clear()
-    assert reconcile.main(["--data-root", str(tmp_path), "--dry-run"]) == 0
+    assert reconcile.main(
+        ["--data-root", str(tmp_path), "--dry-run", "--skip-provision"]
+    ) == 0
     assert images_calls == []

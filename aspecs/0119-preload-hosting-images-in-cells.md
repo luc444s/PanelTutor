@@ -64,3 +64,20 @@ migraciones puntuales. Hay que generalizarlo.
 
 - No hacer commit: el revisor (agente principal) integra y commitea.
 - No modificar permisos RBAC ni el frontend salvo lo estrictamente necesario.
+
+## Revisión 0119-R1 — lazy load por defecto
+
+Verificado en vmi3461574: una celda con egress (regla `MASQUERADE` en su netns)
+puede hacer `docker pull` desde su propio daemon (`busybox:latest` se descargó
+sin error; el `401` de `https://registry-1.docker.io/v2/` es la respuesta normal
+sin token). El preload deja de ser obligatorio:
+
+- `CellService.provision()` ya **no** copia imágenes por defecto. El primer
+  `docker run` de un sitio las baja dentro de la celda.
+- `SPANEL_CELL_IMAGE_PRELOAD=1` reactiva la copia eager, para hosts sin egress,
+  despliegues deterministas o para no depender de Docker Hub al crear un sitio.
+- `reconcile_cells.py --images` sigue disponible como reparación explícita;
+  `deploy.sh` no lo ejecuta salvo con `--images`.
+- Cuando la copia eager está activa, `applied["images"]` se marca como antes.
+  En modo lazy la clave no se escribe, de forma que activar el eager más tarde
+  sigue sembrando las celdas existentes.

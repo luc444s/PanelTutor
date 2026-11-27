@@ -1,9 +1,11 @@
-"""A.SPEC 0119: keep hosting images available inside every rootless cell.
+"""A.SPEC 0119: hosting images inside every rootless cell (eager, opt-in).
 
-A cell daemon has no egress, so it cannot pull ``wordpress`` or ``mariadb`` on
-demand. The host daemon does have egress: this module pulls there when needed
-and streams the image into the cell with ``docker save | docker load``. Only
-images are touched; containers, volumes and the cell's own data never are.
+Cells do have egress (the per-cell MASQUERADE rule), so since A.SPEC 0119-R1
+the default is lazy: the first ``docker run`` of a site pulls the image from
+inside the cell. This module is the eager path, used only when
+``SPANEL_CELL_IMAGE_PRELOAD=1`` is set, or by an explicit
+``reconcile_cells.py`` run, to pull on the host and stream the image into the
+cell with ``docker save | docker load``.
 
 ``subprocess.Popen`` with explicit pipes is used for the transfer (never
 ``shell=True``), and every call has a bounded timeout so a wedged daemon cannot
@@ -24,10 +26,22 @@ DEFAULT_DB_IMAGE = "mariadb:11"
 DEFAULT_STATIC_IMAGE = "nginx:alpine"
 DEFAULT_ROOTFUL_SOCKET = "/var/run/docker.sock"
 
+# A.SPEC 0119-R1: cells have egress (MASQUERADE in their netns), so a missing
+# image is pulled on demand by ``docker run`` instead of copied during tenant
+# provisioning. Opt back into eager copy with SPANEL_CELL_IMAGE_PRELOAD=1.
+PRELOAD_ENV = "SPANEL_CELL_IMAGE_PRELOAD"
+_EAGER_VALUES = {"1", "true", "yes", "on", "eager"}
+
 INSPECT_TIMEOUT = 30
 PULL_TIMEOUT = 1800
 TRANSFER_TIMEOUT = 3600
 PRODUCER_WAIT_TIMEOUT = 30
+
+
+def preload_enabled(env: dict[str, str] | None = None) -> bool:
+    """True only when the operator explicitly opts into eager image copies."""
+    source = os.environ if env is None else env
+    return str(source.get(PRELOAD_ENV, "0")).strip().lower() in _EAGER_VALUES
 
 
 def desired_images() -> list[str]:

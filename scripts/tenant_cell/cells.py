@@ -217,10 +217,16 @@ class CellService:
                 self.executor.start_daemon(slug, int(cell["uid"]), driver) or 0
             )
             applied["daemon"] = True
-        # A.SPEC 0119: the daemon is up and its socket exists; seed the images
-        # hosting needs now, because the cell itself has no egress to pull them.
+        # A.SPEC 0119-R1: lazy by default. The cell has egress, so the first
+        # ``docker run`` of a site pulls the image inside the cell. Eager
+        # copies remain available for hosts without egress or operators who
+        # prefer deterministic first deploys (SPANEL_CELL_IMAGE_PRELOAD=1).
         socket = self.socket_path(slug)
-        if not applied.get("images") and socket.exists():
+        if (
+            not applied.get("images")
+            and socket.exists()
+            and images.preload_enabled()
+        ):
             self.executor.ensure_cell_images(str(socket), images.desired_images())
             applied["images"] = True
         main_pid = self._main_pid(slug, cell) or pid

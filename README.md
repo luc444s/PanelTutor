@@ -116,10 +116,12 @@ Fast paths (any other argument is forwarded to `docker compose up`):
 ./scripts/deploy.sh --fast              # compose only: no probe, agents, cells or build
 ```
 
-`--fast` is for restarting/applying config, not for shipping new code. Cell
-image sync is off by default because copying images is the slowest reconcile
-step; new cells are seeded during provisioning. Use `--images` when you bump
-the hosting image versions.
+`--fast` is for restarting/applying config, not for shipping new code.
+
+Hosting images are pulled on demand from inside the cell (egress), so
+`provision` no longer copies them. To restore the eager host-side copy, export
+`SPANEL_CELL_IMAGE_PRELOAD=1`. The bulk reconcile sync is still available with
+`--images`, for example when bumping the hosting image versions.
 
 ### Local Development
 
