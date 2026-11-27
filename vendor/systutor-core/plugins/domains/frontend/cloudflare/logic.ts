@@ -44,13 +44,6 @@ export function canStartTenantCloudflare(
   return canUseCloudflare(permissions) && !isCloudflareHostMode(status);
 }
 
-export function cloudflareHostStateMessage(status: CloudflareStatus | null): string | null {
-  if (!isCloudflareHostMode(status)) return null;
-  return status?.connected
-    ? "Cloudflare is managed by the platform."
-    : "Cloudflare is managed by the platform and is not connected yet.";
-}
-
 export function needsClientRegistration(
   status: { registered: boolean; needs_repair?: boolean } | null | undefined,
 ): boolean {

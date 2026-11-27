@@ -14,7 +14,6 @@ import {
   canStartTenantCloudflare,
   canUseCloudflare,
   cloudflareErrorMessage,
-  cloudflareHostStateMessage,
   errorMessageFrom,
   flowDeadline,
   hasZoneWriteScope,
@@ -188,11 +187,6 @@ describe("Cloudflare panel policy", () => {
     expect(canManageCloudflareHost(tenant, hostConnected)).toBe(false);
     expect(canManageCloudflareHost(platform, hostConnected)).toBe(true);
     expect(canManageCloudflareHost(platform, connected)).toBe(false);
-    expect(cloudflareHostStateMessage(hostConnected)).toMatch(/managed by the platform/);
-    expect(
-      cloudflareHostStateMessage({ ...hostConnected, connected: false, status: "disconnected" }),
-    ).toMatch(/not connected/);
-    expect(cloudflareHostStateMessage(connected)).toBeNull();
   });
 
   it("explains host-managed and zone ownership errors", () => {

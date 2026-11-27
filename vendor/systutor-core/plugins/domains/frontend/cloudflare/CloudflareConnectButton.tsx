@@ -21,7 +21,6 @@ import {
   canManageCloudflareHost,
   canStartTenantCloudflare,
   canUseCloudflare,
-  cloudflareHostStateMessage,
   errorMessageFrom,
   flowDeadline,
   isCloudflareConnected,
@@ -69,7 +68,6 @@ export function CloudflareConnectButton({ permissions, onConnected }: Props) {
   const hostManager = canManageCloudflareHost(permissions, status);
   const tenantCanStart = canStartTenantCloudflare(permissions, status);
   const connected = isCloudflareConnected(status);
-  const hostState = cloudflareHostStateMessage(status);
   const clientQuery = useQuery({
     queryKey: cloudflareKeys.client,
     queryFn: getCloudflareClient,
@@ -208,9 +206,7 @@ export function CloudflareConnectButton({ permissions, onConnected }: Props) {
   }
 
   if (hostMode && !hostManager) {
-    return hostState ? (
-      <span className="text-sm text-muted-foreground">{t(hostState)}</span>
-    ) : null;
+    return null;
   }
 
   const busy =
