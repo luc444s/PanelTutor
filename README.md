@@ -107,6 +107,16 @@ The script creates `secrets/apps_key` with mode `600` only when missing,
 validates it on later deployments, and never replaces it. Set
 `SPANEL_APPS_ENCRYPTION_KEY_PATH` in `.env.docker` to use another path.
 
+Fast paths (any other argument is forwarded to `docker compose up`):
+
+```bash
+./scripts/deploy.sh --no-build          # reuse the current image
+./scripts/deploy.sh --skip-cells        # skip cell reconcile (seccomp/ingress/images/NAT)
+./scripts/deploy.sh --fast              # compose only: no probe, agents, cells or build
+```
+
+`--fast` is for restarting/applying config, not for shipping new code.
+
 ### Local Development
 
 ```bash

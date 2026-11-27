@@ -170,6 +170,26 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--data-root", default="/var/lib/spanel")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--json", action="store_true")
+    parser.add_argument(
+        "--skip-images",
+        action="store_true",
+        help="Do not verify/seed hosting images in each cell (the slow step).",
+    )
+    parser.add_argument(
+        "--skip-ingress",
+        action="store_true",
+        help="Do not touch the in-cell nginx ingress.",
+    )
+    parser.add_argument(
+        "--skip-provision",
+        action="store_true",
+        help="Do not finish cells left in provisioning/degraded.",
+    )
+    parser.add_argument(
+        "--skip-egress",
+        action="store_true",
+        help="Do not re-apply the in-cell egress NAT.",
+    )
     args = parser.parse_args(argv)
 
     data_root = Path(args.data_root)
@@ -186,17 +206,30 @@ def main(argv: list[str] | None = None) -> int:
         "ok": True,
         "dry_run": args.dry_run,
         "seccomp": phase("seccomp", reconcile_seccomp, data_root, dry_run=args.dry_run),
-        "ingress": phase("ingress", reconcile_ingress, data_root, dry_run=args.dry_run),
-        # A.SPEC 0119: every deploy repairs the hosting images of live cells.
-        "images": [] if args.dry_run else phase("images", ensure_cell_images, data_root),
-        # A failed provision leaves the allocation in ``provisioning``; finish
-        # it here so a redeploy repairs the tenant instead of requiring a retry
-        # from the panel.
-        "provision": phase(
-            "provision", reconcile_provision, data_root, dry_run=args.dry_run
-        ),
     }
-    if not args.dry_run:
+    if args.skip_ingress:
+        payload["ingress"] = []
+    else:
+        payload["ingress"] = phase(
+            "ingress", reconcile_ingress, data_root, dry_run=args.dry_run
+        )
+    if args.skip_images or args.dry_run:
+        # A.SPEC 0119: every deploy repairs the hosting images of live cells.
+        payload["images"] = []
+    else:
+        payload["images"] = phase("images", ensure_cell_images, data_root)
+    # A failed provision leaves the allocation in ``provisioning``; finish it
+    # here so a redeploy repairs the tenant instead of requiring a retry from
+    # the panel.
+    if args.skip_provision:
+        payload["provision"] = []
+    else:
+        payload["provision"] = phase(
+            "provision", reconcile_provision, data_root, dry_run=args.dry_run
+        )
+    if args.skip_egress or args.dry_run:
+        payload["egress"] = None
+    else:
         payload["egress"] = phase("egress", reconcile_egress, data_root)
     payload["timings"] = timings
     failed = [item for item in payload["provision"] if item.get("provision") == "failed"]

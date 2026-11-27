@@ -13,6 +13,47 @@ fail() {
   exit 1
 }
 
+usage() {
+  cat <<'EOF'
+Usage: scripts/deploy.sh [options] [docker compose args...]
+
+Options:
+  --fast          Apply compose config only. Skips the probe image check, the
+                  host agent reconcile, the cell reconcile and the image build.
+  --no-build      Skip "docker compose ... --build" (reuse the current image).
+  --build         Force the image build (default).
+  --skip-agents   Do not install/restart the privileged host agents.
+  --skip-cells    Do not reconcile cells (seccomp, ingress, images, repair, NAT).
+  --skip-probe    Do not verify/pull the pinned probe image.
+  -h, --help      Show this help.
+
+Any other argument is forwarded to "docker compose up" (e.g. app apps-worker).
+EOF
+}
+
+BUILD=1
+RUN_AGENTS=1
+RUN_CELLS=1
+RUN_PROBE=1
+COMPOSE_ARGS=()
+while (($#)); do
+  case "$1" in
+    --fast)        RUN_PROBE=0; RUN_AGENTS=0; RUN_CELLS=0; BUILD=0 ;;
+    --no-build)    BUILD=0 ;;
+    --build)       BUILD=1 ;;
+    --skip-agents) RUN_AGENTS=0 ;;
+    --skip-cells)  RUN_CELLS=0 ;;
+    --skip-probe)  RUN_PROBE=0 ;;
+    -h|--help)     usage; exit 0 ;;
+    --)            shift; COMPOSE_ARGS+=("$@"); break ;;
+    *)             COMPOSE_ARGS+=("$1") ;;
+  esac
+  shift
+done
+PROBE_SECONDS=0
+AGENTS_SECONDS=0
+CELLS_SECONDS=0
+
 command -v python3 >/dev/null 2>&1 || fail "python3 is required"
 command -v docker >/dev/null 2>&1 || fail "docker is required"
 docker compose version >/dev/null 2>&1 || fail "docker compose is required"
@@ -138,15 +179,21 @@ PROBE_IMAGE_VALUE=${PROBE_IMAGE_VALUE:-$PROBE_IMAGE_DEFAULT}
 [[ "$PROBE_IMAGE_VALUE" =~ @sha256:[0-9a-f]{64}$ ]] || fail \
   "SPANEL_APPS_PROBE_IMAGE must be pinned by digest (@sha256:...): $PROBE_IMAGE_VALUE"
 
-if docker image inspect "$PROBE_IMAGE_VALUE" >/dev/null 2>&1; then
-  echo "Probe image ready: $PROBE_IMAGE_VALUE"
+if [[ $RUN_PROBE -eq 1 ]]; then
+  probe_started=$SECONDS
+  if docker image inspect "$PROBE_IMAGE_VALUE" >/dev/null 2>&1; then
+    echo "Probe image ready: $PROBE_IMAGE_VALUE"
+  else
+    echo "Pulling probe image: $PROBE_IMAGE_VALUE"
+    docker pull "$PROBE_IMAGE_VALUE" >/dev/null || fail \
+      "probe image is not available; deployment aborted"
+    docker image inspect "$PROBE_IMAGE_VALUE" >/dev/null 2>&1 || fail \
+      "probe image is not available after pull; deployment aborted"
+    echo "Probe image ready: $PROBE_IMAGE_VALUE"
+  fi
+  PROBE_SECONDS=$((SECONDS - probe_started))
 else
-  echo "Pulling probe image: $PROBE_IMAGE_VALUE"
-  docker pull "$PROBE_IMAGE_VALUE" >/dev/null || fail \
-    "probe image is not available; deployment aborted"
-  docker image inspect "$PROBE_IMAGE_VALUE" >/dev/null 2>&1 || fail \
-    "probe image is not available after pull; deployment aborted"
-  echo "Probe image ready: $PROBE_IMAGE_VALUE"
+  echo "Skipping probe image check"
 fi
 
 # A.SPEC 0118: keep the privileged host agent boundary in sync with this
@@ -154,38 +201,58 @@ fi
 # content changed and enables spanel-agents-reconcile.timer, so every deploy
 # leaves the host ready to provision tenants. Set SPANEL_SKIP_HOST_AGENTS=1 on
 # developer machines without systemd/root.
-if [[ "${SPANEL_SKIP_HOST_AGENTS:-0}" != "1" ]]; then
-  if [[ -d /run/systemd/system ]] && command -v systemctl >/dev/null 2>&1; then
-    if [[ $(id -u) -eq 0 ]]; then
-      echo "Reconciling host agent units"
-      HOST_AGENT_PY="$ROOT/host-venv/bin/python"
-      [[ -x "$HOST_AGENT_PY" ]] || HOST_AGENT_PY=python3
-      "$HOST_AGENT_PY" "$ROOT/scripts/install_tenant_agents.py" --force || fail \
-        "host agent reconciliation failed; deployment aborted"
-      # A code-only change (e.g. scripts/tenant_cell/executor.py) does not
-      # rewrite a unit, so the installer restarts the agents from the payload
-      # digest. This reconcile then finishes any cell left half-provisioned by
-      # the previous agent and re-applies the in-cell egress NAT. It runs as
-      # root from this privileged deploy, so it carries the same local-mutation
-      # gate the plan agent unit declares; without it every repair is refused.
-      echo "Reconciling cell artifacts"
-      if ! SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1 \
-        "$HOST_AGENT_PY" "$ROOT/scripts/tenant_cell/reconcile_cells.py"; then
-        echo "WARNING: cell reconciliation reported failures (see above)" >&2
-      fi
-    else
-      echo "Skipping host agent reconciliation (not root)" >&2
+if [[ "${SPANEL_SKIP_HOST_AGENTS:-0}" == "1" ]]; then
+  echo "Skipping host agent reconciliation (SPANEL_SKIP_HOST_AGENTS=1)"
+elif [[ ! -d /run/systemd/system ]] || ! command -v systemctl >/dev/null 2>&1; then
+  echo "Skipping host agent reconciliation (no systemd)" >&2
+elif [[ $(id -u) -ne 0 ]]; then
+  echo "Skipping host agent reconciliation (not root)" >&2
+else
+  HOST_AGENT_PY="$ROOT/host-venv/bin/python"
+  [[ -x "$HOST_AGENT_PY" ]] || HOST_AGENT_PY=python3
+
+  if [[ $RUN_AGENTS -eq 1 ]]; then
+    agents_started=$SECONDS
+    echo "Reconciling host agent units"
+    "$HOST_AGENT_PY" "$ROOT/scripts/install_tenant_agents.py" --force || fail \
+      "host agent reconciliation failed; deployment aborted"
+    AGENTS_SECONDS=$((SECONDS - agents_started))
+  fi
+
+  # A code-only change (e.g. scripts/tenant_cell/executor.py) does not rewrite
+  # a unit, so the installer restarts the agents from the payload digest. This
+  # reconcile then finishes any cell left half-provisioned by the previous
+  # agent and re-applies the in-cell egress NAT. It runs as root from this
+  # privileged deploy, so it carries the same local-mutation gate the plan
+  # agent unit declares; without it every repair is refused.
+  if [[ $RUN_CELLS -eq 1 ]]; then
+    cells_started=$SECONDS
+    echo "Reconciling cell artifacts"
+    if ! SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS=1 \
+      "$HOST_AGENT_PY" "$ROOT/scripts/tenant_cell/reconcile_cells.py"; then
+      echo "WARNING: cell reconciliation reported failures (see above)" >&2
     fi
-  else
-    echo "Skipping host agent reconciliation (no systemd)" >&2
+    CELLS_SECONDS=$((SECONDS - cells_started))
   fi
 fi
 
 echo "Deploying Spanel at https://$SPANEL_DOMAIN_VALUE"
 cd "$ROOT"
-exec docker compose \
+UP_ARGS=(up -d)
+if [[ $BUILD -eq 1 ]]; then
+  UP_ARGS+=(--build)
+else
+  echo "Reusing the current image (no --build)"
+fi
+compose_started=$SECONDS
+set +e
+docker compose \
   -f docker-compose.yml \
   -f docker-compose.powerdns.yml \
   --env-file "$ENV_DOCKER" \
   --env-file "$ENV_POWERDNS" \
-  up -d --build "$@"
+  "${UP_ARGS[@]}" "${COMPOSE_ARGS[@]}"
+compose_rc=$?
+set -e
+echo "timings: probe=${PROBE_SECONDS}s agents=${AGENTS_SECONDS}s cells=${CELLS_SECONDS}s compose=$((SECONDS - compose_started))s"
+exit "$compose_rc"
