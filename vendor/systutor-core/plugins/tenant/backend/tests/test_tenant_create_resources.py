@@ -16,6 +16,7 @@ from plugins.apps.backend.models import AppsTenantPlan
 from plugins.apps.backend.plans_client import PlanAgentError
 from plugins.tenant.backend.router import create_new_tenant
 from plugins.tenant.backend.schemas import CreateTenantRequest
+from plugins.tenant.backend.service import create_tenant
 from systutor.core.database import Base
 from systutor.core.errors import AppError
 from systutor.kernel.auth.models import User
@@ -77,7 +78,7 @@ def db() -> Iterator[Session]:
 def payload() -> dict[str, object]:
     return {
         "name": "Acme",
-        "slug": "Acme.Example",
+        "slug": "acme-example",
         "user_email": "admin@acme.example",
         "user_password": "correct-horse-battery-staple",
         "resource_plan": {
@@ -99,6 +100,28 @@ def test_create_request_requires_a_complete_resource_plan() -> None:
     del data["resource_plan"]["storage_bytes"]  # type: ignore[index]
     with pytest.raises(ValidationError):
         CreateTenantRequest.model_validate(data)
+
+
+def test_create_request_rejects_non_canonical_slugs() -> None:
+    for slug in ("Acme.Example", "testpŕ6", "hola pe", "-acme", "ACME", ""):
+        data = payload()
+        data["slug"] = slug
+        with pytest.raises(ValidationError):
+            CreateTenantRequest.model_validate(data)
+
+
+def test_create_request_strips_a_canonical_slug() -> None:
+    data = payload()
+    data["slug"] = "  acme-example  "
+    assert CreateTenantRequest.model_validate(data).slug == "acme-example"
+
+
+def test_create_tenant_service_rejects_non_canonical_slug(db: Session) -> None:
+    with pytest.raises(AppError) as exc_info:
+        create_tenant(db, name="Acme", slug="testpŕ6")
+
+    assert exc_info.value.status_code == 422
+    assert exc_info.value.code == "tenant_slug_invalid"
 
 
 def test_create_tenant_provisions_cell_and_applies_plan_before_commit(

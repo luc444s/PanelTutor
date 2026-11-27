@@ -2,9 +2,10 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from plugins.apps.backend.schemas import TenantPlanRequest
+from systutor.contracts.tenant_slugs import CELL_SLUG_RE
 
 
 class CreateTenantResourcePlan(TenantPlanRequest):
@@ -23,6 +24,22 @@ class CreateTenantRequest(BaseModel):
     user_password: str
     user_full_name: str = ""
     resource_plan: CreateTenantResourcePlan
+
+    @field_validator("slug")
+    @classmethod
+    def _canonical_slug(cls, value: str) -> str:
+        """Only canonical slugs: the cell name is derived from this value.
+
+        Accepting dots, accents or uppercase makes the kernel slug diverge
+        from the canonical cell slug, which breaks host-side lookups such as
+        the phpMyAdmin database relay.
+        """
+        slug = value.strip()
+        if not CELL_SLUG_RE.fullmatch(slug):
+            raise ValueError(
+                "slug must match [a-z0-9][a-z0-9-]{0,61} (lowercase, digits, hyphens)"
+            )
+        return slug
 
 
 class UpdateTenantDomainRequest(BaseModel):

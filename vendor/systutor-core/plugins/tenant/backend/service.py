@@ -23,6 +23,7 @@ from systutor.contracts.site_namespace import (
     normalize_site_suffix,
     site_suffixes_overlap,
 )
+from systutor.contracts.tenant_slugs import CELL_SLUG_RE
 from systutor.core.errors import AppError
 from systutor.kernel.auth.models import User
 from systutor.kernel.auth.security import hash_password
@@ -202,6 +203,14 @@ def ensure_domain_available(
 
 
 def create_tenant(db: Session, *, name: str, slug: str, domain: str | None = None) -> Tenant:
+    slug = slug.strip()
+    if not CELL_SLUG_RE.fullmatch(slug):
+        raise AppError(
+            "Tenant slug must match [a-z0-9][a-z0-9-]{0,61} "
+            "(lowercase, digits, hyphens)",
+            status_code=422,
+            code="tenant_slug_invalid",
+        )
     normalized = normalize_tenant_domain(domain)
     ensure_domain_available(db, domain=normalized)
     tenant = Tenant(name=name, slug=slug, domain=normalized)
