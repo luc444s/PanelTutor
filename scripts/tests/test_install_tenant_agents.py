@@ -92,7 +92,7 @@ def test_install_creates_token_and_renders_units(installer) -> None:
     assert "Environment=SPANEL_PLAN_AGENT_ALLOWED_UIDS=0" in plan
     caps = (
         "CAP_SETUID CAP_SETGID CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE "
-        "CAP_NET_ADMIN CAP_SYS_ADMIN CAP_MAC_ADMIN"
+        "CAP_NET_ADMIN CAP_SYS_ADMIN CAP_SYS_PTRACE CAP_MAC_ADMIN"
     )
     assert f"CapabilityBoundingSet={caps}" in plan
     assert f"AmbientCapabilities={caps}" in plan

@@ -16,8 +16,8 @@ NoNewPrivileges=true
 # old plan-only sandbox made `groupadd` fail with "cannot lock /etc/group"
 # (exit 10) and `nft` fail with exit 3 (AF_NETLINK blocked). Peer credentials,
 # the HMAC capability and the local mutation gate remain the authorization.
-CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_NET_ADMIN CAP_SYS_ADMIN CAP_MAC_ADMIN
-AmbientCapabilities=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_NET_ADMIN CAP_SYS_ADMIN CAP_MAC_ADMIN
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_NET_ADMIN CAP_SYS_ADMIN CAP_SYS_PTRACE CAP_MAC_ADMIN
+AmbientCapabilities=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_FOWNER CAP_DAC_OVERRIDE CAP_NET_ADMIN CAP_SYS_ADMIN CAP_SYS_PTRACE CAP_MAC_ADMIN
 PrivateTmp=true
 ProtectHome=false
 ProtectSystem=off
