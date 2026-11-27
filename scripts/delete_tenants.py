@@ -288,6 +288,52 @@ def cell_state(data_root: str, slug: str) -> str:
     return "absent"
 
 
+def purge_os_user(slug: str) -> list[str]:
+    """Remove the cell's system user, group and subordinate id ranges."""
+    name = f"spanel-{slug}"
+    done: list[str] = []
+
+    if subprocess.run(
+        ["getent", "passwd", name], capture_output=True, check=False
+    ).returncode == 0:
+        result = subprocess.run(
+            ["userdel", "-r", name], capture_output=True, text=True, check=False
+        )
+        if result.returncode != 0:
+            result = subprocess.run(
+                ["userdel", name], capture_output=True, text=True, check=False
+            )
+        if result.returncode == 0:
+            done.append(f"user {name} removed")
+        else:
+            done.append(f"userdel {name} failed: {result.stderr.strip()}")
+
+    if subprocess.run(
+        ["getent", "group", name], capture_output=True, check=False
+    ).returncode == 0:
+        result = subprocess.run(
+            ["groupdel", name], capture_output=True, text=True, check=False
+        )
+        if result.returncode == 0:
+            done.append(f"group {name} removed")
+        else:
+            done.append(f"groupdel {name} failed: {result.stderr.strip()}")
+
+    for path in (Path("/etc/subuid"), Path("/etc/subgid")):
+        if not path.is_file():
+            continue
+        lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+        kept = [line for line in lines if not line.startswith(f"{name}:")]
+        if len(kept) == len(lines):
+            continue
+        tmp = path.with_name(path.name + ".tmp")
+        tmp.write_text("".join(kept), encoding="utf-8")
+        tmp.chmod(path.stat().st_mode)
+        tmp.replace(path)
+        done.append(f"{path} cleaned")
+    return done
+
+
 def forget_tombstone(data_root: str, slug: str) -> bool:
     """Free a purged slug so it can be allocated again.
 
@@ -343,6 +389,8 @@ def deprovision_cells(slugs: list[str], data_root: str, purge_files: bool) -> li
         if directory.exists():
             shutil.rmtree(directory)
             print(f"[cell] {slug}: removed {directory}")
+        for line in purge_os_user(slug):
+            print(f"[cell] {slug}: {line}")
         if forget_tombstone(data_root, slug):
             print(f"[cell] {slug}: tombstone removed (slug can be reused)")
     return removed
