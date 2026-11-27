@@ -162,9 +162,11 @@ export function DomainsTable({ items, zones, cloudflareZones, dnsError, platform
             : <span className="text-xs text-foreground">{published ? t("Extra") : t("Domain")}</span>}</td>
           <td className="px-3 py-3"><CertificateCell domain={item.domain}
             published={published} readable={owned} /></td>
-          {canReadDns && <td className="px-3 py-3"><DnsStatusCell
+          {canReadDns && <td className="px-3 py-3">{owned ? <DnsStatusCell
             status={dnsStatus(item.domain, zones, dnsError, cloudflareZones)} domain={item.domain}
-            zoneName={managedZone?.name ?? cloudflareZone?.name ?? null} /></td>}
+            zoneName={managedZone?.name ?? cloudflareZone?.name ?? null} /> : <span
+            className="text-xs text-muted-foreground"
+            title={t("Switch to this tenant to inspect its DNS.")}>—</span>}</td>}
           <td className="px-3 py-3"><div className="flex items-center justify-end gap-1.5">
             {item.owner === "domains" && canManage && owned && item.editable && <>
               {!published && hasOwnSites && <Button variant="secondary" className="h-7 whitespace-nowrap px-2 text-xs" onClick={() => onLink(item)}>{t("Link")}</Button>}
