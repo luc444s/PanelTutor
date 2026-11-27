@@ -103,6 +103,53 @@ def reconcile_ingress(data_root: Path, *, dry_run: bool = False) -> list[dict[st
     return results
 
 
+def reconcile_provision(
+    data_root: Path, *, dry_run: bool = False
+) -> list[dict[str, Any]]:
+    """Re-run provisioning for cells a failed deploy left half-applied.
+
+    ``provision`` is idempotent and skips stages already recorded in
+    ``applied``, so this only finishes what is missing (e.g. cell egress NAT or
+    a daemon that never came up). ``ready`` cells are never touched, and one
+    failing cell never blocks the others.
+    """
+    from scripts.tenant_cell.cells import CellService
+    from scripts.tenant_cell.doctor import HostProbe
+    from scripts.tenant_cell.executor import LocalExecutor
+
+    registry = alloc.load_registry(str(data_root))
+    results: list[dict[str, Any]] = []
+    for slug, cell in sorted((registry.get("allocations") or {}).items()):
+        if not isinstance(cell, dict):
+            continue
+        state = str(cell.get("state") or "")
+        if state not in {"provisioning", "degraded"}:
+            results.append({"slug": slug, "provision": state or "unknown"})
+            continue
+        if dry_run:
+            results.append({"slug": slug, "provision": "would-repair"})
+            continue
+        try:
+            service = CellService(HostProbe(), LocalExecutor(), str(data_root))
+            service.provision(
+                slug, tenant_slug=alloc.tenant_slug_for(data_root, slug)
+            )
+        except Exception as exc:  # noqa: BLE001 - keep repairing the other cells
+            results.append(
+                {"slug": slug, "provision": "failed", "error": str(exc)[:300]}
+            )
+        else:
+            results.append({"slug": slug, "provision": "repaired"})
+    return results
+
+
+def reconcile_egress(data_root: Path) -> dict[str, Any]:
+    """Re-apply the in-cell MASQUERADE rule for every provisioned cell."""
+    from scripts.tenant_cell.cells import reconcile_cell_egress
+
+    return reconcile_cell_egress(data_root)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--data-root", default="/var/lib/spanel")
@@ -111,14 +158,25 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     data_root = Path(args.data_root)
-    payload = {
+    payload: dict[str, Any] = {
         "ok": True,
         "dry_run": args.dry_run,
         "seccomp": reconcile_seccomp(data_root, dry_run=args.dry_run),
         "ingress": reconcile_ingress(data_root, dry_run=args.dry_run),
         # A.SPEC 0119: every deploy repairs the hosting images of live cells.
         "images": [] if args.dry_run else ensure_cell_images(data_root),
+        # A failed provision leaves the allocation in ``provisioning``; finish
+        # it here so a redeploy repairs the tenant instead of requiring a retry
+        # from the panel.
+        "provision": reconcile_provision(data_root, dry_run=args.dry_run),
     }
+    if not args.dry_run:
+        payload["egress"] = reconcile_egress(data_root)
+    failed = [item for item in payload["provision"] if item.get("provision") == "failed"]
+    if failed:
+        payload["ok"] = False
+    if payload.get("egress") is not None and not payload["egress"].get("ok", True):
+        payload["ok"] = False
     if args.json:
         print(json.dumps(payload, indent=2, sort_keys=True))
     else:
@@ -130,7 +188,13 @@ def main(argv: list[str] | None = None) -> int:
         for item in payload["images"]:
             detail = f" ({item['detail']})" if item.get("detail") else ""
             print(f"images {item['slug']}: {item['images']}{detail}")
-    return 0
+        for item in payload["provision"]:
+            detail = f" ({item['error']})" if item.get("error") else ""
+            print(f"provision {item['slug']}: {item['provision']}{detail}")
+        for item in (payload.get("egress") or {}).get("cells", []):
+            detail = f" ({item['error']})" if item.get("error") else ""
+            print(f"egress {item['slug']}: {'ok' if item['ok'] else 'failed'}{detail}")
+    return 0 if payload["ok"] else 1
 
 
 if __name__ == "__main__":

@@ -129,6 +129,30 @@ def test_install_restarts_units_it_rewrote(installer) -> None:
     assert any(call[:2] == ["systemctl", "daemon-reload"] for call in fake.calls)
 
 
+def test_install_restarts_agents_when_only_code_changed(installer) -> None:
+    """A Python-only deploy must not leave the old modules loaded."""
+    inst, fake = installer
+    # First install writes the units and the payload stamp.
+    inst.install(start=True)
+    assert (inst.etc_dir / mod.CODE_STAMP).read_text().strip() == (
+        mod.agent_payload_digest(inst.repo)
+    )
+    fake.calls.clear()
+
+    # Same units, same code: only start, never restart.
+    inst.install(start=True)
+    assert ["systemctl", "start", mod.PLAN_UNIT] in fake.calls
+    assert ["systemctl", "restart", mod.PLAN_UNIT] not in fake.calls
+
+    # Simulate a patched checkout: digest mismatch forces a restart.
+    (inst.etc_dir / mod.CODE_STAMP).write_text("stale\n", encoding="utf-8")
+    fake.calls.clear()
+    payload = inst.install(start=True)
+    assert payload["code"]["changed"] is True
+    assert ["systemctl", "restart", mod.PLAN_UNIT] in fake.calls
+    assert ["systemctl", "restart", mod.RELAY_UNIT] in fake.calls
+
+
 def test_install_reports_the_inspection_error_instead_of_none(
     installer, monkeypatch
 ) -> None:

@@ -46,6 +46,31 @@ PROBE_NANO_CPUS = 500_000_000
 PROBE_PIDS_LIMIT = 64
 
 
+class CellNetnsError(RuntimeError):
+    """Base for network-namespace verification failures during egress setup."""
+
+
+class CellNetnsUnavailable(CellNetnsError):
+    """The target namespace could not be read: process gone or /proc hidden."""
+
+
+class CellHostNetnsError(CellNetnsError):
+    """The resolved dockerd still runs in the host network namespace."""
+
+
+def netns_inode(pid: int | str) -> int:
+    """Return a namespace identity without following the magic symlink.
+
+    ``readlink /proc/<pid>/ns/net`` is gated by ``ptrace_may_access``: an
+    otherwise privileged service without ``CAP_SYS_PTRACE`` gets EACCES for a
+    process owned by another uid (e.g. the cell's headless user). The symlink
+    entry's ``st_ino`` *is* the nsfs inode, so ``lstat`` compares namespaces
+    without that capability and keeps the host-netns guard inside the plan
+    agent's bounded capability set (A.SPEC 0118).
+    """
+    return os.lstat(f"/proc/{pid}/ns/net").st_ino
+
+
 def rootlesskit_env_lines() -> str:
     """RootlessKit network + port-driver settings for a cell (0109-R3).
 
@@ -346,14 +371,14 @@ class LocalExecutor(PlanExecutorMixin, Executor):
     def _assert_cell_netns(dockerd_pid: int) -> None:
         """Fail closed before iptables if the target is the host netns."""
         try:
-            target = os.readlink(f"/proc/{dockerd_pid}/ns/net")
-            host = os.readlink("/proc/self/ns/net")
+            target = netns_inode(dockerd_pid)
+            host = netns_inode("self")
         except OSError as exc:
-            raise RuntimeError(
+            raise CellNetnsUnavailable(
                 f"cannot verify network namespace for dockerd pid {dockerd_pid}"
             ) from exc
         if target == host:
-            raise RuntimeError(
+            raise CellHostNetnsError(
                 f"refusing cell egress NAT: dockerd pid {dockerd_pid} uses host netns"
             )
 
@@ -380,19 +405,32 @@ class LocalExecutor(PlanExecutorMixin, Executor):
             if dockerd_pid <= 0:
                 time.sleep(0.25)
                 continue
-            if self._cell_egress_enabled_pid(dockerd_pid, subnet):
-                return
-            self._assert_cell_netns(dockerd_pid)
-            result = subprocess.run(
-                netns_masquerade_argv(dockerd_pid, subnet, "-A"),
-                capture_output=True,
-                text=True,
-                check=False,
-            )
+            try:
+                if self._cell_egress_enabled_pid(dockerd_pid, subnet):
+                    return
+                # Re-check right before mutating: the daemon may have exited
+                # and its pid been reused since the lookup above.
+                self._assert_cell_netns(dockerd_pid)
+                result = subprocess.run(
+                    netns_masquerade_argv(dockerd_pid, subnet, "-A"),
+                    capture_output=True,
+                    text=True,
+                    check=False,
+                )
+            except CellNetnsUnavailable as exc:
+                # RootlessKit can restart dockerd between the pid scan and the
+                # probe. That is transient for provisioning, not a hard error:
+                # keep polling instead of failing the whole cell creation.
+                last_error = str(exc)
+                time.sleep(0.25)
+                continue
             last_error = (result.stderr or result.stdout or last_error).strip()
-            if result.returncode == 0 and self._cell_egress_enabled_pid(
-                dockerd_pid, subnet
-            ):
+            try:
+                installed = self._cell_egress_enabled_pid(dockerd_pid, subnet)
+            except CellNetnsUnavailable as exc:
+                last_error = str(exc)
+                installed = False
+            if result.returncode == 0 and installed:
                 return
             time.sleep(0.25)
         raise RuntimeError(f"could not install cell egress NAT: {last_error[:300]}")

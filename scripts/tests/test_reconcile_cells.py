@@ -58,3 +58,39 @@ def test_ingress_without_a_cell_daemon_is_skipped(tmp_path) -> None:
     alloc.allocate(str(tmp_path), "acme")
     result = mod.reconcile_ingress(tmp_path)
     assert result == [{"slug": "acme", "ingress": "no-cell-daemon"}]
+
+
+def test_reconcile_provision_repairs_only_incomplete_cells(
+    tmp_path, monkeypatch
+) -> None:
+    from scripts.tenant_cell import cells
+
+    alloc.allocate(str(tmp_path), "done")
+    alloc.update_allocation(str(tmp_path), "done", state="ready")
+    alloc.allocate(str(tmp_path), "half")
+    alloc.update_allocation(str(tmp_path), "half", state="provisioning")
+    alloc.update_allocation(str(tmp_path), "half", tenant_slug="half")
+    calls: list[tuple[str, str | None]] = []
+
+    class FakeService:
+        def __init__(self, *_args, **_kwargs) -> None:
+            pass
+
+        def provision(self, slug, *, tenant_slug=None):
+            calls.append((slug, tenant_slug))
+            alloc.update_allocation(str(tmp_path), slug, state="ready")
+            return {"slug": slug}
+
+    monkeypatch.setattr(cells, "CellService", FakeService)
+
+    result = mod.reconcile_provision(tmp_path)
+
+    assert calls == [("half", "half")]
+    assert {item["slug"]: item["provision"] for item in result} == {
+        "done": "ready",
+        "half": "repaired",
+    }
+    assert mod.reconcile_provision(tmp_path, dry_run=True) == [
+        {"slug": "done", "provision": "ready"},
+        {"slug": "half", "provision": "ready"},
+    ]

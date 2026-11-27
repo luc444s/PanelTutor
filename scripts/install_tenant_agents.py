@@ -31,6 +31,7 @@ Exit codes: 0 ok, 1 error, 2 usage.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import pwd
@@ -55,6 +56,7 @@ RECONCILE_TEMPLATE = TEMPLATES / RECONCILE_UNIT
 RECONCILE_TIMER_TEMPLATE = TEMPLATES / RECONCILE_TIMER
 RUNTIME_TMPFILES = "spanel.conf"
 RUNTIME_TEMPLATE = TEMPLATES / "spanel-runtime.conf"
+CODE_STAMP = "agents_code.stamp"
 DEFAULT_DATA_ROOT = "/var/lib/spanel"
 DEFAULT_APP_CONTAINER = "spanel-app-1"
 DEFAULT_TRAEFIK_UID = 1000
@@ -93,6 +95,25 @@ def read_text(path: Path) -> str:
         return path.read_text(encoding="utf-8")
     except OSError:
         return ""
+
+
+def agent_payload_digest(repo: Path = ROOT) -> str:
+    """Fingerprint the Python code the long-lived agents actually import.
+
+    Unit files change rarely, but agent behavior lives in
+    ``scripts/tenant_cell``. Without this digest a deploy that only patches
+    Python leaves the already-running units on the old modules until reboot.
+    """
+    digest = hashlib.sha256()
+    sources = [repo / "scripts" / "spanel_tenant.py"]
+    sources.extend(sorted((repo / "scripts" / "tenant_cell").glob("*.py")))
+    for path in sources:
+        if not path.is_file():
+            continue
+        digest.update(path.relative_to(repo).as_posix().encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(path.read_bytes())
+    return digest.hexdigest()
 
 
 def ensure_directory(path: Path, mode: int, *, dry_run: bool) -> None:
@@ -396,10 +417,16 @@ class Installer:
         )
         interpreter_ok, interpreter_error = interpreter_ready(self.python)
         sqlalchemy_ok, sqlalchemy_error = sqlalchemy_ready(self.python)
+        code_digest = agent_payload_digest(self.repo)
+        stamp = read_text(self.etc_dir / CODE_STAMP).strip()
         result: dict[str, Any] = {
             "ok": True,
             "repo": str(self.repo),
             "python": self.python,
+            "code": {
+                "digest": code_digest,
+                "stamp_matches": bool(stamp) and stamp == code_digest,
+            },
             "interpreter": {
                 "ok": interpreter_ok,
                 "error": interpreter_error,
@@ -517,6 +544,9 @@ class Installer:
 
         ensure_directory(self.etc_dir, 0o755, dry_run=dry_run)
         token = ensure_token(self.token_path, dry_run=dry_run)
+        code_digest = agent_payload_digest(self.repo)
+        stamp_path = self.etc_dir / CODE_STAMP
+        code_changed = read_text(stamp_path).strip() != code_digest
         results: dict[str, Any] = {
             "ok": True,
             "dry_run": dry_run,
@@ -525,6 +555,11 @@ class Installer:
             "traefik_uid": traefik_uid,
             "traefik_ip": traefik_ip,
             "python": self.python,
+            "code": {
+                "digest": code_digest,
+                "changed": code_changed,
+                "stamp": str(stamp_path),
+            },
             "units": {},
         }
         for name, content in (
@@ -576,8 +611,11 @@ class Installer:
                     )
                 # ``enable --now`` is a no-op for an already-running unit, so a
                 # rewritten unit would keep the old environment until reboot.
+                # Python-only changes do not rewrite the unit, so the payload
+                # digest also forces a restart when the modules changed.
                 action = results["units"].get(name)
-                verb = "restart" if action == "written" else "start"
+                restart = action == "written" or code_changed
+                verb = "restart" if restart else "start"
                 started = run(["systemctl", verb, name], timeout=90)
                 if started.returncode != 0:
                     raise InstallError(
@@ -609,6 +647,9 @@ class Installer:
                 raise InstallError(
                     f"edge-relay socket did not appear: {self.relay_socket}"
                 )
+            if code_changed:
+                stamp_path.write_text(code_digest + "\n", encoding="utf-8")
+                stamp_path.chmod(0o644)
             results["started"] = True
         else:
             results["started"] = False
@@ -699,6 +740,11 @@ def _print_human(payload: dict[str, Any]) -> None:
         return
     print(f"repo:      {payload.get('repo', '')}")
     print(f"python:    {payload.get('python', '')}")
+    code = payload.get("code") or {}
+    if "changed" in code:
+        print(f"agent code: {'changed' if code['changed'] else 'unchanged'}")
+    elif "stamp_matches" in code:
+        print(f"agent code: {'current' if code['stamp_matches'] else 'stale'}")
     print(f"app uid:   {payload.get('app_uid')}")
     print(f"traefik:   {payload.get('traefik_uid')}")
     token = payload.get("token")

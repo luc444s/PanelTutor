@@ -162,9 +162,15 @@ if [[ "${SPANEL_SKIP_HOST_AGENTS:-0}" != "1" ]]; then
       [[ -x "$HOST_AGENT_PY" ]] || HOST_AGENT_PY=python3
       "$HOST_AGENT_PY" "$ROOT/scripts/install_tenant_agents.py" --force || fail \
         "host agent reconciliation failed; deployment aborted"
+      # A code-only change (e.g. scripts/tenant_cell/executor.py) does not
+      # rewrite a unit, so the installer restarts the agents from the payload
+      # digest. This reconcile then finishes any cell left half-provisioned by
+      # the previous agent and re-applies the in-cell egress NAT. Per-cell
+      # failures are reported but never block the application deploy.
       echo "Reconciling cell artifacts"
-      "$HOST_AGENT_PY" "$ROOT/scripts/tenant_cell/reconcile_cells.py" || fail \
-        "cell reconciliation failed; deployment aborted"
+      if ! "$HOST_AGENT_PY" "$ROOT/scripts/tenant_cell/reconcile_cells.py"; then
+        echo "WARNING: cell reconciliation reported failures (see above)" >&2
+      fi
     else
       echo "Skipping host agent reconciliation (not root)" >&2
     fi

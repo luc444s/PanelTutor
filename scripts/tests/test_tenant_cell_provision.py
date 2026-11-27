@@ -1066,12 +1066,18 @@ def test_dockerd_pid_is_selected_by_cell_uid_not_wrapper_pid(tmp_path) -> None:
 
 
 def test_cell_egress_rejects_host_netns_before_iptables(monkeypatch) -> None:
+    from types import SimpleNamespace
+
     from scripts.tenant_cell import executor as exec_mod
 
     local = exec_mod.LocalExecutor()
     monkeypatch.setenv("SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS", "1")
     monkeypatch.setattr(local, "cell_dockerd_pid", lambda _uid: 7331)
-    monkeypatch.setattr(exec_mod.os, "readlink", lambda _path: "net:[4026531840]")
+    monkeypatch.setattr(
+        exec_mod.os,
+        "lstat",
+        lambda _path: SimpleNamespace(st_ino=4026531840),
+    )
     calls: list[list[str]] = []
     monkeypatch.setattr(
         exec_mod.subprocess,
@@ -1079,10 +1085,64 @@ def test_cell_egress_rejects_host_netns_before_iptables(monkeypatch) -> None:
         lambda argv, **_kwargs: calls.append(list(argv)),
     )
 
-    with pytest.raises(RuntimeError, match="uses host netns"):
+    with pytest.raises(exec_mod.CellHostNetnsError, match="uses host netns"):
         local.ensure_cell_egress(60000, "172.17.0.0/16")
 
     assert calls == []
+
+
+def test_cell_netns_check_never_needs_cap_sys_ptrace(monkeypatch) -> None:
+    """EACCES on readlink must not matter: the guard compares nsfs inodes."""
+    from types import SimpleNamespace
+
+    from scripts.tenant_cell import executor as exec_mod
+
+    local = exec_mod.LocalExecutor()
+
+    def deny_readlink(_path):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(exec_mod.os, "readlink", deny_readlink)
+    monkeypatch.setattr(
+        exec_mod.os,
+        "lstat",
+        lambda path: SimpleNamespace(
+            st_ino=100 if path == "/proc/7331/ns/net" else 200
+        ),
+    )
+
+    local._assert_cell_netns(7331)  # different inodes: cell netns, no raise
+
+
+def test_cell_egress_retries_while_namespace_is_unreadable(monkeypatch) -> None:
+    from types import SimpleNamespace
+
+    from scripts.tenant_cell import executor as exec_mod
+
+    local = exec_mod.LocalExecutor()
+    monkeypatch.setenv("SPANEL_TENANT_ALLOW_LOCAL_MUTATIONS", "1")
+    monkeypatch.setattr(local, "cell_dockerd_pid", lambda _uid: 7331)
+    probes = {"n": 0}
+
+    def flaky_lstat(path):
+        if path == "/proc/7331/ns/net":
+            probes["n"] += 1
+            if probes["n"] == 1:
+                raise FileNotFoundError(2, "No such file or directory")
+            return SimpleNamespace(st_ino=100)
+        return SimpleNamespace(st_ino=200)
+
+    monkeypatch.setattr(exec_mod.os, "lstat", flaky_lstat)
+    monkeypatch.setattr(exec_mod.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(
+        exec_mod.subprocess,
+        "run",
+        lambda argv, **_kwargs: SimpleNamespace(returncode=0, stderr="", stdout=""),
+    )
+
+    local.ensure_cell_egress(60000, "172.18.0.0/16")
+
+    assert probes["n"] == 2  # first probe failed, the retry succeeded
 
 
 def test_cell_egress_apply_is_pid_correct_and_idempotent(monkeypatch) -> None:
@@ -1097,8 +1157,10 @@ def test_cell_egress_apply_is_pid_correct_and_idempotent(monkeypatch) -> None:
     monkeypatch.setattr(local, "cell_dockerd_pid", lambda _uid: 7331)
     monkeypatch.setattr(
         exec_mod.os,
-        "readlink",
-        lambda path: "net:[cell]" if path == "/proc/7331/ns/net" else "net:[host]",
+        "lstat",
+        lambda path: SimpleNamespace(
+            st_ino=100 if path == "/proc/7331/ns/net" else 200
+        ),
     )
 
     def fake_run(argv, **_kwargs):
@@ -1133,8 +1195,10 @@ def test_cell_egress_remove_reverts_only_cell_rule(monkeypatch) -> None:
     monkeypatch.setattr(local, "cell_dockerd_pid", lambda _uid: 7331)
     monkeypatch.setattr(
         exec_mod.os,
-        "readlink",
-        lambda path: "net:[cell]" if path == "/proc/7331/ns/net" else "net:[host]",
+        "lstat",
+        lambda path: SimpleNamespace(
+            st_ino=100 if path == "/proc/7331/ns/net" else 200
+        ),
     )
 
     def fake_run(argv, **_kwargs):
