@@ -54,8 +54,8 @@ export async function getCloudflareStatus(): Promise<CloudflareStatus | null> {
   }
 }
 
-export const listCloudflareZones = () =>
-  apiRequest<CloudflareZoneList>(`${BASE}/zones`);
+export const listCloudflareZones = (scope: "tenant" | "all" = "tenant") =>
+  apiRequest<CloudflareZoneList>(`${BASE}/zones?scope=${scope}`);
 
 export const listCloudflareRecords = (zoneId: string) =>
   apiRequest<CloudflareRecordList>(`${BASE}/zones/${encodeURIComponent(zoneId)}/records`);
@@ -109,6 +109,7 @@ export const provisionPlan = (payload: {
   ipv4: string;
   www: boolean;
   replace: boolean;
+  tenant_id?: string | null;
 }) =>
   apiRequest<CloudflareProvisionPlan>(`${BASE}/provision/plan`, {
     method: "POST",
@@ -120,6 +121,7 @@ export const provisionApply = (payload: {
   ipv4: string;
   www: boolean;
   replace: boolean;
+  tenant_id?: string | null;
 }) =>
   apiRequest<CloudflareProvisionApply>(`${BASE}/provision/apply`, {
     method: "POST",

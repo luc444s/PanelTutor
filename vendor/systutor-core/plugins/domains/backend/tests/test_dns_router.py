@@ -446,6 +446,49 @@ def test_doctor_never_returns_url_or_key(
         engine.dispose()
 
 
+def test_platform_only_scope_all_and_foreign_tenant_id(tmp_path: Path) -> None:
+    app, _fake, db, holder, engine = build_app(tmp_path)
+    base = "/api/v1/plugins/domains/dns/zones"
+    try:
+        with TestClient(app) as client:
+            assert (
+                client.post(base, json={"zone_name": "example.com"}).status_code == 201
+            )
+            holder["context"] = context("t2")
+            denied_scope = client.get(f"{base}?scope=all")
+            assert denied_scope.status_code == 403
+            denied_create = client.post(
+                base, json={"zone_name": "other.com", "tenant_id": "t1"}
+            )
+            assert denied_create.status_code == 403
+            assert denied_create.json()["error"]["code"] == "domains.platform_required"
+            denied_resolve = client.get(
+                "/api/v1/plugins/domains/dns/resolve",
+                params={"domain": "www.example.com", "tenant_id": "t1"},
+            )
+            assert denied_resolve.status_code == 403
+
+            holder["context"] = context("t2", platform=True, branch_id=None)
+            listed = client.get(f"{base}?scope=all")
+            assert listed.status_code == 200
+            assert listed.json()["items"][0]["tenant_id"] == "t1"
+            foreign = client.get(f"{base}/example.com")
+            assert foreign.status_code == 200
+            resolved = client.get(
+                "/api/v1/plugins/domains/dns/resolve",
+                params={"domain": "www.example.com", "tenant_id": "t1"},
+            )
+            assert resolved.status_code == 200
+            assert resolved.json()["tenant_id"] == "t1"
+            created = client.post(
+                base, json={"zone_name": "other.com", "tenant_id": "t2"}
+            )
+            assert created.status_code == 201, created.text
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_shared_client_instance_is_the_router_client(tmp_path: Path) -> None:
     app, fake, db, _holder, engine = build_app(tmp_path)
     try:

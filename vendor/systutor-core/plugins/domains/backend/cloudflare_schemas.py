@@ -78,6 +78,7 @@ class CloudflareZoneItem(BaseModel):
     created_on: str | None = None
     modified_on: str | None = None
     record_count: int = 0
+    tenant_id: str | None = None
 
 
 class CloudflareZoneListResponse(BaseModel):
@@ -142,6 +143,7 @@ class CloudflareProvisionRequest(_Strict):
     ipv4: str = Field(min_length=1, max_length=45)
     www: bool = False
     replace: bool = False
+    tenant_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class CloudflareProvisionRecord(BaseModel):

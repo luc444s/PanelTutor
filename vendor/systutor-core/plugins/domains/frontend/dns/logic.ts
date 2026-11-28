@@ -21,6 +21,20 @@ export function longestOwnedZone<T extends { name: string }>(domain: string, zon
     .sort((left, right) => right.name.length - left.name.length)[0] ?? null;
 }
 
+/** Longest owned zone for a domain, never mixing zones from another tenant. */
+export function longestOwnedZoneForTenant<
+  T extends { name: string; tenant_id?: string | null },
+>(
+  domain: string,
+  zones: T[],
+  tenantId: string | null | undefined,
+) {
+  return longestOwnedZone(
+    domain,
+    zones.filter((zone) => (zone.tenant_id ?? null) === (tenantId ?? null)),
+  );
+}
+
 export function activationZoneDomain(domain: string, registeredDomains: string[]) {
   const candidate = normalizeDnsName(domain);
   return registeredDomains

@@ -7,6 +7,7 @@ import {
   CLOUDFLARE_UPSTREAM_VALIDATION,
   CLOUDFLARE_ZONE_IN_USE,
   CLOUDFLARE_ZONE_UNOWNED,
+  canListGlobalCloudflareZones,
   canManageCloudflareClient,
   canManageCloudflareHost,
   canProvisionCloudflare,
@@ -179,6 +180,15 @@ describe("Cloudflare panel policy", () => {
     expect(isCloudflareHostMode({ ...connected, managed_by_host: true })).toBe(true);
     expect(canStartTenantCloudflare(tenant, hostConnected)).toBe(false);
     expect(canStartTenantCloudflare(tenant, connected)).toBe(true);
+  });
+
+  it("lists global zones only for the platform in single mode", () => {
+    const tenant = ["domains.dns.cloudflare"];
+    const platform = [...tenant, CLOUDFLARE_PLATFORM_PERMISSION];
+    expect(canListGlobalCloudflareZones(tenant, hostConnected)).toBe(false);
+    expect(canListGlobalCloudflareZones(platform, connected)).toBe(false);
+    expect(canListGlobalCloudflareZones(platform, hostConnected)).toBe(true);
+    expect(canListGlobalCloudflareZones(platform, null)).toBe(false);
   });
 
   it("shows host actions only to platform administrators in single mode", () => {

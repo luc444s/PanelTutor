@@ -33,6 +33,7 @@ import type {
   CloudflareZone,
 } from "../cloudflare/types";
 import {
+  canListGlobalCloudflareZones,
   canProvisionCloudflare,
   hasZoneWriteScope,
   isCloudflareConnected,
@@ -43,7 +44,7 @@ import { NameserversDialog } from "../dns/NameserversDialog";
 import { dnsKeys, listZones } from "../dns/api";
 import {
   activationZoneDomain,
-  longestOwnedZone,
+  longestOwnedZoneForTenant,
   normalizeDnsName,
 } from "../dns/logic";
 
@@ -67,8 +68,8 @@ export default function DomainsPage() {
     queryFn: () => listDomains(platform),
   });
   const zonesQuery = useQuery({
-    queryKey: dnsKeys.zones,
-    queryFn: listZones,
+    queryKey: [...dnsKeys.zones, platform ? "all" : "tenant"],
+    queryFn: () => listZones(platform ? "all" : "tenant"),
     enabled: canReadDns,
     retry: false,
   });
@@ -85,9 +86,12 @@ export default function DomainsPage() {
     retry: false,
   });
   const cfConnected = isCloudflareConnected(cloudflareStatusQuery.data ?? null);
+  const cfGlobalZones = canListGlobalCloudflareZones(
+    permissions, cloudflareStatusQuery.data ?? null,
+  );
   const cloudflareZonesQuery = useQuery({
-    queryKey: cloudflareKeys.zones,
-    queryFn: listCloudflareZones,
+    queryKey: [...cloudflareKeys.zones, cfGlobalZones ? "all" : "tenant"],
+    queryFn: () => listCloudflareZones(cfGlobalZones ? "all" : "tenant"),
     enabled: canUseCloudflare && cfConnected,
     retry: false,
   });
@@ -120,12 +124,15 @@ export default function DomainsPage() {
   );
   const dnsZones = zonesQuery.data?.items ?? [];
   const cloudflareZones = cloudflareZonesQuery.data?.items ?? [];
-  const activeZone = dnsDomain ? longestOwnedZone(dnsDomain.domain, dnsZones) : null;
+  const activeTenantId = dnsDomain?.tenant_id ?? currentTenant?.id;
+  const activeZone = dnsDomain
+    ? longestOwnedZoneForTenant(dnsDomain.domain, dnsZones, activeTenantId)
+    : null;
   const dnsSubdomains = activeZone ? items
-    .filter((item) => !item.tenant_id || item.tenant_id === currentTenant?.id)
+    .filter((item) => (item.tenant_id ?? null) === (activeTenantId ?? null))
     .map((item) => normalizeDnsName(item.domain))
     .filter((name) => name !== normalizeDnsName(activeZone.name)
-      && longestOwnedZone(name, dnsZones)?.name === activeZone.name)
+      && longestOwnedZoneForTenant(name, dnsZones, activeTenantId)?.name === activeZone.name)
     .sort() : [];
 
   const normalizedAddDomain = useMemo(() => normalizeDomainInput(domain), [domain]);
@@ -646,18 +653,27 @@ export default function DomainsPage() {
       <DnsZoneDialog
         domain={dnsDomain?.domain ?? null}
         cloudflareZone={cloudflareZone}
-        zoneName={dnsDomain ? longestOwnedZone(dnsDomain.domain, zonesQuery.data?.items ?? [])?.name ?? null : null}
+        zoneName={dnsDomain
+          ? longestOwnedZoneForTenant(
+            dnsDomain.domain, zonesQuery.data?.items ?? [], activeTenantId,
+          )?.name ?? null
+          : null}
         activationZoneName={dnsDomain
           ? activationZoneDomain(
             dnsDomain.domain,
             items
-              .filter((item) => !item.tenant_id || item.tenant_id === currentTenant?.id)
+              .filter((item) => (item.tenant_id ?? null) === (activeTenantId ?? null))
               .map((item) => item.domain),
           )
           : null}
         subdomains={dnsSubdomains}
         permissions={permissions}
-        owned={Boolean(dnsDomain && (!dnsDomain.tenant_id || dnsDomain.tenant_id === currentTenant?.id))}
+        owned={Boolean(dnsDomain && (
+          platform || !dnsDomain.tenant_id || dnsDomain.tenant_id === currentTenant?.id
+        ))}
+        tenantId={platform && dnsDomain?.tenant_id
+          && dnsDomain.tenant_id !== currentTenant?.id ? dnsDomain.tenant_id : null}
+        platform={platform}
         zoneListError={zonesQuery.isError}
         retryZoneList={() => void zonesQuery.refetch()}
         onClose={() => {

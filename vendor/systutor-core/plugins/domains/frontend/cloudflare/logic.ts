@@ -37,6 +37,17 @@ export function canManageCloudflareHost(
 }
 
 /** Whether the tenant button may call the tenant-scoped `/oauth/start`. */
+/** Global zone listing is only safe for the platform in shared mode. */
+export function canListGlobalCloudflareZones(
+  permissions: readonly string[],
+  status: CloudflareStatus | null | undefined,
+): boolean {
+  return (
+    permissions.includes(CLOUDFLARE_PLATFORM_PERMISSION) &&
+    isCloudflareHostMode(status)
+  );
+}
+
 export function canStartTenantCloudflare(
   permissions: readonly string[],
   status: CloudflareStatus | null | undefined,

@@ -29,6 +29,22 @@ describe("Domains DNS API contract", () => {
     expect(table).toContain("aria-expanded={expanded}");
   });
 
+  it("lets the platform operate foreign rows without crossing tenants", () => {
+    const source = readFileSync(new URL(
+      "../../../../vendor/systutor-core/plugins/domains/frontend/pages/DomainsPage.tsx",
+      import.meta.url,
+    ), "utf8");
+    const table = readFileSync(new URL(
+      "../../../../vendor/systutor-core/plugins/domains/frontend/components/DomainsTable.tsx",
+      import.meta.url,
+    ), "utf8");
+    expect(source).toContain('listZones(platform ? "all" : "tenant")');
+    expect(table).toContain("longestOwnedZoneForTenant");
+    expect(table).toContain("const operable = owned || platform");
+    expect(table).toContain("const canOpen = canReadDns && operable");
+    expect(table).toContain("tenantCloudflareZones");
+  });
+
   it("keeps query keys DNS and zone scoped", () => {
     expect(api.dnsKeys.zones).toEqual(["domains", "dns", "zones"]);
     expect(api.dnsKeys.zone("example.com")).toEqual(["domains", "dns", "zones", "example.com"]);

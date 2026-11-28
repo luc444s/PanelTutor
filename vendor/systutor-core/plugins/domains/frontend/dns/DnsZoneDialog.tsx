@@ -13,7 +13,7 @@ import { ZoneTab } from "./ZoneTab";
 import { CloudflareDnsPanel } from "../cloudflare/CloudflareDnsPanel";
 import type { CloudflareZone } from "../cloudflare/types";
 
-export function DnsZoneDialog({ domain, zoneName, cloudflareZone, activationZoneName, subdomains, permissions, owned, zoneListError, retryZoneList, onClose }: {
+export function DnsZoneDialog({ domain, zoneName, cloudflareZone, activationZoneName, subdomains, permissions, owned, tenantId, platform, zoneListError, retryZoneList, onClose }: {
   domain: string | null;
   zoneName: string | null;
   cloudflareZone: CloudflareZone | null;
@@ -21,6 +21,9 @@ export function DnsZoneDialog({ domain, zoneName, cloudflareZone, activationZone
   subdomains: string[];
   permissions: string[];
   owned: boolean;
+  /** Owner tenant when the platform opens a foreign row; null for the active tenant. */
+  tenantId: string | null;
+  platform: boolean;
   zoneListError: boolean;
   retryZoneList: () => void;
   onClose: () => void;
@@ -37,7 +40,10 @@ export function DnsZoneDialog({ domain, zoneName, cloudflareZone, activationZone
     retry: false,
   });
   const activation = useMutation({
-    mutationFn: () => createZone(activationZoneName!),
+    mutationFn: () => createZone(
+      activationZoneName!,
+      platform && tenantId ? tenantId : undefined,
+    ),
     onSuccess: () => {
       setConfirmActivation(false);
       setActivationError(null);

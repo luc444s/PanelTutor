@@ -43,6 +43,7 @@ export type CloudflareZone = {
   created_on: string | null;
   modified_on: string | null;
   record_count: number;
+  tenant_id?: string | null;
 };
 
 export type CloudflareZoneList = { items: CloudflareZone[] };

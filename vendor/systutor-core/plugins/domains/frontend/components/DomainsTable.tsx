@@ -14,7 +14,7 @@ import { DnsStatusCell } from "../dns/DnsStatusCell";
 import {
   dnsStatus,
   groupRegisteredDomains,
-  longestOwnedZone,
+  longestOwnedZoneForTenant,
   shouldOpenDnsRow,
 } from "../dns/logic";
 import type { ZoneItem } from "../dns/types";
@@ -107,17 +107,27 @@ export function DomainsTable({ items, zones, cloudflareZones, dnsError, platform
       <tbody>{rows.map(({ item, child, childCount }) => {
         const published = item.published ?? true;
         const owned = !item.tenant_id || item.tenant_id === currentTenantId;
-        const managedZone = longestOwnedZone(item.domain, zones);
-        const cloudflareZone = longestOwnedZone(item.domain, cloudflareZones);
+        const tenantZones = zones.filter(
+          (zone) => (zone.tenant_id ?? null) === (item.tenant_id ?? null),
+        );
+        const tenantCloudflareZones = cloudflareZones.filter(
+          (zone) => (zone.tenant_id ?? null) === (item.tenant_id ?? null),
+        );
+        const managedZone = longestOwnedZoneForTenant(item.domain, zones, item.tenant_id);
+        const cloudflareZone = longestOwnedZoneForTenant(
+          item.domain, cloudflareZones, item.tenant_id,
+        );
+        const operable = owned || platform;
+        const canOpen = canReadDns && operable;
         const key = `${item.tenant_id ?? ""}:${item.domain}`;
         const expanded = expandedDomains.has(key);
         return <tr key={key}
-          className={`border-t border-border/70 transition-colors hover:bg-muted/30 ${child ? "bg-muted/20" : ""} ${canReadDns && owned ? "cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary" : ""}`}
-          tabIndex={canReadDns && owned ? 0 : undefined}
-          aria-label={canReadDns && owned ? t("Open DNS zone for {domain}", { domain: item.domain }) : undefined}
+          className={`border-t border-border/70 transition-colors hover:bg-muted/30 ${child ? "bg-muted/20" : ""} ${canOpen ? "cursor-pointer focus:outline-none focus:ring-2 focus:ring-primary" : ""}`}
+          tabIndex={canOpen ? 0 : undefined}
+          aria-label={canOpen ? t("Open DNS zone for {domain}", { domain: item.domain }) : undefined}
           onDoubleClick={(event) => {
             const blocked = (event.target as HTMLElement).closest("button,a,input,select,textarea");
-            if (canReadDns && shouldOpenDnsRow(owned, blocked?.tagName
+            if (canOpen && shouldOpenDnsRow(operable, blocked?.tagName
               ?? (event.target as HTMLElement).tagName)) {
               onOpenDns(item, managedZone ? null : cloudflareZone);
             }
@@ -125,8 +135,8 @@ export function DomainsTable({ items, zones, cloudflareZones, dnsError, platform
           onKeyDown={(event) => {
             if (event.currentTarget !== event.target
               && (event.target as HTMLElement).closest("button,a,input,select,textarea")) return;
-            if (canReadDns && shouldOpenDnsRow(
-              owned, (event.target as HTMLElement).tagName, event.key,
+            if (canOpen && shouldOpenDnsRow(
+              operable, (event.target as HTMLElement).tagName, event.key,
             )) onOpenDns(item, managedZone ? null : cloudflareZone);
           }}>
           <td className="px-3 py-3 font-medium text-foreground">
@@ -162,8 +172,9 @@ export function DomainsTable({ items, zones, cloudflareZones, dnsError, platform
             : <span className="text-xs text-foreground">{published ? t("Extra") : t("Domain")}</span>}</td>
           <td className="px-3 py-3"><CertificateCell domain={item.domain}
             published={published} readable={owned} /></td>
-          {canReadDns && <td className="px-3 py-3">{owned ? <DnsStatusCell
-            status={dnsStatus(item.domain, zones, dnsError, cloudflareZones)} domain={item.domain}
+          {canReadDns && <td className="px-3 py-3">{operable ? <DnsStatusCell
+            status={dnsStatus(item.domain, tenantZones, dnsError, tenantCloudflareZones)}
+            domain={item.domain}
             zoneName={managedZone?.name ?? cloudflareZone?.name ?? null} /> : <span
             className="text-xs text-muted-foreground"
             title={t("Switch to this tenant to inspect its DNS.")}>—</span>}</td>}

@@ -320,12 +320,13 @@ def disconnect(
 @router.get("/dns/cloudflare/zones", response_model=CloudflareZoneListResponse)
 def list_zones(
     request: Request,
+    scope: str = Query(default="tenant", pattern="^(tenant|all)$"),
     tenant_context: TenantContext = Depends(get_current_tenant_context),
     _current_user: User = Depends(require_permission(CLOUDFLARE)),
     db: Session = Depends(get_db_session),
 ) -> CloudflareZoneListResponse:
     try:
-        items = _service(request, db).zones(tenant_context)
+        items = _service(request, db).zones(tenant_context, scope=scope)
     except CloudflareError as exc:
         raise _translate(exc) from exc
     return CloudflareZoneListResponse(

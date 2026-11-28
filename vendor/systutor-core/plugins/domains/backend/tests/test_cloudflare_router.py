@@ -392,7 +392,8 @@ def test_provision_routes_are_tenant_scoped_and_force_dns_only(
 
             holder["context"] = context("t1", "domains.dns.cloudflare")
             invalid = client.post(f"{path}/plan", json={**body, "tenant_id": "t2"})
-            assert invalid.status_code == 422
+            assert invalid.status_code == 403
+            assert invalid.json()["error"]["code"] == "domains.platform_required"
             planned = client.post(f"{path}/plan", json=body)
             assert planned.status_code == 200
             assert planned.json()["zone"]["id"] == "z1"
@@ -470,6 +471,33 @@ def test_record_crud_is_tenant_scoped_and_audit_redacts_content(
         assert len(audits) == 3
         assert "192.0.2.44" not in str([audit.details for audit in audits])
         assert "192.0.2.45" not in str([audit.details for audit in audits])
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_global_zone_scope_is_platform_only_and_needs_single_mode(
+    tmp_path: Path, monkeypatch
+) -> None:
+    app, _fake, db, holder, _cipher, engine = build_app(tmp_path, monkeypatch)
+    path = "/api/v1/plugins/domains/dns/cloudflare/zones?scope=all"
+    try:
+        with TestClient(app) as client:
+            holder["context"] = context("t1", "domains.dns.cloudflare")
+            assert client.get(path).status_code == 403
+            holder["context"] = context(
+                "t1", "domains.dns.cloudflare", platform=True
+            )
+            denied = client.get(path)
+            assert denied.status_code == 409
+            assert denied.json()["error"]["code"] == (
+                "domains.dns.cloudflare.scope_all_requires_single"
+            )
+            tenant_scoped = client.get(
+                "/api/v1/plugins/domains/dns/cloudflare/zones"
+            )
+            assert tenant_scoped.status_code == 200
+            assert tenant_scoped.json()["items"][0]["tenant_id"] == "t1"
     finally:
         db.close()
         engine.dispose()

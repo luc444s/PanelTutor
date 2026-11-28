@@ -39,6 +39,7 @@ from plugins.domains.backend.dns.nameservers_service import (
 from plugins.domains.backend.dns.resolver import verify_nameservers
 from plugins.domains.backend.dns.store import (
     get_ownership,
+    get_ownership_any_tenant,
     get_public_settings,
     list_ownerships,
 )
@@ -53,12 +54,24 @@ from plugins.domains.backend.dns.validation import (
 )
 from plugins.domains.backend.dns.zonefile import export_zone, parse_zonefile
 from plugins.domains.backend.models import DnsZoneOwnership
+from plugins.domains.backend.service import (
+    context_for_tenant,
+    resolve_effective_tenant,
+)
 from systutor.contracts.domain_namespace import list_tenant_domains
 from systutor.core.errors import AppError
 from systutor.kernel.audit.service import record_audit
 from systutor.kernel.tenants.context import TenantContext
 
-Publisher = Callable[[str, dict[str, object], str, str], None]
+Publisher = Callable[[str, dict[str, object], str | None, str], None]
+
+
+def _event_payload(
+    payload: dict[str, object], context: TenantContext, tenant_id: str
+) -> dict[str, object]:
+    if context.current_tenant_id != tenant_id:
+        return {**payload, "via_platform": True}
+    return payload
 
 
 def _translate(fn):
@@ -102,6 +115,8 @@ class DnsService:
         row = get_ownership(
             self._db, zone, tenant_id=self._tenant_id(context), for_update=for_update
         )
+        if row is None and context.is_platform:
+            row = get_ownership_any_tenant(self._db, zone, for_update=for_update)
         if row is None:
             raise DnsNotFoundError("zone not found")
         return row
@@ -128,7 +143,13 @@ class DnsService:
         actor_type = "user" if context is not None else "system"
         branch_id = context.current_branch_id if context is not None else None
         if context is not None:
+            if tenant_id is not None and tenant_id != context.current_tenant_id:
+                # Cross-tenant platform operation: audit with the owner tenant
+                # and no branch from the administrator's active tenant.
+                details = {**details, "via_platform": True}
+                context = context_for_tenant(context, tenant_id)
             tenant_id = context.current_tenant_id
+            branch_id = context.current_branch_id
         record_audit(
             self._db,
             tenant_id=tenant_id,
@@ -196,17 +217,27 @@ class DnsService:
 
     # -- zones ------------------------------------------------------------
     @_translate
-    def list_zones(self, context: TenantContext) -> list[dict[str, object]]:
-        tenant_id = self._tenant_id(context)
+    def list_zones(
+        self, context: TenantContext, *, scope: str = "tenant"
+    ) -> list[dict[str, object]]:
+        if scope == "all":
+            if not context.is_platform:
+                raise DnsPermissionError(
+                    "only the platform administrator can list zones across tenants"
+                )
+            rows = list_ownerships(self._db)
+        else:
+            rows = list_ownerships(self._db, tenant_id=self._tenant_id(context))
         return [
             {
                 "name": row.zone_name,
                 "kind": row.kind,
                 "version": row.observed_version,
+                "tenant_id": row.tenant_id,
                 "created_at": row.created_at.isoformat() if row.created_at else None,
                 "updated_at": row.updated_at.isoformat() if row.updated_at else None,
             }
-            for row in list_ownerships(self._db, tenant_id=tenant_id)
+            for row in rows
         ]
 
     @_translate
@@ -216,29 +247,53 @@ class DnsService:
         return self._serialize(self._read(zone_name))
 
     @_translate
-    def resolve(self, domain: str, context: TenantContext) -> dict[str, object]:
+    def resolve(
+        self,
+        domain: str,
+        context: TenantContext,
+        target_tenant_id: str | None = None,
+    ) -> dict[str, object]:
         from systutor.contracts.domain_namespace import normalize_domain_name
 
         needle = normalize_domain_name(domain)
-        tenant_id = self._tenant_id(context)
+        tenant_id = resolve_effective_tenant(context, target_tenant_id)
+        rows = list_ownerships(self._db, tenant_id=tenant_id)
         matches = [
-            row.zone_name
-            for row in list_ownerships(self._db, tenant_id=tenant_id)
+            row
+            for row in rows
             if needle == row.zone_name or needle.endswith(f".{row.zone_name}")
         ]
+        if not matches and target_tenant_id is None and context.is_platform:
+            # Platform fallback: resolve the owner tenant from any ownership row.
+            matches = [
+                row
+                for row in list_ownerships(self._db)
+                if needle == row.zone_name or needle.endswith(f".{row.zone_name}")
+            ]
         if not matches:
             raise DnsNotFoundError("domain is not inside an owned zone")
-        zone = max(matches, key=len)
+        owner = max(matches, key=lambda row: len(row.zone_name))
+        zone = owner.zone_name
         relative = needle[: -(len(zone) + 1)] if needle != zone else "@"
-        return {"domain": needle, "zone": zone, "relative_name": relative}
+        return {
+            "domain": needle,
+            "zone": zone,
+            "relative_name": relative,
+            "tenant_id": owner.tenant_id,
+        }
 
     @_translate
-    def create_zone(self, zone: str, context: TenantContext) -> dict[str, object]:
+    def create_zone(
+        self,
+        zone: str,
+        context: TenantContext,
+        target_tenant_id: str | None = None,
+    ) -> dict[str, object]:
         zone_name = normalize_zone_name(zone)
-        tenant_id = self._tenant_id(context)
+        tenant_id = resolve_effective_tenant(context, target_tenant_id)
         registered = list_tenant_domains(self._app, self._db, tenant_id)
         if zone_name not in registered:
-            raise DnsPermissionError("the domain is not registered to the active tenant")
+            raise DnsPermissionError("the domain is not registered to the selected tenant")
         registered_parent = any(
             zone_name.endswith(f".{candidate}")
             for candidate in registered
@@ -295,7 +350,12 @@ class DnsService:
                 except Exception:  # noqa: BLE001 - compensation is best effort
                     pass
             raise
-        self._publish("domains.dns.zone_created", {"zone": zone_name}, tenant_id, zone_name)
+        self._publish(
+            "domains.dns.zone_created",
+            _event_payload({"zone": zone_name}, context, tenant_id),
+            tenant_id,
+            zone_name,
+        )
         return self._serialize(zone_state)
 
     @_translate
@@ -323,7 +383,12 @@ class DnsService:
             context=context,
         )
         self._db.commit()
-        self._publish("domains.dns.zone_deleted", {"zone": zone_name}, row.tenant_id, zone_name)
+        self._publish(
+            "domains.dns.zone_deleted",
+            _event_payload({"zone": zone_name}, context, row.tenant_id),
+            row.tenant_id,
+            zone_name,
+        )
         return {"zone": zone_name, "deleted": True, "released_ownership": True}
 
     # -- RRsets -----------------------------------------------------------
@@ -407,7 +472,11 @@ class DnsService:
         self._db.commit()
         self._publish(
             "domains.dns.rrsets_changed",
-            {"zone": zone_name, "rrsets": self._audit_rrsets(desired)},
+            _event_payload(
+                {"zone": zone_name, "rrsets": self._audit_rrsets(desired)},
+                context,
+                row.tenant_id,
+            ),
             row.tenant_id,
             zone_name,
         )
@@ -450,7 +519,11 @@ class DnsService:
         self._db.commit()
         self._publish(
             "domains.dns.rrsets_changed",
-            {"zone": zone_name, "deleted": self._audit_rrsets([existing])},
+            _event_payload(
+                {"zone": zone_name, "deleted": self._audit_rrsets([existing])},
+                context,
+                row.tenant_id,
+            ),
             row.tenant_id,
             zone_name,
         )
@@ -506,7 +579,11 @@ class DnsService:
         self._db.commit()
         self._publish(
             "domains.dns.rrsets_changed",
-            {"zone": zone_name, "imported": self._audit_rrsets(parsed)},
+            _event_payload(
+                {"zone": zone_name, "imported": self._audit_rrsets(parsed)},
+                context,
+                row.tenant_id,
+            ),
             row.tenant_id,
             zone_name,
         )

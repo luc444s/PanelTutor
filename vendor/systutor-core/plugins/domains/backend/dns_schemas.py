@@ -65,12 +65,14 @@ class NameserverVerifyRequest(_Strict):
 
 class ZoneCreateRequest(_Strict):
     zone_name: str = Field(min_length=1, max_length=253)
+    tenant_id: str | None = Field(default=None, min_length=1, max_length=64)
 
 
 class ZoneItem(BaseModel):
     name: str
     kind: str = "Native"
     version: str | None = None
+    tenant_id: str | None = None
     created_at: str | None = None
     updated_at: str | None = None
 
@@ -125,6 +127,7 @@ class ResolveResponse(BaseModel):
     domain: str
     zone: str
     relative_name: str
+    tenant_id: str | None = None
 
 
 class PlanResponse(BaseModel):

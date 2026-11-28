@@ -172,11 +172,15 @@ def verify_nameservers(
 
 @router.get("/dns/zones", response_model=ZoneListResponse)
 def list_zones(
+    scope: str = Query(default="tenant", pattern="^(tenant|all)$"),
     tenant_context: TenantContext = Depends(get_current_tenant_context),
     _current_user: User = Depends(require_permission(READ)),
     service: DnsService = Depends(_get_service),
 ) -> ZoneListResponse:
-    items = [ZoneItem.model_validate(item) for item in service.list_zones(tenant_context)]
+    items = [
+        ZoneItem.model_validate(item)
+        for item in service.list_zones(tenant_context, scope=scope)
+    ]
     return ZoneListResponse(items=items)
 
 
@@ -187,17 +191,24 @@ def create_zone(
     _current_user: User = Depends(require_permission(ZONES)),
     service: DnsService = Depends(_get_service),
 ) -> ZoneResponse:
-    return _zone_response(service.create_zone(body.zone_name, tenant_context))
+    return _zone_response(
+        service.create_zone(
+            body.zone_name, tenant_context, target_tenant_id=body.tenant_id
+        )
+    )
 
 
 @router.get("/dns/resolve", response_model=ResolveResponse)
 def resolve_domain(
     domain: str = Query(min_length=1, max_length=253),
+    tenant_id: str | None = Query(default=None, min_length=1, max_length=64),
     tenant_context: TenantContext = Depends(get_current_tenant_context),
     _current_user: User = Depends(require_permission(READ)),
     service: DnsService = Depends(_get_service),
 ) -> ResolveResponse:
-    return ResolveResponse.model_validate(service.resolve(domain, tenant_context))
+    return ResolveResponse.model_validate(
+        service.resolve(domain, tenant_context, target_tenant_id=tenant_id)
+    )
 
 
 @router.get("/dns/zones/{zone_name}", response_model=ZoneResponse)

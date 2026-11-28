@@ -2,6 +2,7 @@ export type ZoneItem = {
   name: string;
   kind: string;
   version: string | null;
+  tenant_id?: string | null;
 };
 
 export type ZoneList = { items: ZoneItem[] };

@@ -48,6 +48,7 @@ from plugins.domains.backend.models import (
 from systutor.api.deps import get_db_session
 from systutor.core.database import Base
 from systutor.core.errors import register_exception_handlers
+from systutor.kernel.audit.models import AuditLog
 from systutor.kernel.auth.dependencies import get_current_tenant_context, get_current_user
 from systutor.kernel.tenants.context import TenantContext
 from systutor.kernel.tenants.models import Branch, Tenant
@@ -354,6 +355,70 @@ def test_zones_and_records_are_isolated(tmp_path, monkeypatch) -> None:
             )
             assert create_foreign.status_code == 404
             assert fake.mutations == []
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_platform_manages_foreign_zone_with_host_credentials(
+    tmp_path, monkeypatch
+) -> None:
+    app, fake, db, holder, _cipher, engine = _app(tmp_path, monkeypatch)
+    base = "/api/v1/plugins/domains/dns/cloudflare/zones"
+    try:
+        with TestClient(app) as client:
+            holder["context"] = _context("t1", "domains.dns.cloudflare")
+            assert [
+                item["id"] for item in client.get(base).json()["items"]
+            ] == ["z1"]
+
+            holder["context"] = _context(
+                "t1", "domains.dns.cloudflare", platform=True
+            )
+            global_zones = client.get(f"{base}?scope=all")
+            assert global_zones.status_code == 200
+            assert {
+                (item["id"], item["tenant_id"])
+                for item in global_zones.json()["items"]
+            } == {("z1", "t1"), ("z2", "t2")}
+
+            foreign = client.get(f"{base}/z2/records")
+            assert foreign.status_code == 200
+            assert foreign.json()["items"][0]["content"] == "192.0.2.2"
+
+            created = client.post(
+                f"{base}/z2/records",
+                json={
+                    "name": "api.other.test",
+                    "type": "A",
+                    "content": "192.0.2.20",
+                    "ttl": 300,
+                },
+            )
+            assert created.status_code == 200, created.text
+            updated = client.put(
+                f"{base}/z2/records/r2",
+                json={
+                    "name": "other.test",
+                    "type": "A",
+                    "content": "192.0.2.21",
+                    "ttl": 300,
+                },
+            )
+            assert updated.status_code == 200
+            deleted = client.delete(f"{base}/z2/records/r2")
+            assert deleted.status_code == 200
+
+            holder["context"] = _context("t1", "domains.dns.cloudflare")
+            assert client.get(f"{base}/z2/records").status_code == 404
+            assert fake.mutations
+
+        audits = db.query(AuditLog).filter(
+            AuditLog.action.like("domains.dns.cloudflare_record_%")
+        ).all()
+        assert audits
+        assert all(audit.tenant_id == "t2" for audit in audits)
+        assert all(audit.details["via_platform"] is True for audit in audits)
     finally:
         db.close()
         engine.dispose()

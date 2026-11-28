@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -26,15 +26,18 @@ from plugins.domains.backend.cloudflare.service import (
     PURPOSE_CLIENT_SECRET,
     PURPOSE_REFRESH,
     PURPOSE_VERIFIER,
+    CloudflareScopeAllRequiresSingle,
     CloudflareService,
 )
 from plugins.domains.backend.models import (
     CloudflareConnection,
     CloudflareOAuthClient,
     CloudflareOAuthFlow,
+    CloudflareZoneOwnership,
 )
 from systutor.core.database import Base
 from systutor.kernel.audit.models import AuditLog
+from systutor.kernel.tenants.context import TenantContext
 from systutor.kernel.tenants.models import Tenant
 
 BOOTSTRAP = "bootstrap-canary"
@@ -354,6 +357,67 @@ def test_zones_refresh_once_under_lock_and_records_are_redacted(tmp_path: Path) 
         with pytest.raises(CloudflareNotFound):
             service.records_for_tenant("t1", "missing")
         assert events == []
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_platform_uses_owner_connection_in_tenant_mode(tmp_path: Path) -> None:
+    db, fake, cipher, service, _events, engine = build(tmp_path)
+    try:
+        db.add(Tenant(id="t2", name="Two", slug="two"))
+        access = cipher.encrypt(PURPOSE_ACCESS, "t2", "t2-access")
+        refresh = cipher.encrypt(PURPOSE_REFRESH, "t2", "t2-refresh")
+        db.add(
+            CloudflareConnection(
+                tenant_id="t2",
+                cloudflare_account_id="acct1",
+                account_name="Lab",
+                access_ciphertext=access.ciphertext,
+                access_nonce=access.nonce,
+                refresh_ciphertext=refresh.ciphertext,
+                refresh_nonce=refresh.nonce,
+                key_version=access.key_version,
+                scopes_json=["Zone Read", "Zone Write", "DNS Read", "DNS Write"],
+                expires_at=datetime.now(UTC) + timedelta(hours=1),
+                status="active",
+            )
+        )
+        db.add_all(
+            [
+                CloudflareZoneOwnership(
+                    tenant_id="t1",
+                    zone_id="z1",
+                    zone_name="example.com",
+                    account_id="acct1",
+                ),
+                CloudflareZoneOwnership(
+                    tenant_id="t2",
+                    zone_id="z2",
+                    zone_name="other.test",
+                    account_id="acct1",
+                ),
+            ]
+        )
+        fake.records["z2"] = [
+            CloudflareRecord(
+                "r9", "other.test", "A", "192.0.2.99", 300, False, None, None, None
+            )
+        ]
+        db.commit()
+        platform = TenantContext(
+            "t1", "b1", "user-1", ("core.platform.admin",), None
+        )
+        with pytest.raises(CloudflareScopeAllRequiresSingle):
+            service.zones(platform, scope="all")
+
+        records = service.records(platform, "z2")
+        assert records[0]["content"] == "192.0.2.99"
+
+        normal = TenantContext("t1", "b1", "user-1", ("domains.dns.cloudflare",), None)
+        # Without its own connection the normal tenant cannot borrow t2's.
+        with pytest.raises(CloudflareNotFound):
+            service.records(normal, "z2")
     finally:
         db.close()
         engine.dispose()

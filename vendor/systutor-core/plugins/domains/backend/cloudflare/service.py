@@ -86,6 +86,7 @@ from plugins.domains.backend.models import (
     CloudflareOAuthFlow,
     CloudflareZoneOwnership,
 )
+from plugins.domains.backend.service import context_for_tenant
 from systutor.kernel.audit.service import record_audit
 from systutor.kernel.tenants.context import TenantContext
 
@@ -134,6 +135,14 @@ def _aware(value: datetime | None) -> datetime | None:
 def _iso(value: datetime | None) -> str | None:
     moment = _aware(value)
     return moment.isoformat() if moment is not None else None
+
+
+class CloudflareScopeAllRequiresSingle(CloudflareConflict):
+    """Global Cloudflare listing is only safe with shared host credentials."""
+
+    status_code = 409
+    code = "domains.dns.cloudflare.scope_all_requires_single"
+    exit_code = 4
 
 
 class CallbackResult:
@@ -254,7 +263,13 @@ class CloudflareService:
         actor_type = "user" if context is not None else "system"
         branch_id = context.current_branch_id if context is not None else None
         if context is not None:
+            if tenant_id is not None and tenant_id != context.current_tenant_id:
+                # Cross-tenant platform operation: audit with the owner tenant
+                # and no branch from the administrator's active tenant.
+                details = {**details, "via_platform": True}
+                context = context_for_tenant(context, tenant_id)
             tenant_id = context.current_tenant_id
+            branch_id = context.current_branch_id
         record_audit(
             self._db,
             tenant_id=tenant_id,
@@ -983,6 +998,21 @@ class CloudflareService:
             raise CloudflarePermission("an active tenant is required")
         return context.current_tenant_id
 
+    def _zone_tenant(self, context: TenantContext, zone_id: str) -> str:
+        """Resolve the tenant that owns ``zone_id`` for a platform operator.
+
+        A normal tenant keeps the historical behavior: its own connection is
+        the authority. The platform resolves ownership explicitly so it can
+        operate a foreign zone without switching the active tenant.
+        """
+        tenant_id = self._tenant_id(context)
+        if not context.is_platform:
+            return tenant_id
+        row = get_ownership_by_zone_id(self._db, zone_id)
+        if row is None:
+            raise CloudflareNotFound("Cloudflare zone not found")
+        return row.tenant_id
+
     def _connection(self, tenant_id: str, *, for_update: bool = False) -> CloudflareConnection:
         row = get_connection(self._db, tenant_id, for_update=for_update)
         if row is None:
@@ -1205,9 +1235,16 @@ class CloudflareService:
             context=context,
         )
         self._db.commit()
+        payload: dict[str, object] = {
+            "domain": domain,
+            "zone_id": zone_id,
+            "www": www,
+        }
+        if context is not None and context.current_tenant_id != tenant_id:
+            payload["via_platform"] = True
         self._publish(
             "domains.dns.cloudflare_provisioned",
-            {"domain": domain, "zone_id": zone_id, "www": www},
+            payload,
             tenant_id,
             zone_id,
         )
@@ -1244,9 +1281,24 @@ class CloudflareService:
         return enriched
 
     def zones_for_tenant(self, tenant_id: str) -> list[dict[str, object]]:
-        return [zone.to_dict() for zone in self._zones(tenant_id)]
+        return [
+            {**zone.to_dict(), "tenant_id": tenant_id}
+            for zone in self._zones(tenant_id)
+        ]
 
-    def zones(self, context: TenantContext) -> list[dict[str, object]]:
+    def zones(
+        self, context: TenantContext, *, scope: str = "tenant"
+    ) -> list[dict[str, object]]:
+        if scope == "all":
+            if not context.is_platform:
+                raise CloudflarePermission(
+                    "only the platform administrator can list zones across tenants"
+                )
+            if not self.host_managed:
+                raise CloudflareScopeAllRequiresSingle(
+                    "global Cloudflare zones require the host-managed single mode"
+                )
+            return self.host_zones(include_unowned=False)
         return self.zones_for_tenant(self._tenant_id(context))
 
     def records_for_tenant(
@@ -1263,7 +1315,7 @@ class CloudflareService:
 
     def records(self, context: TenantContext, zone_id: str) -> list[dict[str, object]]:
         return self.records_for_tenant(
-            self._tenant_id(context), zone_id, include_content=True
+            self._zone_tenant(context, zone_id), zone_id, include_content=True
         )
 
     def _zone_access(
@@ -1323,7 +1375,7 @@ class CloudflareService:
         zone_id: str,
         values: dict[str, object],
     ) -> dict[str, object]:
-        tenant_id = self._tenant_id(context)
+        tenant_id = self._zone_tenant(context, zone_id)
         credentials, refresh, _zone = self._zone_access(tenant_id, zone_id)
         record = self._client.create_record(credentials, zone_id, values, refresh)
         self._audit(
@@ -1343,7 +1395,7 @@ class CloudflareService:
         record_id: str,
         values: dict[str, object],
     ) -> dict[str, object]:
-        tenant_id = self._tenant_id(context)
+        tenant_id = self._zone_tenant(context, zone_id)
         credentials, refresh, _zone = self._zone_access(tenant_id, zone_id)
         record = self._client.update_record(
             credentials, zone_id, record_id, values, refresh
@@ -1361,7 +1413,7 @@ class CloudflareService:
     def delete_record(
         self, context: TenantContext, zone_id: str, record_id: str
     ) -> dict[str, object]:
-        tenant_id = self._tenant_id(context)
+        tenant_id = self._zone_tenant(context, zone_id)
         credentials, refresh, _zone = self._zone_access(tenant_id, zone_id)
         self._client.delete_record(credentials, zone_id, record_id, refresh)
         self._audit(

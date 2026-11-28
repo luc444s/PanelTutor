@@ -21,6 +21,7 @@ from plugins.domains.backend.cloudflare.ownership import (
     normalize_zone_name,
 )
 from plugins.domains.backend.cloudflare.service import CloudflareService
+from plugins.domains.backend.service import resolve_effective_tenant
 from systutor.kernel.tenants.context import TenantContext
 
 _LABEL = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$")
@@ -204,10 +205,18 @@ class CloudflareProvisioningService:
         )
 
     def plan(
-        self, context: TenantContext, *, domain: str, ipv4: str, www: bool, replace: bool
+        self,
+        context: TenantContext,
+        *,
+        domain: str,
+        ipv4: str,
+        www: bool,
+        replace: bool,
+        tenant_id: str | None = None,
     ) -> dict[str, object]:
+        effective = resolve_effective_tenant(context, tenant_id)
         return self.plan_for_tenant(
-            self._service._tenant_id(context),  # noqa: SLF001 - shared tenant guard
+            effective,
             domain=domain,
             ipv4=ipv4,
             www=www,
@@ -311,10 +320,18 @@ class CloudflareProvisioningService:
         }
 
     def apply(
-        self, context: TenantContext, *, domain: str, ipv4: str, www: bool, replace: bool
+        self,
+        context: TenantContext,
+        *,
+        domain: str,
+        ipv4: str,
+        www: bool,
+        replace: bool,
+        tenant_id: str | None = None,
     ) -> dict[str, object]:
+        effective = resolve_effective_tenant(context, tenant_id)
         return self.apply_for_tenant(
-            self._service._tenant_id(context),  # noqa: SLF001 - shared tenant guard
+            effective,
             domain=domain,
             ipv4=ipv4,
             www=www,

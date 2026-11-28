@@ -576,6 +576,119 @@ def test_import_and_export_are_deterministic(tmp_path: Path) -> None:
         engine.dispose()
 
 
+def test_platform_lists_all_zones_with_owner_tenant(tmp_path: Path) -> None:
+    db, fake, service, _events, engine = build_service(tmp_path)
+    try:
+        service.create_zone("example.com", context("t1"))
+        service.create_zone("other.com", context("t2"))
+        normal = service.list_zones(context("t1"))
+        assert [(item["name"], item["tenant_id"]) for item in normal] == [
+            ("example.com", "t1")
+        ]
+        with pytest.raises(AppError) as caught:
+            service.list_zones(context("t1"), scope="all")
+        assert caught.value.status_code == 403
+        platform = service.list_zones(context("t1", "core.platform.admin"), scope="all")
+        assert {(item["name"], item["tenant_id"]) for item in platform} == {
+            ("example.com", "t1"),
+            ("other.com", "t2"),
+        }
+        assert fake.zones
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_platform_operates_foreign_zone_and_audits_owner(tmp_path: Path) -> None:
+    db, fake, service, _events, engine = build_service(tmp_path)
+    try:
+        created = service.create_zone("example.com", context("t1", branch_id="b1"))
+        platform = context("t2", "core.platform.admin", branch_id=None)
+        assert service.get_zone("example.com", platform)["name"] == "example.com"
+
+        applied = service.apply_rrsets(
+            "example.com",
+            [{"name": "www", "type": "A", "ttl": 300, "values": ["192.0.2.10"]}],
+            str(created["version"]),
+            platform,
+        )
+        assert fake.zones["example.com"].rrset("www.example.com", "A") is not None
+
+        service.delete_zone(
+            "example.com", platform, expected_version=str(applied["version"])
+        )
+        audits = list(
+            db.scalars(
+                select(AuditLog).where(AuditLog.entity_type == "dns")
+            ).all()
+        )
+        changed = [row for row in audits if row.action != "domains.dns.zone_created"]
+        assert changed
+        for row in changed:
+            assert row.tenant_id == "t1"
+            assert row.branch_id is None
+            assert row.details["via_platform"] is True
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_platform_create_zone_validates_target_tenant_namespace(tmp_path: Path) -> None:
+    db, fake, service, _events, engine = build_service(tmp_path)
+    try:
+        platform = context("t1", "core.platform.admin")
+        # The target tenant owns other.com, so the platform may activate it.
+        created = service.create_zone("other.com", platform, target_tenant_id="t2")
+        assert created["name"] == "other.com"
+        row = db.scalar(
+            select(DnsZoneOwnership).where(DnsZoneOwnership.zone_name == "other.com")
+        )
+        assert row is not None and row.tenant_id == "t2"
+        audit = db.scalar(
+            select(AuditLog)
+            .where(AuditLog.action == "domains.dns.zone_created")
+            .order_by(AuditLog.occurred_at.desc())
+        )
+        assert audit is not None
+        assert audit.tenant_id == "t2"
+        assert audit.details["via_platform"] is True
+        # example.com belongs to t1, not to the targeted t2 namespace.
+        with pytest.raises(AppError) as wrong_namespace:
+            service.create_zone("example.com", platform, target_tenant_id="t2")
+        assert wrong_namespace.value.status_code == 403
+        with pytest.raises(AppError) as denied:
+            service.create_zone(
+                "example.com", context("t2"), target_tenant_id="t1"
+            )
+        assert denied.value.status_code == 403
+        assert denied.value.code == "domains.platform_required"
+        assert "other.com" in fake.zones
+    finally:
+        db.close()
+        engine.dispose()
+
+
+def test_platform_resolve_can_pick_target_tenant(tmp_path: Path) -> None:
+    db, _fake, service, _events, engine = build_service(tmp_path)
+    try:
+        service.create_zone("example.com", context("t1"))
+        platform = context("t1", "core.platform.admin")
+        foreign = context("t2", "core.platform.admin")
+        assert service.resolve("www.example.com", foreign)["tenant_id"] == "t1"
+        assert service.resolve("www.example.com", platform, target_tenant_id="t1") == {
+            "domain": "www.example.com",
+            "zone": "example.com",
+            "relative_name": "www",
+            "tenant_id": "t1",
+        }
+        with pytest.raises(AppError) as caught:
+            service.resolve("www.example.com", context("t2"), target_tenant_id="t1")
+        assert caught.value.status_code == 403
+    finally:
+        db.close()
+        engine.dispose()
+
+
 def test_export_rejects_out_of_zone_records(tmp_path: Path) -> None:
     db, _fake, service, _events, engine = build_service(tmp_path)
     try:

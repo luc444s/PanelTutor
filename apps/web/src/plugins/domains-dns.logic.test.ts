@@ -10,6 +10,7 @@ import {
   dnsStatus,
   groupRegisteredDomains,
   longestOwnedZone,
+  longestOwnedZoneForTenant,
   relativeOwner,
   shouldOpenDnsRow,
   validateRrset,
@@ -33,6 +34,19 @@ describe("Domains DNS pure policy", () => {
     expect(dnsStatus("www.cloudflare.test", [], true, [
       { name: "cloudflare.test" },
     ])).toBe("cloudflare");
+  });
+
+  it("never matches a zone owned by another tenant", () => {
+    const owned = [
+      { name: "example.com", kind: "Native", version: "v1", tenant_id: "t1" },
+      { name: "other.test", kind: "Native", version: "v2", tenant_id: "t2" },
+    ];
+    expect(longestOwnedZoneForTenant("www.example.com", owned, "t1")?.name)
+      .toBe("example.com");
+    expect(longestOwnedZoneForTenant("www.example.com", owned, "t2")).toBeNull();
+    expect(longestOwnedZoneForTenant("other.test", owned, "t1")).toBeNull();
+    expect(longestOwnedZoneForTenant("other.test", owned, "t2")?.name)
+      .toBe("other.test");
   });
 
   it("distinguishes an apex from a child covered by its parent zone", () => {

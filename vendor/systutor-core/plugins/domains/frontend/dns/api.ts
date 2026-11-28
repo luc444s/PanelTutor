@@ -18,9 +18,11 @@ export const dnsKeys = {
 const json = (value: unknown) => JSON.stringify(value);
 const post = <T>(path: string, body: unknown) => apiRequest<T>(path, { method: "POST", body: json(body) });
 
-export const listZones = () => apiRequest<ZoneList>(`${BASE}/zones`);
+export const listZones = (scope: "tenant" | "all" = "tenant") =>
+  apiRequest<ZoneList>(`${BASE}/zones?scope=${scope}`);
 export const getZone = (zone: string) => apiRequest<Zone>(`${zonePath(zone)}/rrsets`);
-export const createZone = (zone_name: string) => post<Zone>(`${BASE}/zones`, { zone_name });
+export const createZone = (zone_name: string, tenant_id?: string | null) =>
+  post<Zone>(`${BASE}/zones`, tenant_id ? { zone_name, tenant_id } : { zone_name });
 export const planRrsets = (zone: string, rrsets: RrsetDraft[]) => post<Plan>(`${zonePath(zone)}/rrsets/plan`, { rrsets });
 export const applyRrsets = (zone: string, rrsets: RrsetDraft[], expected_version: string) =>
   post<Zone>(`${zonePath(zone)}/rrsets/apply`, { rrsets, expected_version });

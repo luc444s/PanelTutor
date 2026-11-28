@@ -7,6 +7,7 @@ propiedad con los contratos `domain_namespace`/`domain_ownership`.
 from __future__ import annotations
 
 import logging
+from dataclasses import replace
 from io import StringIO
 
 from fastapi import FastAPI
@@ -71,6 +72,27 @@ from systutor.kernel.tenants.models import Tenant
 from systutor.kernel.tenants.service import list_tenants
 
 logger = logging.getLogger(__name__)
+
+
+def resolve_effective_tenant(
+    context: TenantContext,
+    target_tenant_id: str | None,
+) -> str:
+    """Pick the tenant an operation applies to, enforcing platform-only crossing."""
+    if target_tenant_id and target_tenant_id != context.current_tenant_id:
+        if not context.is_platform:
+            raise AppError(
+                "only the platform administrator can target another tenant",
+                status_code=403,
+                code="domains.platform_required",
+            )
+        return target_tenant_id
+    return context.current_tenant_id
+
+
+def context_for_tenant(context: TenantContext, tenant_id: str) -> TenantContext:
+    """Audit context for the resource owner: its branch is not the active one."""
+    return replace(context, current_tenant_id=tenant_id, current_branch_id=None)
 
 
 def provide_app_hosts(

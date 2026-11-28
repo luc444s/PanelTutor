@@ -159,29 +159,29 @@ def _quoted_segments(value: str) -> list[str]:
             if text[index] != '"':
                 raise DnsValidationError("invalid TXT content")
             index += 1
-            segment: list[str] = []
+            chars: list[str] = []
             while index < len(text):
                 character = text[index]
                 if character == "\\":
                     index += 1
                     if index >= len(text):
                         raise DnsValidationError("invalid TXT escape")
-                    segment.append(text[index])
+                    chars.append(text[index])
                 elif character == '"':
                     index += 1
                     break
                 else:
-                    segment.append(character)
+                    chars.append(character)
                 index += 1
             else:
                 raise DnsValidationError("unterminated TXT string")
-            segments.append("".join(segment))
+            segments.append("".join(chars))
     if not segments:
         raise DnsValidationError("TXT content is required")
-    for segment in segments:
-        if len(segment.encode("utf-8")) > 255:
+    for part in segments:
+        if len(part.encode("utf-8")) > 255:
             raise DnsValidationError("TXT strings must be at most 255 bytes")
-        if any(ord(character) < 32 for character in segment):
+        if any(ord(character) < 32 for character in part):
             raise DnsValidationError("TXT content must not contain control characters")
     return segments
 
